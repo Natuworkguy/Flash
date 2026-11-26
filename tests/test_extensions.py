@@ -336,11 +336,13 @@ class TestWiring:
 
     def test_a_confirmed_tool_asks_first(self, tmp_path, monkeypatch):
         folder = full(tmp_path / "src")
-        manifest = json.loads((folder / extensions.MANIFEST).read_text())
+        manifest = json.loads((folder / extensions.MANIFEST).read_text(
+                encoding="utf-8"))
         manifest["tools"][0]["confirm"] = True
-        (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
+        (folder / extensions.MANIFEST).write_text(json.dumps(manifest),
+                                                  encoding="utf-8")
         install(tmp_path, folder)
-        monkeypatch.setattr(tools, "typed", lambda: "n")
+        monkeypatch.setattr(tools, "yes_no", lambda: "n")
 
         assert tools.run_tool(("echo_word", {"word": "x"})) == (
             "Blocked by user"
@@ -357,7 +359,11 @@ class TestWiring:
         )
 
     def test_no_extensions_leaves_the_prompt_alone(self):
-        assert tools.build_system_prompt() == tools.SYSTEM_PROMPT
+        from flash import skills
+
+        # Only Flash's own knowledge base is listed.
+        assert tools.build_system_prompt() == tools._flash_system_prompt(
+            skills.knowledge_listing())
 
     def test_scenes_join_the_backgrounds(self, tmp_path):
         install(tmp_path)
@@ -382,11 +388,27 @@ class TestWiring:
 
 class TestFlags:
     def test_parsed(self):
-        args = parse_args(["--extension-install", "github@owner/repo"])
+        args = parse_args(["install", "github@owner/repo"])
 
         assert args.extension_install == "github@owner/repo"
-        assert parse_args(["--extension-remove", "demo"]).extension_remove
-        assert parse_args(["--extension-list"]).extension_list
+        assert parse_args(["remove", "demo"]).extension_remove == "demo"
+        assert parse_args(["list"]).extension_list
+        assert not parse_args([]).extension_list
+
+    @pytest.mark.parametrize("argv", [
+        ["install"], ["remove"], ["list", "x"], ["banana"],
+        ["--extension-install", "github@owner/repo"],
+    ])
+    def test_refused(self, argv, capsys):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+
+    def test_links_come_with_uri(self):
+        assert parse_args(["--uri", "flash://?prompt=hi"]).url == (
+            "flash://?prompt=hi")
+        # One a handler registered before --uri passes on its own.
+        assert parse_args(["flash://?prompt=hi"]).url == "flash://?prompt=hi"
+        assert parse_args([]).url is None
 
     def test_install_asks_then_installs(self, tmp_path, monkeypatch):
         folder = full(tmp_path / "src")
@@ -471,3 +493,777 @@ class TestMainLoop:
         install(tmp_path)
 
         assert self.sent(monkeypatch, ["/hello"]) == []
+
+
+class TestBundles:
+    """A path@ source with .bundle in its name is a git bundle: the
+    branch it carries is installed, with a note saying so."""
+
+    def bundle(self, tmp_path, name="demo.bundle", branch="main",
+               everything=False):
+        repo = make(tmp_path / "repo", {
+            "name": "bundled", "description": "From a bundle",
+            "prompt": "prompt.md",
+        }, {"prompt.md": "Be brief.\n"})
+        git = ["git", "-C", str(repo), "-c", "user.name=t",
+               "-c", "user.email=t@example.com"]
+        subprocess.run([*git, "init", "-q", "-b", branch], check=True)
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-qm", "first"], check=True)
+        path = tmp_path / name
+        refs = ["--all"] if everything else [branch]
+        subprocess.run([*git, "bundle", "create", "-q", str(path), *refs],
+                       check=True, capture_output=True)
+        return path
+
+    def test_a_branch_bundle_installs(self, tmp_path):
+        path = self.bundle(tmp_path)
+        checkout = extensions.fetch(f"path@{path}")
+        try:
+            assert extensions.load(checkout).name == "bundled"
+            assert not (checkout / ".git").exists()
+            installed = extensions.install(checkout, f"path@{path}")
+        finally:
+            extensions.discard(checkout)
+        assert installed.prompt.strip() == "Be brief."
+
+    def test_any_branch_and_a_full_bundle(self, tmp_path):
+        trunk = self.bundle(tmp_path / "a", branch="trunk")
+        assert extensions.bundle_branch(str(trunk)) == "trunk"
+        full = self.bundle(tmp_path / "b", everything=True)
+        assert extensions.bundle_branch(str(full)) == "main"
+        checkout = extensions.fetch(f"path@{full}")
+        extensions.discard(checkout)
+
+    def test_the_note(self, tmp_path):
+        path = self.bundle(tmp_path, name="ext.bundle.v2")
+        note = extensions.source_note(f"path@{path}")
+        assert note.startswith("ext.bundle.v2 is a git bundle")
+        assert "main branch" in note
+        assert extensions.source_note(f"path@{tmp_path}") == ""
+        assert extensions.source_note("github@owner/repo") == ""
+
+    def test_a_folder_named_like_a_bundle_is_a_folder(self, tmp_path):
+        folder = full(tmp_path / "Thing.bundle")
+        assert not extensions.is_bundle(str(folder))
+        checkout = extensions.fetch(f"path@{folder}")
+        extensions.discard(checkout)
+
+    def test_a_missing_or_broken_bundle_says_so(self, tmp_path):
+        with pytest.raises(ExtensionError, match="no bundle at"):
+            extensions.fetch(f"path@{tmp_path / 'gone.bundle'}")
+        broken = tmp_path / "broken.bundle"
+        broken.write_text("not a bundle", encoding="utf-8")
+        with pytest.raises(ExtensionError, match="not a git bundle"):
+            extensions.fetch(f"path@{broken}")
+
+    def test_the_web_preview_carries_the_note(self, tmp_path):
+        from flash import web
+
+        path = self.bundle(tmp_path)
+        session = web.Session()
+        staged = web.command(
+            session, {"name": "extension-preview", "arg": f"path@{path}"},
+        )
+        try:
+            assert staged["name"] == "bundled"
+            assert "git bundle" in staged["note"]
+        finally:
+            web._discard_staged(session)
+
+
+SETTINGS = [
+    {"id": "banners", "label": "Banners", "type": "switch",
+     "default": True, "help": "A banner when it finishes."},
+    {"id": "color", "label": "Colour", "type": "text", "default": "d97757"},
+    {"id": "every", "label": "Check every", "type": "number",
+     "default": 5, "min": 1, "max": 60},
+    {"id": "size", "label": "Size", "type": "select",
+     "options": ["small", "large"]},
+]
+
+# Prints what it was handed, every way it was handed it.
+SHOW_SETTINGS = """\
+import json, os, sys
+json.load(sys.stdin)
+print(os.environ["FLASH_SETTINGS"], os.environ["FLASH_SETTING_BANNERS"],
+      os.environ["FLASH_SETTING_EVERY"])
+"""
+
+
+def with_settings(folder, settings=None):
+    return make(folder, {
+        "name": "tuned",
+        "tools": [{"name": "show_settings", "description": "Show them.",
+                   "run": ["python", "./show.py"]}],
+        "settings": SETTINGS if settings is None else settings,
+    }, {"show.py": SHOW_SETTINGS})
+
+
+class TestSettings:
+    def test_they_are_read_with_their_defaults(self, tmp_path):
+        ext = extensions.load(with_settings(tmp_path / "src"))
+
+        assert [s.id for s in ext.settings] == [  # nosec B101
+            "banners", "color", "every", "size",
+        ]
+        assert extensions.settings_values(ext) == {  # nosec B101
+            "banners": True, "color": "d97757", "every": 5, "size": "small",
+        }
+        assert "settings: Banners, Colour, Check every, Size" in (  # nosec
+            ext.contents())
+
+    @pytest.mark.parametrize("setting, message", [
+        ({"id": "Bad Id"}, "not a setting id"),
+        ({"id": "a", "type": "slider"}, "type is one of"),
+        ({"id": "a", "type": "select"}, "needs its options"),
+        ({"id": "a", "type": "number", "default": 99, "max": 10},
+         "default does not fit"),
+        ({"id": "a", "type": "number", "min": "low"}, "has to be a number"),
+        ("banners", "has to be an object"),
+    ])
+    def test_bad_ones_are_refused(self, tmp_path, setting, message):
+        with pytest.raises(ExtensionError, match=message):
+            extensions.load(with_settings(tmp_path / "src", [setting]))
+
+    def test_two_with_one_id_are_refused(self, tmp_path):
+        with pytest.raises(ExtensionError, match="setting"):
+            extensions.load(with_settings(
+                tmp_path / "src", [{"id": "a"}, {"id": "a"}]))
+
+    def test_changed_kept_and_checked(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+
+        values = extensions.set_setting(ext, "every", "15")
+        extensions.set_setting(ext, "banners", False)
+
+        assert values["every"] == 15  # nosec B101
+        assert extensions.settings_values(ext)["banners"] is False  # nosec
+        for bad_id, value in (("every", 0), ("size", "huge"),
+                              ("banners", "maybe"), ("nope", 1)):
+            with pytest.raises(ExtensionError):
+                extensions.set_setting(ext, bad_id, value)
+
+    def test_its_programs_are_handed_them(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.set_setting(ext, "banners", False)
+        extensions.set_setting(ext, "every", 30)
+
+        said = extensions.call_tool(ext, ext.tools[0], {})
+
+        handed, banners, every = said.rsplit(" ", 2)
+        assert json.loads(handed)["color"] == "d97757"  # nosec B101
+        assert (banners, every.strip()) == ("0", "30")  # nosec B101
+
+    def test_an_update_keeps_them_and_removing_it_drops_them(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.set_setting(ext, "color", "00ff88")
+
+        again = install(tmp_path, with_settings(tmp_path / "src"))
+        assert extensions.settings_values(again)["color"] == "00ff88"  # nosec
+
+        extensions.remove("tuned")
+        fresh = install(tmp_path, with_settings(tmp_path / "src"))
+        assert extensions.settings_values(fresh)["color"] == "d97757"  # nosec
+
+    def test_set_in_the_terminal(self, tmp_path, capsys):
+        install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.reload()
+
+        ai._extension_command("set tuned every 12")
+        ai._extension_command("settings tuned")
+
+        out = capsys.readouterr().out
+        assert "every is 12" in out  # nosec B101
+        assert "Check every: 12" in out  # nosec B101
+
+    def test_the_page_shows_and_changes_them(self, tmp_path):
+        from flash import web
+
+        install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.reload()
+        session = web.Session()
+
+        listed = web.command(session, {"name": "extensions"})
+        shown = listed["extensions"][0]
+        assert [s["id"] for s in shown["settings"]][:2] == [  # nosec B101
+            "banners", "color",
+        ]
+        assert shown["values"]["every"] == 5  # nosec B101
+
+        changed = web.command(session, {
+            "name": "extension-setting", "arg": "tuned",
+            "id": "size", "value": "large",
+        })
+        assert changed["values"]["size"] == "large"  # nosec B101
+        # Said at once to whatever is listening (a robot's eye colour changes as it is picked).
+        heard = session.hub.subscribe()
+        web.command(session, {"name": "extension-setting", "arg": "tuned",
+                              "id": "size", "value": "small"})
+        said = [e for e in list(heard.queue) if e and e.get("type") == "extension-setting"]
+        assert said[0].items() >= {"name": "tuned", "id": "size",  # nosec B101
+                                   "value": "small"}.items()
+        with pytest.raises(ValueError, match="one of"):
+            web.command(session, {
+                "name": "extension-setting", "arg": "tuned",
+                "id": "size", "value": "huge",
+            })
+
+        # A page and its device can signal each other ("sleep now").
+        web.command(session, {"name": "extension-signal", "arg": "tuned",
+                              "signal": "sleep", "data": {"why": "asked"}})
+        said = [e for e in list(heard.queue) if e and e.get("type") == "extension-signal"]
+        assert said[-1].items() >= {"name": "tuned", "signal": "sleep",  # nosec B101
+                                    "data": {"why": "asked"}}.items()
+        with pytest.raises(ValueError, match="which signal"):
+            web.command(session, {"name": "extension-signal", "arg": "tuned"})
+
+
+def test_a_secret_setting_is_used_but_never_shown(tmp_path):
+    import os
+    import stat
+
+    from flash import web
+
+    folder = make(tmp_path / "src", {
+        "name": "keyed",
+        "prompt": "p.md",
+        "settings": [{"id": "api_key", "label": "API key", "secret": True}],
+    }, {"p.md": "hi"})
+    dest = extensions.extensions_dir() / "keyed"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(folder, dest)
+    extensions.reload()
+    ext = extensions.find("keyed")
+
+    assert ext.settings[0].secret
+    assert extensions.shown_values(ext) == {"api_key": ""}
+    extensions.set_setting(ext, "api_key", "sk-very-secret")
+
+    assert extensions.environment(ext)["FLASH_SETTING_API_KEY"] == (
+        "sk-very-secret")
+    assert extensions.shown_values(ext)["api_key"] == extensions.SECRET_SET
+    said = web.command(None, {"name": "extension-setting", "arg": "keyed",
+                              "id": "api_key", "value": "sk-other"})
+    assert "sk-other" not in str(said) and "sk-very" not in str(said)
+    info = web._extension_info(ext)
+    assert "sk-other" not in str(info)
+    if os.name != "nt":
+        mode = stat.S_IMODE(
+            os.stat(extensions._settings_path("keyed")).st_mode)
+        assert mode == 0o600
+
+
+def test_a_long_hidden_text_setting_for_the_extensions_own_records(tmp_path):
+    import json
+    import shutil
+
+    folder = make(tmp_path / "src", {
+        "name": "recorder",
+        "prompt": "p.md",
+        "settings": [
+            {"id": "cards", "label": "Cards", "type": "text", "max": 8000, "hidden": True},
+            {"id": "note", "label": "Note", "type": "text"},
+        ],
+    }, {"p.md": "hi"})
+    dest = extensions.extensions_dir() / "recorder"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(folder, dest)
+    extensions.reload()
+    ext = extensions.find("recorder")
+    cards, note = ext.settings
+    assert cards.hidden and cards.summary()["hidden"] and not note.hidden  # nosec B101
+
+    records = json.dumps({f"04:{i:02X}:7A:1B": {"name": f"card {i}", "do": "ask", "value": "x" * 30}
+                          for i in range(60)})
+    assert len(records) > extensions.SETTING_CHARS  # nosec B101
+    extensions.set_setting(ext, "cards", records)
+    assert json.loads(extensions.settings_values(ext)["cards"]) == json.loads(records)  # nosec B101
+    with pytest.raises(extensions.ExtensionError, match="at most 8000"):
+        extensions.set_setting(ext, "cards", "y" * 8001)  # kept whole or refused, never cut
+    # An ordinary text setting is cut at the usual length, as it always was.
+    extensions.set_setting(ext, "note", "z" * 900)
+    assert len(extensions.settings_values(ext)["note"]) == extensions.SETTING_CHARS  # nosec B101
+    # More than Flash allows at all is held to that.
+    folder2 = make(tmp_path / "src2", {
+        "name": "greedy", "prompt": "p.md",
+        "settings": [{"id": "big", "type": "text", "max": 10 ** 9}],
+    }, {"p.md": "hi"})
+    shutil.copytree(folder2, extensions.extensions_dir() / "greedy")
+    extensions.reload()
+    assert extensions.find("greedy").settings[0].chars == extensions.SETTING_CHARS_MOST  # nosec B101
+
+
+def test_removing_empties_it_from_the_deepest_up(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    folder = make(tmp_path / "src", {"name": "deep", "prompt": "p.md"},
+                  {"p.md": "hi", "a/b/c.txt": "x", "a/d.txt": "y"})
+    dest = extensions.extensions_dir() / "deep"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(folder, dest)
+    # Read-only, as git leaves its objects.
+    os.chmod(dest / "a" / "b" / "c.txt", stat.S_IREAD)
+    # A link out is removed, not followed.
+    outside = tmp_path / "keep"
+    outside.mkdir()
+    (outside / "mine.txt").write_text("mine", encoding="utf-8")
+    if os.name != "nt":
+        (dest / "link").symlink_to(outside, target_is_directory=True)
+    extensions.reload()
+
+    assert extensions.remove("deep") is True
+    assert not dest.exists()
+    assert (outside / "mine.txt").read_text(encoding="utf-8") == "mine"
+    assert extensions.find("deep") is None
+
+
+def test_a_folder_left_empty_is_passed_over(monkeypatch):
+    left = extensions.extensions_dir() / "held"
+    left.mkdir(parents=True)
+    extensions.reload()
+
+    assert extensions.problems() == []
+    assert extensions.installed() == []
+
+
+def test_what_could_not_go_is_said(tmp_path, monkeypatch):
+    folder = make(tmp_path / "src", {"name": "stuck", "prompt": "p.md"},
+                  {"p.md": "hi"})
+    import shutil
+    shutil.copytree(folder, extensions.extensions_dir() / "stuck")
+    extensions.reload()
+    monkeypatch.setattr(extensions, "empty_folder", lambda f: ["p.md"])
+
+    with pytest.raises(ExtensionError, match="Could not remove 1"):
+        extensions.remove("stuck")
+
+
+def git_repo(folder, branches=("main",)):
+    """A git repository of an extension, with each of BRANCHES saying
+    its name in its prompt."""
+
+    repo = make(folder, {"name": "branchy", "prompt": "prompt.md"},
+                {"prompt.md": "main\n"})
+    git = ["git", "-C", str(repo), "-c", "user.name=t",
+           "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "first"], check=True)
+    for branch in branches[1:]:
+        subprocess.run([*git, "checkout", "-qb", branch], check=True)
+        (repo / "prompt.md").write_text(f"{branch}\n", encoding="utf-8")
+        subprocess.run([*git, "commit", "-qam", branch], check=True)
+        subprocess.run([*git, "checkout", "-q", "main"], check=True)
+    return repo
+
+
+class TestBranchesAndGit:
+    @pytest.mark.parametrize("spec, kind, target", [
+        ("github@owner/repo#dev", "github", "owner/repo#dev"),
+        ("github@owner/repo.git#feature/x", "github",
+         "owner/repo#feature/x"),
+        ("git@https://example.com/a/b.git", "git",
+         "https://example.com/a/b.git"),
+        ("git@https://example.com/a/b.git#next", "git",
+         "https://example.com/a/b.git#next"),
+        ("git@github.com:owner/repo.git", "git",
+         "git@github.com:owner/repo.git"),
+        ("git@ssh://host/x", "git", "ssh://host/x"),
+    ])
+    def test_sources(self, spec, kind, target):
+        assert extensions.parse_source(spec) == (kind, target)
+
+    @pytest.mark.parametrize("spec", [
+        "github@owner/repo#--upload-pack=x",
+        "github@owner/repo#a..b",
+        "git@--upload-pack=x",
+        "git@/some/folder",
+        "git@ftp://host/x",
+    ])
+    def test_refused(self, spec):
+        with pytest.raises(ExtensionError):
+            extensions.parse_source(spec)
+
+    def test_a_branch_is_cloned(self, tmp_path):
+        repo = git_repo(tmp_path / "repo", ("main", "dev"))
+        for branch, said in (("", "main"), ("#dev", "dev")):
+            checkout = extensions.fetch(f"git@file://{repo}{branch}")
+            try:
+                assert (checkout / "prompt.md").read_text(
+                        encoding="utf-8").strip() == said
+            finally:
+                extensions.discard(checkout)
+
+    def test_a_missing_branch_says_so(self, tmp_path):
+        repo = git_repo(tmp_path / "repo")
+        with pytest.raises(ExtensionError, match="nope branch"):
+            extensions.fetch(f"git@file://{repo}#nope")
+
+    def test_github_branch_is_asked_for(self, monkeypatch):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["command"] = command
+            return subprocess.CompletedProcess(command, 128, "", "no")
+
+        monkeypatch.setattr(extensions.subprocess, "run", fake_run)
+        monkeypatch.setattr(extensions.shutil, "which", lambda _name: "git")
+        with pytest.raises(ExtensionError):
+            extensions.fetch("github@owner/repo#dev")
+        assert "https://github.com/owner/repo.git" in seen["command"]
+        at = seen["command"].index("--branch")
+        assert seen["command"][at + 1] == "dev"
+
+
+class TestUpdating:
+    def test_update_pulls_from_where_it_came_from(self, tmp_path):
+        repo = git_repo(tmp_path / "repo", ("main", "dev"))
+        spec = f"git@file://{repo}#dev"
+        checkout = extensions.fetch(spec)
+        try:
+            extensions.install(checkout, spec)
+        finally:
+            extensions.discard(checkout)
+        assert extensions.update_source("branchy") == spec
+
+    def test_nothing_to_update_from(self, tmp_path):
+        with pytest.raises(ExtensionError, match="No extension"):
+            extensions.update_source("ghost")
+
+    def test_a_failed_swap_keeps_the_old_copy(self, tmp_path, monkeypatch):
+        old = install(tmp_path)
+        folder = make(tmp_path / "v2", {
+            "name": "demo", "prompt": "p.md"}, {"p.md": "new"})
+        checkout = extensions.fetch(f"path@{folder}")
+        real = type(checkout).rename
+
+        def rename(self, target):
+            if self.name.endswith(".incoming"):
+                raise OSError("disk said no")
+            return real(self, target)
+
+        monkeypatch.setattr(type(checkout), "rename", rename)
+        try:
+            with pytest.raises(ExtensionError, match="is kept"):
+                extensions.install(checkout, f"path@{folder}")
+        finally:
+            extensions.discard(checkout)
+        extensions.reload()
+        kept = extensions.find("demo")
+        assert kept is not None and kept.commands
+        assert (old.path / "echo.py").exists()
+
+    def test_cli_update_and_yes(self):
+        args = parse_args(["update", "demo", "-y"])
+        assert args.extension_update == "demo" and args.yes
+        assert parse_args(["update"]).extension_update == ""
+        assert parse_args([]).extension_update is None
+
+
+class TestSecretSettings:
+    def test_a_text_setting_can_be_a_kept_secret(self, tmp_path):
+        from flash import vault
+
+        folder = make(tmp_path / "s", {
+            "name": "keyed", "prompt": "p.md",
+            "settings": [{"id": "key", "label": "Key", "type": "text",
+                          "secret": True}]}, {"p.md": "x"})
+        ext = install(tmp_path, folder)
+        vault.set_secret("API_KEY", "sk-real-value")
+        extensions.set_setting(ext, "key", "{{secret:API_KEY}}")
+        assert extensions.shown_values(ext)["key"] == "{{secret:API_KEY}}"
+        env = extensions.environment(ext)
+        assert env["FLASH_SETTING_KEY"] == "sk-real-value"
+        assert json.loads(env["FLASH_SETTINGS"])["key"] == "sk-real-value"
+        vault.delete("API_KEY")
+        assert extensions.environment(ext)["FLASH_SETTING_KEY"] == ""
+
+    def test_a_typed_secret_is_still_hidden(self, tmp_path):
+        folder = make(tmp_path / "s", {
+            "name": "keyed", "prompt": "p.md",
+            "settings": [{"id": "key", "label": "Key", "type": "text",
+                          "secret": True}]}, {"p.md": "x"})
+        ext = install(tmp_path, folder)
+        extensions.set_setting(ext, "key", "typed-in")
+        assert extensions.shown_values(ext)["key"] == extensions.SECRET_SET
+
+
+SPEAKER = """\
+import json, sys, struct
+asked = json.load(sys.stdin)
+sys.stdout.buffer.write(struct.pack("<4h", 1, 2, 3, len(asked["text"])))
+"""
+
+HEARER = """\
+import sys
+pcm = sys.stdin.buffer.read()
+print("heard", len(pcm), "bytes")
+"""
+
+BRIEFER = """\
+import json
+print(json.dumps([{"title": "Build passed", "body": "All green.",
+                   "id": "b1", "url": "https://example.com/b1"},
+                  {"title": "", "body": ""}]))
+"""
+
+
+class TestSpeechAndBriefing:
+    def speechy(self, tmp_path):
+        return install(tmp_path, make(tmp_path / "sp", {
+            "name": "talky",
+            "speech": [
+                {"name": "aura", "kind": "speaking", "label": "Aura",
+                 "rate": 16000, "run": ["python", "./speak.py"]},
+                {"name": "ears", "kind": "listening",
+                 "run": ["python", "./hear.py"]},
+            ],
+            "briefing": {"run": ["python", "./brief.py"]},
+        }, {"speak.py": SPEAKER, "hear.py": HEARER, "brief.py": BRIEFER}))
+
+    def test_contents(self, tmp_path):
+        lines = self.speechy(tmp_path).contents()
+        assert "voices: @talky/aura" in lines
+        assert "listening models: @talky/ears" in lines
+        assert "cards in the briefing" in lines
+
+    def test_bad_kind(self, tmp_path):
+        make(tmp_path, {"name": "x", "speech": [
+            {"name": "a", "kind": "singing", "run": ["x"]}]})
+        with pytest.raises(ExtensionError, match="kind"):
+            extensions.load(tmp_path)
+
+    def test_voice_and_listening(self, tmp_path, monkeypatch):
+        from flash import voice
+
+        self.speechy(tmp_path)
+        assert [c.name for c in voice.offered("speaking")][0] == \
+            "@talky/aura"
+        assert voice.voice_installed("@talky/aura")
+        assert not voice.voice_installed("@talky/gone")
+        assert voice.engine_of("@talky/aura") == "talky"
+        # Said as where it comes from, in Settings and the terminal.
+        assert voice.engine_label("@talky/aura") == \
+            "From the talky extension"
+        assert voice.engine_label("en_US-amy-low") == "Piper"
+        from flash import web
+        shown = {m["name"]: m for m in
+                 web.voice_models(web.Session())["speaking"]}
+        assert shown["@talky/aura"]["engine"] == "From the talky extension"
+        assert shown["@talky/aura"]["extension"] is True
+        assert shown["en_US-amy-low"]["extension"] is False
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "@talky/aura")
+        wav, why = voice.synthesize("hello")
+        assert not why and wav[:4] == b"RIFF"
+        monkeypatch.setenv("VOICE_VOSK_MODEL", "@talky/ears")
+        assert voice.transcribe(b"\x00\x01" * 10) == ("heard 20 bytes", "")
+        assert voice.wake_model() != "@talky/ears"
+        with pytest.raises(ValueError, match="extension"):
+            voice.remove_model("speaking", "@talky/aura")
+
+    def test_briefing_cards(self, tmp_path):
+        from flash import briefing
+
+        self.speechy(tmp_path)
+        cards = [c for c in briefing.cards() if c["kind"] == "extension"]
+        assert len(cards) == 1
+        assert cards[0]["title"] == "Build passed"
+        assert cards[0]["label"] == "talky"
+        assert cards[0]["url"] == "https://example.com/b1"
+        assert cards[0]["id"] == "extension:talky:b1"
+
+
+def test_an_extension_updated_on_disk_is_read_again(tmp_path, monkeypatch):
+    # a running Flash learns of a setting added by an update, without a restart
+    import json as _json
+    import os as _os
+    from flash import extensions as ext
+
+    home = tmp_path / "exts"
+    folder = home / "demo"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(ext, "extensions_dir", lambda: home)
+    manifest = {"name": "demo", "description": "d", "commands": [{"name": "hi", "description": "h", "run": ["true"]}],
+                "settings": [{"id": "effort", "label": "Effort", "type": "text"}]}
+    (folder / ext.MANIFEST).write_text(_json.dumps(manifest))
+    ext.reload()
+    assert [s.id for s in ext.find("demo").settings] == ["effort"]
+    manifest["settings"].append({"id": "credits", "label": "Use credits", "type": "switch", "default": False})
+    (folder / ext.MANIFEST).write_text(_json.dumps(manifest))
+    st = (folder / ext.MANIFEST).stat()
+    _os.utime(folder / ext.MANIFEST, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+    monkeypatch.setattr(ext, "_looked", 0.0)
+    assert [s.id for s in ext.find("demo").settings] == ["effort", "credits"]
+    ext.reload()
+
+
+def test_a_speaker_needs_one_of_its_switches(tmp_path):
+    ok = make(tmp_path / "ok", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"}],
+        "speaker": {"setting": "out", "label": "Desk robot"},
+    }, {"p.md": "hi"})
+    ext = extensions.load(ok)
+    assert ext.speaker == extensions.Speaker(setting="out", label="Desk robot")  # nosec B101
+
+    bad = make(tmp_path / "bad", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "text"}],
+        "speaker": {"setting": "out"},
+    }, {"p.md": "hi"})
+    with pytest.raises(extensions.ExtensionError, match="switch"):
+        extensions.load(bad)
+
+
+def test_a_speaker_can_listen_through_its_device_too(tmp_path):
+    ok = make(tmp_path / "ok", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"},
+                     {"id": "in", "label": "Listen here", "type": "switch"}],
+        "speaker": {"setting": "out", "label": "Desk robot", "microphone": "in"},
+    }, {"p.md": "hi"})
+    assert extensions.load(ok).speaker.microphone == "in"  # nosec B101
+
+    bad = make(tmp_path / "bad", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"}],
+        "speaker": {"setting": "out", "microphone": "missing"},
+    }, {"p.md": "hi"})
+    with pytest.raises(extensions.ExtensionError, match="microphone"):
+        extensions.load(bad)
+
+
+def test_an_extension_tool_can_show_the_model_a_picture():
+    import base64
+    from flash import tools
+
+    tools._pending_images.clear()
+    jpeg = b"\xff\xd8\xff\xe0 a picture"
+    said = tools._tool_pictures(json.dumps({"text": "What the robot sees.",
+                                            "images": [base64.b64encode(jpeg).decode()]}))
+    assert said == "What the robot sees.\n(1 picture attached)"  # nosec B101
+    assert tools._pending_images == [jpeg]  # nosec B101
+    assert tools._tool_pictures("plain words") == "plain words"  # nosec B101
+    tools._pending_images.clear()
+
+
+
+def test_extension_programs_get_the_web_token(tmp_path, monkeypatch):
+    from flash import extensions
+
+    monkeypatch.setattr(extensions, "web_token", "t" * 24)
+    ext = extensions.Extension(name="bot", path=tmp_path)
+    assert extensions.environment(ext)["FLASH_WEB_TOKEN"] == "t" * 24  # nosec B101
+
+
+def test_an_extension_updates_itself_unless_it_asks_for_more(tmp_path):
+    from flash import web
+
+    source = make(tmp_path / "src", {"name": "selfup", "version": "1", "prompt": "p.md"},
+                  {"p.md": "one"})
+    session = web.Session()
+    try:
+        staged = web.command(session, {"name": "extension-preview", "arg": f"path@{source}"})
+        web.command(session, {"name": "extension-install", "arg": staged["id"]})
+        assert extensions.find("selfup").version == "1"  # nosec B101
+
+        # Nothing new where it came from: left as it is.
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said["status"] == "current"  # nosec B101
+
+        # A new version asking for nothing more goes in by itself.
+        make(source, {"name": "selfup", "version": "2", "prompt": "p.md"}, {"p.md": "two"})
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said == {"status": "updated", "name": "selfup", "version": "2"}  # nosec B101
+        assert extensions.find("selfup").version == "2"  # nosec B101
+
+        # One that wants to run something new waits for the user.
+        make(source, {"name": "selfup", "version": "3", "prompt": "p.md",
+                      "services": [{"name": "watcher", "run": ["python3", "w.py"]}]},
+             {"p.md": "three", "w.py": "print('hi')"})
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said["status"] == "review" and "service:watcher" in said["adds"]  # nosec B101
+        assert extensions.find("selfup").version == "2"  # nosec B101
+
+        # The background check updates every extension with a source, the same way.
+        done = web.update_extensions(session)
+        assert [d["status"] for d in done if d["name"] == "selfup"] == ["review"]  # nosec B101
+
+        with pytest.raises(ValueError, match="No extension"):
+            web.command(session, {"name": "extension-self-update", "arg": "nope"})
+    finally:
+        session.close()
+
+
+def test_updating_from_a_clone_pulls_it_first(tmp_path):
+    """Installed from a folder that is a git clone: updating pulls what was pushed since."""
+    import subprocess  # nosec B404
+
+    from flash import web
+
+    def git(*args, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,  # nosec B603 B607
+                       check=True, capture_output=True)
+
+    origin = tmp_path / "origin"
+    make(origin, {"name": "pulled", "version": "1", "prompt": "p.md"}, {"p.md": "one"})
+    git("init", "-q", "-b", "main", cwd=origin)
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "one", cwd=origin)
+    clone = tmp_path / "clone"
+    git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    session = web.Session()
+    try:
+        staged = web.command(session, {"name": "extension-preview", "arg": f"path@{clone}"})
+        web.command(session, {"name": "extension-install", "arg": staged["id"]})
+        # Pushed after it was cloned: the clone itself is behind.
+        make(origin, {"name": "pulled", "version": "2", "prompt": "p.md"}, {"p.md": "two"})
+        git("commit", "-qam", "two", cwd=origin)
+        said = web.command(session, {"name": "extension-self-update", "arg": "pulled"})
+        assert said["status"] == "updated" and extensions.find("pulled").version == "2"  # nosec B101
+
+        # The user's own changes in the clone are never pulled over.
+        make(origin, {"name": "pulled", "version": "3", "prompt": "p.md"}, {"p.md": "three"})
+        git("commit", "-qam", "three", cwd=origin)
+        (clone / "p.md").write_text("mine", encoding="utf-8")
+        assert not extensions.pull_folder(f"path@{clone}")  # nosec B101
+        assert (clone / "p.md").read_text(encoding="utf-8") == "mine"  # nosec B101
+    finally:
+        session.close()
+
+
+def test_the_updates_switch(monkeypatch):
+    from flash import web
+
+    assert extensions.updates_on()  # nosec B101  (on unless switched off)
+    assert web.command(None, {"name": "extension-updates-setting", "arg": "off"}) == {"extension_updates": False}  # nosec B101
+    assert not extensions.updates_on()  # nosec B101
+    web.command(None, {"name": "extension-updates-setting", "arg": "on"})
+    assert extensions.updates_on()  # nosec B101
+
+
+def test_a_tool_knows_how_its_turn_was_asked_for(tmp_path):
+    """FLASH_TURN_FROM: robot, voice or typed for a turn someone asked for, empty for one nobody did."""
+    from flash import web
+
+    ext = extensions.load(make(tmp_path / "e", {"name": "origin", "version": "1", "prompt": "p.md"}, {"p.md": "x"}))
+    session = web.Session()
+    try:
+        chat = session.new_chat()
+        with session._lock:
+            chat.busy = True  # waits in line: nothing runs, and where it came from rides with it
+        session.send(chat, "hello", asked_from={"from": "robot", "device": "ab12", "name": "Desk"})
+        item = chat.pending[-1]
+        asked = extensions.turn_from[f"{chat.id}:{item['id']}"]
+        assert asked["from"] == "robot"  # nosec B101
+        extensions.turn_from[chat.id] = asked  # as it is when that turn starts
+        env = extensions.environment(ext, chat.id)
+        assert env["FLASH_TURN_FROM"] == "robot" and env["FLASH_TURN_DEVICE"] == "ab12"  # nosec B101
+        assert env["FLASH_TURN_DEVICE_NAME"] == "Desk"  # nosec B101
+        assert extensions.environment(ext, "")["FLASH_TURN_FROM"] == ""  # nosec B101
+    finally:
+        session.close()

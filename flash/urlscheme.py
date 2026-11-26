@@ -1,9 +1,11 @@
 """The ``flash://`` URL scheme: parsing and OS handler registration.
 
 A ``flash://?prompt=What+is+Python`` link opens Flash with that prompt
-queued for the first turn. Because any web page can open such a link, the
-prompt is always shown and confirmed before it is sent (see ai.py), and
-slash commands and ``!`` shell escapes are rejected outright here.
+queued for the first turn, and ``flash://open`` opens the web UI: the
+one already running, or a new one. Because any web page can open such a
+link, the prompt is always shown and confirmed before it is sent (see
+ai.py), and slash commands and ``!`` shell escapes are rejected outright
+here.
 """
 
 import os
@@ -25,6 +27,16 @@ def looks_like_flash_url(text: str) -> bool:
     """True if TEXT is meant to be a flash: URL rather than a prompt."""
 
     return text.strip().lower().startswith(f"{SCHEME}:")
+
+
+def is_open_url(url: str) -> bool:
+    """True for ``flash://open``: open the web UI, nothing else. It
+    carries nothing a page could put words in, so it needs no asking."""
+
+    parts = urlsplit(url.strip())
+    where = (parts.netloc or parts.path).strip("/").lower()
+    return parts.scheme.lower() == SCHEME and where == "open" \
+        and not parts.query
 
 
 def _clean(prompt: str) -> str:
@@ -79,7 +91,7 @@ def launch_command() -> list[str]:
 def _register_windows(command: list[str]) -> str:
     import winreg
 
-    line = " ".join(f'"{part}"' for part in command) + ' "%1"'
+    line = " ".join(f'"{part}"' for part in command) + ' --uri "%1"'
     root = winreg.HKEY_CURRENT_USER
 
     with winreg.CreateKey(root, rf"Software\Classes\{SCHEME}") as key:
@@ -122,7 +134,7 @@ def _desktop_path() -> Path:
 
 
 def _register_linux(command: list[str]) -> str:
-    exec_line = " ".join(command) + " %u"
+    exec_line = " ".join(command) + " --uri %u"
     path = _desktop_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -169,9 +181,6 @@ def _run_quiet(command: list[str]) -> None:
         pass
 
 
-_MACOS_HELP = (
-    "The flash:// handler cannot be installed or uninstalled on macOS."
-)
 
 
 def _host_os() -> str:
@@ -187,7 +196,15 @@ def register() -> str:
     host = _host_os()
 
     if host == "macos":
-        raise SchemeError(_MACOS_HELP)
+        # On a Mac a link goes to an app, as an Apple event: the Flash app
+        # (launcher.py) is that app, and declares flash:// itself.
+        from . import launcher
+
+        try:
+            said = launcher.install()
+        except launcher.ShortcutError as exc:
+            raise SchemeError(str(exc)) from exc
+        return f"{launcher.place()} opens flash:// links. {said}"
 
     command = launch_command()
 
@@ -203,7 +220,11 @@ def unregister() -> bool:
     host = _host_os()
 
     if host == "macos":
-        raise SchemeError(_MACOS_HELP)
+        from . import launcher
+
+        had = launcher.place().exists()
+        launcher.remove()
+        return had
 
     if host == "windows":
         return _unregister_windows()

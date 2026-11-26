@@ -1,0 +1,347 @@
+"""A tunnel: Flash's web UI on a public https address, through a service
+that forwards it to this computer, to open from anywhere.
+
+Each service is a program Flash starts and stops (cloudflared, ssh,
+tailscale, ngrok, or one an extension adds), told to forward to the web
+server on this machine, and the public address is read from what it
+prints. Flash then answers
+requests to that address too, as well as to this machine's own names.
+
+This puts Flash on the internet. Anyone with the link, token and all,
+can use it as the user, and Flash can run commands, change files and
+send messages: the link is as good as the user's password. Off until
+turned on, and never turned on by itself: it stops when Flash stops.
+"""
+
+import atexit
+import os
+import re
+import shutil
+import subprocess  # nosec B404
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Optional
+from urllib.parse import urlparse
+
+
+@dataclass(frozen=True)
+class Service:
+    """A tunnel service: what it is called, the program it needs, how it
+    is started (with {port}), how its public address looks, and, when it
+    says the address before it can be reached, what it says once it can."""
+
+    name: str
+    title: str
+    about: str
+    program: str
+    argv: tuple
+    address: str
+    install: str
+    ready: str = ""
+    # The extension that adds it, "" for a built-in one.
+    extension: str = ""
+
+
+BUILT_IN = {
+    service.name: service for service in (
+        Service(
+            "cloudflare", "Cloudflare quick tunnel",
+            "Free, with no account. A new random address each time.",
+            "cloudflared",
+            ("cloudflared", "tunnel", "--no-autoupdate", "--url",
+             "http://127.0.0.1:{port}"),
+            # Not its API's own address, which a failure names.
+            r"https://(?!api\.)[-a-z0-9]+\.trycloudflare\.com",
+            "brew install cloudflared, or see "
+            "developers.cloudflare.com/cloudflare-one/connections/"
+            "connect-networks/downloads",
+            # The address comes first, the connection to the edge after.
+            r"Registered tunnel connection",
+        ),
+        Service(
+            "localhost.run", "localhost.run",
+            "Free, with nothing to install: it goes over ssh. A new "
+            "random address each time.",
+            "ssh",
+            ("ssh", "-T", "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "ServerAliveInterval=30", "-o", "ExitOnForwardFailure=yes",
+             "-R", "80:127.0.0.1:{port}", "nokey@localhost.run"),
+            r"https://[-a-z0-9]+\.lhr\.life",
+            "ssh comes with macOS and Linux, and with Windows 10 and later",
+        ),
+        Service(
+            "tailscale", "Tailscale Funnel",
+            "Your own tailnet's address, the same each time. Needs "
+            "Tailscale signed in, with Funnel allowed for the tailnet.",
+            "tailscale",
+            ("tailscale", "funnel", "{port}"),
+            r"https://[-a-z0-9.]+\.ts\.net",
+            "tailscale.com/download",
+        ),
+        Service(
+            "ngrok", "ngrok",
+            "Needs an ngrok account, with its authtoken added "
+            "(ngrok config add-authtoken).",
+            "ngrok",
+            ("ngrok", "http", "127.0.0.1:{port}", "--log", "stdout"),
+            r"https://[-a-z0-9.]+\.ngrok(?:-free)?\.(?:app|dev|io)",
+            "ngrok.com/download",
+        ),
+    )
+}
+# The name the built-ins have always been read by.
+SERVICES = BUILT_IN
+
+
+def all_services() -> dict[str, Service]:
+    """The built-in services, then each one an extension adds, the
+    built-ins keeping their names."""
+
+    from . import extensions  # deferred: extensions reads this module
+
+    found = dict(BUILT_IN)
+    for extension, added in extensions.tunnel_services():
+        if added.name in found:
+            continue
+        found[added.name] = Service(
+            added.name, added.title, added.about, added.run[0],
+            tuple(added.run), added.address, added.install, added.ready,
+            extension=extension.name,
+        )
+    return found
+
+
+def find(name: str) -> Optional[Service]:
+    return all_services().get(str(name or "").strip().lower())
+
+
+def _program(service: Service) -> Optional[str]:
+    """Where SERVICE's program is, or None when it is not there."""
+
+    if not service.extension:
+        return shutil.which(service.program)
+    from . import extensions
+
+    added = extensions.find(service.extension)
+    if added is None:
+        return None
+    program = extensions.argv(added, [service.program])[0]
+    if os.path.isabs(program):
+        return program if os.path.isfile(program) else None
+    return shutil.which(program)
+
+
+def _environment(service: Service) -> Optional[dict]:
+    """What SERVICE's program runs with: an extension's settings too."""
+
+    if not service.extension:
+        return None
+    from . import extensions
+
+    added = extensions.find(service.extension)
+    return extensions.environment(added) if added else None
+
+
+# How long a service has to say its address before it is given up on.
+START_SECONDS = 45.0
+# How long Flash keeps trying to reach itself through a new address, and
+# how long it lets the name settle first: a brand new name asked for too
+# soon can be remembered as not existing.
+CHECK_SECONDS = 40.0
+SETTLE_SECONDS = 3.0
+# What a tunnel that stopped is remembered as having said, for the why.
+SAID_LINES = 40
+
+OFF = "off"
+STARTING = "starting"
+ON = "on"
+FAILED = "failed"
+
+
+class TunnelError(Exception):
+    """A tunnel that could not be started, and why."""
+
+
+def services() -> list[dict]:
+    """Every service, for the picker: whether its program is here, and
+    the extension that adds it."""
+
+    return [
+        {"name": s.name, "title": s.title, "about": s.about,
+         "installed": _program(s) is not None,
+         "install": s.install, "extension": s.extension}
+        for s in all_services().values()
+    ]
+
+
+class Tunnel:
+    """The one tunnel a web UI has: started, watched, stopped."""
+
+    def __init__(self) -> None:
+        self.state = OFF
+        self.service = ""
+        self.url = ""
+        self.why = ""
+        self.since = 0.0
+        self._process: Optional[subprocess.Popen] = None
+        self._said: list[str] = []
+        self._lock = threading.Lock()
+        self._found = threading.Event()
+        # Never left running after Flash: its program would go on putting
+        # this computer on the internet with nothing to stop it.
+        atexit.register(self.stop)
+
+    @property
+    def host(self) -> str:
+        """The public name requests come in under, while it is on."""
+
+        if self.state != ON:
+            return ""
+        return (urlparse(self.url).hostname or "").lower()
+
+    def status(self) -> dict:
+        return {
+            "state": self.state, "service": self.service, "url": self.url,
+            "why": self.why, "since": self.since,
+        }
+
+    def start(self, name: str, port: int, wait: float = START_SECONDS,
+              check: Optional[Callable[[str], str]] = None) -> dict:
+        """Start the tunnel through service NAME to PORT, and wait for its
+        public address. CHECK, given the address, says why Flash cannot
+        be reached through it, or "" once it can: it is on only then.
+        Raises TunnelError when it cannot be had."""
+
+        service = find(name)
+        if service is None:
+            raise TunnelError(
+                f"No tunnel service called {name!r}. One of: "
+                + ", ".join(all_services()) + "."
+            )
+        program = _program(service)
+        if program is None:
+            raise TunnelError(
+                f"{service.title} needs {service.program}, which is not "
+                "installed" + (f": {service.install}." if service.install
+                               else ".")
+            )
+        self.stop()
+        # Only {port} is filled in: an extension's arguments may have
+        # braces of their own.
+        rest = list(service.argv[1:])
+        if service.extension:
+            from . import extensions
+
+            added = extensions.find(service.extension)
+            # Its own files, ./ in the manifest, are inside it.
+            rest = extensions.argv(added, ["", *rest])[1:] if added \
+                else rest
+        argv = [program, *(str(a).replace("{port}", str(int(port)))
+                           for a in rest)]
+        with self._lock:
+            self.state, self.service, self.url, self.why = (
+                STARTING, service.name, "", "")
+            self._said = []
+            self._found.clear()
+            try:
+                # A fixed program, never through a shell; the port is a
+                # number.
+                self._process = subprocess.Popen(  # nosec B603
+                    argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                    errors="replace", bufsize=1,
+                    env=_environment(service),
+                )
+            except OSError as exc:
+                self.state, self.why = FAILED, str(exc)
+                raise TunnelError(
+                    f"{service.program} could not start: {exc}"
+                ) from None
+        threading.Thread(
+            target=self._read, args=(self._process, service), daemon=True,
+        ).start()
+        if not self._found.wait(wait) or self.state != ON:
+            why = self.why or (
+                f"{service.title} gave no address in {int(wait)} seconds"
+                + self._last()
+            )
+            self.stop()
+            self.state, self.why = FAILED, why
+            raise TunnelError(why)
+        if check is not None:
+            why = self._reach(check)
+            if why:
+                self.stop()
+                self.state, self.why = FAILED, why
+                raise TunnelError(why)
+        return self.status()
+
+    def _reach(self, check: Callable[[str], str]) -> str:
+        """Why Flash cannot be reached through the tunnel, after trying
+        for a while; "" once it can."""
+
+        time.sleep(SETTLE_SECONDS)
+        deadline = time.monotonic() + CHECK_SECONDS
+        why = ""
+        while time.monotonic() < deadline and self.state == ON:
+            why = check(self.url)
+            if not why:
+                return ""
+            time.sleep(2.0)
+        if self.state != ON:
+            return self.why or "The tunnel stopped."
+        return (f"{self.url} did not reach Flash: {why}"
+                + self._last())
+
+    def _last(self) -> str:
+        """What the service said last, for a why."""
+
+        said = [line for line in self._said if not line.startswith("+")]
+        return f" It said: {said[-1]}" if said else ""
+
+    def _read(self, process: subprocess.Popen, service: Service) -> None:
+        pattern = re.compile(service.address, re.IGNORECASE)
+        ready = re.compile(service.ready, re.IGNORECASE) \
+            if service.ready else None
+        address = ""
+        for line in process.stdout or ():
+            line = line.strip()
+            if not line:
+                continue
+            self._said = (self._said + [line])[-SAID_LINES:]
+            found = pattern.search(line)
+            # Only ever an https address: what Flash answers to, and
+            # what the link with its token is sent over.
+            if found and not address and \
+                    found.group(0).lower().startswith("https://"):
+                address = found.group(0).rstrip("/").lower()
+            if address and self.state == STARTING and \
+                    process is self._process and (
+                        ready is None or ready.search(line)):
+                self.url = address
+                self.state, self.since = ON, time.time()
+                self._found.set()
+        process.wait()
+        if process is self._process and self.state in (STARTING, ON):
+            # It ended by itself: the network, the service, a sign-in.
+            last = next((line for line in reversed(self._said)
+                         if not line.startswith("+")), "")
+            self.state = FAILED
+            self.why = f"{service.title} stopped" + (
+                f": {last}" if last else ".")
+            self.url = ""
+            self._found.set()
+
+    def stop(self) -> None:
+        with self._lock:
+            process, self._process = self._process, None
+            self.state, self.url, self.since = OFF, "", 0.0
+            self._found.set()
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()

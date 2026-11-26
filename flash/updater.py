@@ -7,6 +7,7 @@ noticeably delay the CLI, so every network failure here is swallowed and
 reported as "unknown" rather than raised.
 """
 
+import json
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ import subprocess  # nosec B404
 import tempfile
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
 from .version import (
@@ -41,11 +43,109 @@ _WAIT_SECONDS = 300
 # whether the update succeeded. Kept in step with install.sh,
 # install.ps1, and requirements-voice.txt.
 VOICE_PACKAGES = ("sounddevice", "vosk", "piper-tts")
+# Kokoro's and Phonon's voices' packages and Moonshine listening's, each
+# put back too by an update, when it was in.
+KOKORO_PACKAGE = "kokoro-onnx"
+PHONON_PACKAGE = "ptts"
+MOONSHINE_PACKAGE = "moonshine-voice"
+
+
+def voice_packages() -> list[str]:
+    """The voice packages an update puts back: Kokoro's and Moonshine's
+    too, when the user had added them."""
+
+    import importlib.util
+
+    packages = list(VOICE_PACKAGES)
+    for module, package in (("kokoro_onnx", KOKORO_PACKAGE),
+                            ("ptts", PHONON_PACKAGE),
+                            ("moonshine_voice", MOONSHINE_PACKAGE)):
+        try:
+            if importlib.util.find_spec(module) is not None:
+                packages.append(package)
+        except (ImportError, ValueError):
+            pass
+    return packages
+
 
 _VOICE_FAILED = (
     "Voice packages could not be reinstalled, so voice mode stays "
     "unavailable until you run the installer again."
 )
+
+
+# Which branch Flash was installed from, and at which commit: written by
+# the installers and by every update. The dev branch's version number
+# doesn't change with each change, so it's kept up to date by commit.
+INSTALLED = Path.home() / ".flash" / "install.json"
+
+
+def installed() -> dict:
+    """{"branch", "commit"} as Flash was last installed ("main" when
+    nothing says otherwise)."""
+
+    try:
+        # utf-8-sig: Windows PowerShell writes a byte-order mark first.
+        found = json.loads(INSTALLED.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        found = {}
+    if not isinstance(found, dict):
+        found = {}
+    branch = str(found.get("branch") or "main")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]{1,60}", branch):
+        branch = "main"
+    return {"branch": branch, "commit": str(found.get("commit") or "")}
+
+
+def record(branch: str, commit: str) -> None:
+    try:
+        INSTALLED.parent.mkdir(parents=True, exist_ok=True)
+        INSTALLED.write_text(json.dumps({"branch": branch, "commit": commit}),
+                             encoding="utf-8")
+    except OSError:
+        pass
+
+
+def remote_commit(branch: str) -> Optional[str]:
+    """The newest commit on BRANCH of Flash's repository, or None."""
+
+    if not shutil.which("git"):
+        return None
+    try:
+        done = subprocess.run(  # nosec B603 B607
+            ["git", "ls-remote", REPO_URL, f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    words = done.stdout.split()
+    return words[0] if done.returncode == 0 and words else None
+
+
+def _cloned_commit(folder: str) -> str:
+    """The commit a fresh clone in FOLDER is at, read from its files."""
+
+    git = os.path.join(folder, ".git")
+
+    def read(*parts: str) -> str:
+        with open(os.path.join(git, *parts), encoding="utf-8") as file:
+            return file.read()
+
+    try:
+        head = read("HEAD").strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[5:]
+        try:
+            return read(*ref.split("/")).strip()
+        except OSError:
+            pass
+        for line in read("packed-refs").splitlines():
+            if line.endswith(" " + ref):
+                return line.split()[0]
+    except OSError:
+        pass
+    return ""
 
 
 def _parse_version(text: str) -> tuple[int, ...]:
@@ -158,7 +258,7 @@ def _voice_commands() -> list[list[str]]:
     why the subcommand is `install` and not `pip install`.
     """
 
-    packages = list(VOICE_PACKAGES)
+    packages = voice_packages()
 
     return [
         ["pipx", "inject", "flash"] + packages,
@@ -201,7 +301,7 @@ def _handoff_command(shell: str, pipx: str, tmp_dir: str) -> list[str]:
     """
 
     clone = _quoted(tmp_dir)
-    packages = " ".join(VOICE_PACKAGES)
+    packages = " ".join(voice_packages())
 
     # The reinstall wipes the injected voice packages, and this window is
     # the only thing still running once flash is gone, so they go back
@@ -256,8 +356,10 @@ def _detached(command: list[str]) -> None:
 def perform_update(
     on_step: Optional[Callable[[str], None]] = None,
     on_output: Optional[Callable[[str], None]] = None,
+    branch: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Reinstall Flash from the latest `main` branch.
+    """Reinstall Flash from the latest of BRANCH (the one it was installed
+    from, unless given: `main`, or `dev`).
 
     Mirrors install.sh: clone `main` to a temp dir, `pipx install
     --force` it, then put the voice packages that reinstall wiped back
@@ -295,14 +397,17 @@ def perform_update(
 
     try:
         step("Downloading the latest version")
+        branch = branch or installed()["branch"]
         code, output = _stream(
-            ["git", "clone", "--depth", "1", REPO_URL, tmp_dir],
+            ["git", "clone", "--depth", "1", "--branch", branch, REPO_URL,
+             tmp_dir],
             on_output,
         )
         if code != 0:
             return False, _failed(
                 "Could not download the update", code, output
             )
+        commit = _cloned_commit(tmp_dir)
 
         # Windows locks every running executable, and reinstalling means
         # deleting two of them: the venv's python, which is this very
@@ -323,6 +428,7 @@ def perform_update(
             step("Scheduling the install")
             _detached(_handoff_command(shell, pipx, tmp_dir))
             keep_clone = True
+            record(branch, commit)
 
             return True, (
                 "Flash will finish updating in a window of its own as "
@@ -343,6 +449,7 @@ def perform_update(
             return False, _failed(
                 "Could not install the update", code, output
             )
+        record(branch, commit)
 
         # The reinstall took the injected voice packages with it. Voice
         # is optional, so this reports and moves on rather than calling

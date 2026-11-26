@@ -280,3 +280,12 @@ class TestKeepingTheThread:
         assert squeezed[0]["content"].endswith(context.TOOL_STUB_NOTE)
         # The caller's messages are never changed underneath it.
         assert messages[2]["content"] == "z" * 6000
+
+
+def test_the_default_reply_has_room_for_a_whole_file(monkeypatch):
+    from flash import ai
+
+    monkeypatch.delenv("MAX_OUTPUT_TOKENS", raising=False)
+    ai.Config.refresh()
+
+    assert ai.Config.max_output_tokens >= 8192

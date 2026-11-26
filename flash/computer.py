@@ -1,0 +1,1502 @@
+"""Simple things Flash can do on the computer it runs on, once the user
+lets it: play, pause and skip music, say what is playing, set the
+volume, open and quit apps, open a link, file or folder, lock the
+screen, put text on the clipboard, and switch dark mode. On a Mac, it
+can read the user's recent iMessages, and send one once they say yes to
+it.
+
+Each is one fixed step through what the system already offers: scripts
+of Flash's own on a Mac, media keys and the system's own calls on
+Windows, playerctl and the sound server on Linux. Nothing is clicked or
+typed, and nothing the model writes is run as a command: what it names
+(an app, a file, a level) only ever goes in as an argument. Off until
+the user turns it on (COMPUTER_ACTIONS), since even a pause reaches
+outside the chat.
+"""
+
+import contextlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess  # nosec B404
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
+from urllib.parse import quote, urlparse
+
+SETTING = "COMPUTER_ACTIONS"
+# What the user has switched off of it, by KINDS' names, comma-separated:
+# everything is on until they do.
+OFF_SETTING = "COMPUTER_OFF"
+TIMEOUT = 10
+
+# What the model may ask for, and what each does, for its tool.
+ACTIONS = {
+    "play_pause": "play or pause what is playing",
+    "play": "start or resume music or video",
+    "pause": "pause music or video",
+    "next_track": "skip to the next track",
+    "previous_track": "go back a track",
+    "now_playing": "say what is playing, or paused, and in which app",
+    "set_volume": "set the volume, value 0 to 100",
+    "volume_up": "turn the volume up a step",
+    "volume_down": "turn the volume down a step",
+    "mute": "mute the sound",
+    "unmute": "unmute the sound",
+    "open_app": "open an app, value its name",
+    "quit_app": "quit an app, value its name (it asks to save as usual)",
+    "open": "open a link, file or folder, value the URL or path",
+    "lock_screen": "lock the screen",
+    "sleep_display": "turn the display off",
+    "copy": "put text on the clipboard, value the text",
+    "dark_mode": "switch dark mode, value on or off",
+}
+# What the user can switch on and off one by one: its name, what
+# Settings calls it, what it lets Flash do, and its ACTIONS. "imessage"
+# is the send_imessage tool, "imessage_read" read_imessages and
+# "imessage_mark" mark_imessages_read, on a Mac only.
+KINDS = {
+    "music": ("Music and video", "Play, pause and skip, and say what is "
+              "playing.", ("play_pause", "play", "pause", "next_track",
+                           "previous_track", "now_playing")),
+    "volume": ("Volume", "Set it, turn it up or down, mute it.",
+               ("set_volume", "volume_up", "volume_down", "mute",
+                "unmute")),
+    "apps": ("Apps", "Open and quit apps by name.",
+             ("open_app", "quit_app")),
+    "open": ("Links and files", "Open a link, a file or a folder.",
+             ("open",)),
+    "screen": ("Lock the screen", "Lock it, or turn the display off.",
+               ("lock_screen", "sleep_display")),
+    "clipboard": ("Clipboard", "Copy text to the clipboard.", ("copy",)),
+    "dark_mode": ("Dark mode", "Switch it on or off.", ("dark_mode",)),
+    "imessage_read": ("Read iMessages", "Read your recent messages, to "
+                      "answer about them.", ()),
+    "imessage_mark": ("Mark iMessages read", "When you ask: Messages shows "
+                      "each chat for a moment, then you are back.", ()),
+    "imessage": ("Send iMessages", "Send one, after you say yes to it.", ()),
+}
+# How much a volume step moves it, in percent.
+STEP = 10
+COPY_CHARS = 100_000
+
+# An app is named, never a path or a command: letters, digits and the
+# few marks app names have.
+_APP_NAME = re.compile(r"^[\w][\w .&'+-]{0,79}$")
+# Opening one of these runs it rather than showing it: open_app is for
+# apps, and a script or installer is not opened at all.
+_RUNS = {
+    ".app", ".command", ".tool", ".sh", ".bash", ".zsh", ".csh", ".fish",
+    ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".msi", ".msix",
+    ".appx", ".scr", ".pif", ".lnk", ".vbs", ".vbe", ".js", ".jse",
+    ".wsf", ".wsh", ".hta", ".cpl", ".jar", ".py", ".pyw", ".pl", ".rb",
+    ".scpt", ".applescript", ".workflow", ".pkg", ".mpkg", ".dmg",
+    ".desktop", ".run", ".bin", ".appimage", ".deb", ".rpm",
+}
+_SCHEMES = {"http", "https", "mailto"}
+
+
+class ComputerError(Exception):
+    """An action that could not be done, and why, for the model."""
+
+
+def enabled() -> bool:
+    return (os.environ.get(SETTING) or "").strip().lower() in (
+        "1", "on", "true", "yes",
+    )
+
+
+def kinds() -> list[str]:
+    """The KINDS there are on this computer: iMessages only on a Mac."""
+
+    return [k for k in KINDS
+            if not k.startswith("imessage") or system() == "mac"]
+
+
+def switched_off() -> set[str]:
+    """The KINDS the user has switched off."""
+
+    said = os.environ.get(OFF_SETTING) or ""
+    return {k.strip().lower() for k in said.split(",")} & set(KINDS)
+
+
+def allowed(kind: str) -> bool:
+    """Whether Flash may do KIND: the computer on, and KIND not off."""
+
+    return enabled() and kind in kinds() and kind not in switched_off()
+
+
+def off_after(kind: str, on: bool) -> str:
+    """OFF_SETTING's value once KIND is switched ON or off."""
+
+    if kind not in KINDS:
+        raise ComputerError(
+            f"{kind!r} is not one of them. One of: {', '.join(KINDS)}."
+        )
+    off = switched_off() - {kind} if on else switched_off() | {kind}
+    return ",".join(k for k in KINDS if k in off)
+
+
+def allowed_actions() -> list[str]:
+    """ACTIONS the user has not switched off."""
+
+    off = switched_off()
+    return [action for action in ACTIONS
+            if not any(action in KINDS[k][2] for k in off)]
+
+
+def system() -> str:
+    """"mac", "windows" or "linux"."""
+
+    if sys.platform == "darwin":
+        return "mac"
+    return "windows" if sys.platform.startswith("win") else "linux"
+
+
+def _run(argv: list[str], given: str = "",
+         timeout: float = TIMEOUT) -> str:
+    """Run ARGV, with GIVEN on its input, and return what it printed.
+    Raises ComputerError when it could not run or failed."""
+
+    try:
+        # Fixed commands, never through a shell.
+        done = subprocess.run(  # nosec B603
+            argv, input=given, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=timeout, check=False,
+        )
+    except FileNotFoundError:
+        raise ComputerError(f"{argv[0]} is not on this computer.") from None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ComputerError(f"{argv[0]} could not run: {exc}") from None
+    if done.returncode:
+        said = (done.stderr or done.stdout or "").strip().splitlines()
+        raise ComputerError(
+            f"{argv[0]} failed" + (f": {said[-1]}" if said else ".")
+        )
+    return (done.stdout or "").strip()
+
+
+def do(action: str, value: str = "") -> str:
+    """Do ACTION, with VALUE where it takes one. Returns what happened,
+    in a sentence; raises ComputerError when it could not."""
+
+    action = str(action or "").strip().lower()
+    value = str(value or "").strip()
+    if action not in ACTIONS:
+        raise ComputerError(
+            f"{action!r} is not an action. One of: "
+            f"{', '.join(allowed_actions())}."
+        )
+    if action not in allowed_actions():
+        raise ComputerError(
+            f"The user has switched {action.replace('_', ' ')} off. They "
+            "can turn it back on in Settings, or with /computer on "
+            + next(k for k in KINDS if action in KINDS[k][2]) + "."
+        )
+    kind = system()
+    if action in _MEDIA:
+        return _media(kind, action)
+    if action in ("set_volume", "volume_up", "volume_down", "mute",
+                  "unmute"):
+        return _volume(kind, action, value)
+    if action in ("open_app", "quit_app"):
+        return _app(kind, action, _app_name(value))
+    if action == "open":
+        return _open(kind, value)
+    if action == "lock_screen":
+        return _lock(kind)
+    if action == "sleep_display":
+        return _sleep_display(kind)
+    if action == "copy":
+        return _copy(kind, value)
+    return _dark_mode(kind, value)
+
+
+# --- Music and video --------------------------------------------------
+
+_MEDIA = ("play_pause", "play", "pause", "next_track", "previous_track",
+          "now_playing")
+
+# On a Mac, the players that can be asked directly, as they name
+# themselves: only these say what they are playing, and only once
+# already running are they asked anything, so none is opened. Anything
+# else, a browser, a call, any app, gets the keyboard's media keys,
+# which go to whatever played last.
+MAC_PLAYERS = ("Spotify", "Music")
+# The media keys, as macOS numbers them (NX_KEYTYPE_*): play and pause
+# are one key.
+MAC_KEYS = {"play_pause": 16, "play": 16, "pause": 16, "next_track": 17,
+            "previous_track": 18}
+# What macOS shows as Now Playing in Control Center, for whatever app it
+# is: a browser tab, a call, any player. Apple lets only its own programs
+# read it, which a script run by osascript is. {"known": false} when it
+# cannot be read here, otherwise whether it is playing (null when macOS
+# does not say), the title, the artist and the app.
+_NOW_JS = """
+const nowPlaying = () => {
+  const said = (thing) => { try {
+    const value = ObjC.unwrap(thing);
+    return typeof value === "string" ? value : "";
+  } catch (e) { return ""; } };
+  try {
+    $.NSBundle.bundleWithPath(
+      "/System/Library/PrivateFrameworks/MediaRemote.framework").load;
+    const request = $.NSClassFromString("MRNowPlayingRequest");
+    if (!request || request.isNil()) return {known: false};
+    const has = (name) => request.respondsToSelector(name);
+    const item = has("localNowPlayingItem") ? request.localNowPlayingItem
+      : null;
+    const info = item && !item.isNil() ? item.nowPlayingInfo : null;
+    const field = (key) => info && !info.isNil()
+      ? info.objectForKey(`kMRMediaRemoteNowPlayingInfo${key}`) : null;
+    let app = "";
+    if (has("localNowPlayingPlayerPath")) {
+      const path = request.localNowPlayingPlayerPath;
+      const client = path && !path.isNil() ? path.client : null;
+      if (client && !client.isNil()) {
+        app = said(client.displayName) || said(client.bundleIdentifier);
+      }
+    }
+    const rate = field("PlaybackRate");
+    const playing = has("localIsPlaying") ? Boolean(request.localIsPlaying)
+      : rate ? Number(ObjC.unwrap(rate)) > 0 : null;
+    const title = said(field("Title")), artist = said(field("Artist"));
+    return {known: Boolean(app || title), playing, title, artist, app};
+  } catch (e) { return {known: false}; }
+};
+"""
+_MAC_NOW = _NOW_JS + "JSON.stringify(nowPlaying());"
+# How long a pressed key takes to show in Now Playing.
+SETTLE = 0.6
+
+_MAC_MEDIA = _NOW_JS + """
+const action = %s, players = %s;
+// An app that is not installed cannot even say it is not running.
+const ask = (fn, otherwise) => { try { return fn(); } catch (e) {
+  return otherwise; } };
+const running = players.filter((p) => ask(() => Application(p).running(),
+  false));
+const playing = running.filter((p) => ask(
+  () => String(Application(p).playerState()), "") === "playing");
+const track = (p) => ask(() => {
+  const t = Application(p).currentTrack;
+  return `${p}: ${t.name()} by ${t.artist()}`;
+}, p);
+let did = "", told = [];
+if (action === "now_playing") {
+  told = playing.map(track);
+} else if (playing.length && ["pause", "play_pause"].includes(action)) {
+  playing.forEach((p) => Application(p).pause());
+  did = "paused";
+  told = playing;
+} else if (playing.length && action === "play") {
+  did = "already";
+  told = playing.map(track);
+} else if (playing.length && action !== "play_pause") {
+  const app = Application(playing[0]);
+  action === "next_track" ? app.nextTrack() : app.previousTrack();
+  delay(0.3);
+  did = "skipped";
+  told = [track(playing[0])];
+} else {
+  // Anything else playing gets the key, pressed from Python.
+  did = "press";
+}
+const now = did === "press" || action === "now_playing" ? nowPlaying()
+  : {known: false};
+JSON.stringify({did, told, now});
+"""
+
+# A media key, pressed as the keyboard presses it, by the number in
+# argv[1]: straight through macOS's own calls, in a Python of its own so
+# none of AppKit is loaded into Flash. macOS drops a key pressed by an
+# app it has not let make key presses, without a word, so that is asked
+# first, and asked for when it is not so (Privacy & Security >
+# Accessibility). Prints "pressed", "not allowed" or "no key".
+_MAC_KEY = """
+import ctypes, sys, time
+from ctypes import (c_bool, c_char_p, c_double, c_long, c_short, c_uint32,
+                    c_ulong, c_void_p)
+objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+cg = ctypes.CDLL(
+    "/System/Library/Frameworks/ApplicationServices.framework/"
+    "ApplicationServices")
+objc.objc_getClass.restype = objc.sel_registerName.restype = c_void_p
+objc.objc_getClass.argtypes = objc.sel_registerName.argtypes = [c_char_p]
+objc.objc_autoreleasePoolPush.restype = c_void_p
+objc.objc_autoreleasePoolPop.argtypes = [c_void_p]
+cg.CGPreflightPostEventAccess.restype = c_bool
+cg.CGRequestPostEventAccess.restype = c_bool
+cg.CGEventPost.argtypes = [c_uint32, c_void_p]
+if not cg.CGPreflightPostEventAccess():
+    cg.CGRequestPostEventAccess()
+    print("not allowed")
+    sys.exit()
+
+
+class Point(ctypes.Structure):
+    _fields_ = [("x", c_double), ("y", c_double)]
+
+
+make = ctypes.CFUNCTYPE(
+    c_void_p, c_void_p, c_void_p, c_ulong, Point, c_ulong, c_double, c_long,
+    c_void_p, c_short, c_long, c_long,
+)(("objc_msgSend", objc))
+as_cg = ctypes.CFUNCTYPE(c_void_p, c_void_p, c_void_p)(("objc_msgSend", objc))
+NSEvent = objc.objc_getClass(b"NSEvent")
+other = objc.sel_registerName(
+    b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:"
+    b"context:subtype:data1:data2:")
+to_cg = objc.sel_registerName(b"CGEvent")
+key = int(sys.argv[1])
+pool = objc.objc_autoreleasePoolPush()
+said = "pressed"
+# Down, then up (NX_KEYDOWN, NX_KEYUP): a system-defined event (14) of the
+# media keys' kind (8).
+for state in (0xA, 0xB):
+    event = make(NSEvent, other, 14, Point(0, 0), state << 8, 0.0, 0, None,
+                 8, (key << 16) | (state << 8), -1)
+    ref = as_cg(event, to_cg) if event else None
+    if not ref:
+        said = "no key"
+        break
+    cg.CGEventPost(0, ref)
+    time.sleep(0.05)
+objc.objc_autoreleasePoolPop(pool)
+print(said)
+"""
+
+# Windows and Linux both press the keyboard's media keys, which every
+# player listens for: Windows' virtual key codes.
+_WIN_KEYS = {
+    "play_pause": 0xB3, "next_track": 0xB0, "previous_track": 0xB1,
+    "mute": 0xAD, "volume_down": 0xAE, "volume_up": 0xAF,
+}
+_PLAYERCTL = {
+    "play_pause": ["play-pause"], "play": ["play"],
+    "pause": ["--all-players", "pause"], "next_track": ["next"],
+    "previous_track": ["previous"],
+}
+
+
+def _jxa(script: str) -> str:
+    return _run(["osascript", "-l", "JavaScript", "-e", script])
+
+
+def _media(kind: str, action: str) -> str:
+    if kind == "mac":
+        return _mac_media(action)
+    if kind == "windows":
+        if action == "now_playing":
+            raise ComputerError(
+                "Flash cannot see what is playing on Windows yet."
+            )
+        # Windows only has the one key for both: it pauses what plays.
+        _press(_WIN_KEYS.get(action, _WIN_KEYS["play_pause"]))
+        return f"Pressed the {action.replace('_', ' ')} media key."
+    if action == "now_playing":
+        playing = _playerctl(["metadata", "--format",
+                              "{{title}} by {{artist}} ({{status}})"])
+        return f"Playing: {playing}" if playing else "Nothing is playing."
+    _playerctl(_PLAYERCTL[action])
+    return f"Done ({action.replace('_', ' ')})."
+
+
+def _mac_media(action: str) -> str:
+    found = json.loads(_jxa(_MAC_MEDIA % (
+        json.dumps(action), json.dumps(MAC_PLAYERS),
+    )) or "{}")
+    did, told = found.get("did", ""), found.get("told") or []
+    now = _known(found.get("now"))
+    if action == "now_playing":
+        if now is not None:
+            return f"{_state(now).capitalize()}: {_described(now)}."
+        return ("Playing: " + "; ".join(told) + ".") if told else (
+            "Flash cannot see what is playing on this Mac, and neither "
+            "Spotify nor Music is playing anything."
+        )
+    if did == "paused":
+        return "Paused " + " and ".join(told) + "."
+    if did == "already":
+        return "Already playing: " + "; ".join(told) + "."
+    if did == "skipped":
+        return f"Skipped. Now playing {'; '.join(told)}."
+    # Play and pause are one key: one that would only turn it the wrong
+    # way is not pressed.
+    if now is not None and action == "pause" and now["playing"] is False:
+        return f"Nothing to pause: {_described(now)} is already paused."
+    if now is not None and action == "play" and now["playing"] is True:
+        return f"Already playing: {_described(now)}."
+    pressed = _run([sys.executable, "-c", _MAC_KEY, str(MAC_KEYS[action])])
+    if pressed == "not allowed":
+        raise ComputerError(
+            "macOS has to let the app Flash runs in (Terminal, iTerm, VS "
+            "Code and the like) control the computer and press keys before "
+            "Flash can press the media keys. It just asked: turn that app "
+            "on in System Settings > Privacy & Security > Accessibility. "
+            "If it is on already, turn it off and on again, quit and "
+            "reopen that app, then ask again."
+        )
+    if pressed == "no key":
+        raise ComputerError("macOS would not make the media key press.")
+    key = "play/pause" if MAC_KEYS[action] == 16 else (
+        action.replace("_", " ")
+    )
+    return f"Pressed the {key} media key. " + _after(action, now)
+
+
+def _known(now) -> Optional[dict]:
+    """Now Playing as macOS shows it, when it could be read."""
+
+    return now if isinstance(now, dict) and now.get("known") else None
+
+
+def _mac_now() -> Optional[dict]:
+    try:
+        return _known(json.loads(_jxa(_MAC_NOW) or "null"))
+    except (ComputerError, ValueError):
+        return None
+
+
+def _state(now: dict) -> str:
+    states = {True: "playing", False: "paused"}
+    return states.get(now.get("playing"), "showing")
+
+
+def _described(now: dict) -> str:
+    what = now.get("title") or "something"
+    if now.get("artist"):
+        what += f" by {now['artist']}"
+    if now.get("app"):
+        what += f" in {now['app']}"
+    return what
+
+
+def _after(action: str, before: Optional[dict]) -> str:
+    """What Now Playing shows once a pressed key has had time to land,
+    and whether that is what the key was for, so the model can tell the
+    user it worked, or did not."""
+
+    time.sleep(SETTLE)
+    now = _mac_now()
+    if now is None:
+        return (
+            "It goes to whatever played last; Flash cannot see what is "
+            "playing on this Mac to check it worked."
+        )
+    said = f"Now {_state(now)}: {_described(now)}."
+    if action in ("next_track", "previous_track"):
+        if before is not None and before.get("title") == now.get("title"):
+            return said + " That is the same as before, so it may not " \
+                "have skipped."
+        return said
+    wanted = {"play": True, "pause": False}.get(action)
+    if wanted is None and before is not None and before["playing"] is not None:
+        wanted = not before["playing"]
+    if wanted is not None and now["playing"] is not None \
+            and now["playing"] != wanted:
+        return said + " So the key did not do it."
+    return said
+
+
+def _playerctl(args: list[str]) -> str:
+    if not shutil.which("playerctl"):
+        raise ComputerError(
+            "Controlling music on Linux needs playerctl. Install it with "
+            "your package manager (`sudo apt install playerctl`)."
+        )
+    try:
+        return _run(["playerctl", *args])
+    except ComputerError as exc:
+        if "No players found" in str(exc):
+            raise ComputerError("No music or video player is open.") from None
+        raise
+
+
+def _press(key: int, times: int = 1) -> None:
+    """Press a key on Windows, as the keyboard would."""
+
+    import ctypes
+
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    for _ in range(times):
+        user32.keybd_event(key, 0, 0, 0)
+        user32.keybd_event(key, 0, 2, 0)  # KEYEVENTF_KEYUP
+
+
+# --- Volume -----------------------------------------------------------
+
+
+def _level(value: str) -> int:
+    try:
+        level = round(float(value.rstrip("%")))
+    except ValueError:
+        raise ComputerError(
+            "set_volume needs a level from 0 to 100 as its value."
+        ) from None
+    return max(0, min(100, level))
+
+
+def _volume(kind: str, action: str, value: str) -> str:
+    level = _level(value) if action == "set_volume" else 0
+    if kind == "mac":
+        script = {
+            "set_volume": f"set volume output volume {level}",
+            "volume_up": (
+                "set volume output volume ((output volume of (get volume "
+                f"settings)) + {STEP})"
+            ),
+            "volume_down": (
+                "set volume output volume ((output volume of (get volume "
+                f"settings)) - {STEP})"
+            ),
+            "mute": "set volume output muted true",
+            "unmute": "set volume output muted false",
+        }[action]
+        now = _run(["osascript", "-e", script, "-e",
+                    "output volume of (get volume settings)"])
+        return _said_volume(action, now)
+    if kind == "windows":
+        if action == "set_volume":
+            # Each key press moves it 2 points: all the way down, then
+            # up to the level.
+            _press(_WIN_KEYS["volume_down"], 50)
+            _press(_WIN_KEYS["volume_up"], level // 2)
+        elif action in ("mute", "unmute"):
+            # One key for both, as with play and pause.
+            _press(_WIN_KEYS["mute"])
+        else:
+            _press(_WIN_KEYS[action], STEP // 2)
+        return _said_volume(action, str(level) if level else "")
+    return _said_volume(action, _linux_volume(action, level))
+
+
+def _said_volume(action: str, now: str) -> str:
+    if action == "mute":
+        return "Muted."
+    if action == "unmute":
+        return "Unmuted."
+    return f"Volume is at {now}%." if now else "Volume changed."
+
+
+def _linux_volume(action: str, level: int) -> str:
+    """Through whichever sound server is there: PipeWire, PulseAudio, or
+    ALSA. Returns the level when it is known."""
+
+    if shutil.which("wpctl"):
+        sink = "@DEFAULT_AUDIO_SINK@"
+        _run(["wpctl", *{
+            "set_volume": ["set-volume", sink, f"{level / 100:.2f}"],
+            "volume_up": ["set-volume", "-l", "1", sink, f"{STEP}%+"],
+            "volume_down": ["set-volume", sink, f"{STEP}%-"],
+            "mute": ["set-mute", sink, "1"],
+            "unmute": ["set-mute", sink, "0"],
+        }[action]])
+        found = re.search(r"Volume:\s*([\d.]+)",
+                          _run(["wpctl", "get-volume", sink]))
+        return str(round(float(found.group(1)) * 100)) if found else ""
+    if shutil.which("pactl"):
+        sink = "@DEFAULT_SINK@"
+        _run(["pactl", *{
+            "set_volume": ["set-sink-volume", sink, f"{level}%"],
+            "volume_up": ["set-sink-volume", sink, f"+{STEP}%"],
+            "volume_down": ["set-sink-volume", sink, f"-{STEP}%"],
+            "mute": ["set-sink-mute", sink, "1"],
+            "unmute": ["set-sink-mute", sink, "0"],
+        }[action]])
+        found = re.search(r"(\d+)%", _run(["pactl", "get-sink-volume",
+                                          sink]))
+        return found.group(1) if found else ""
+    if shutil.which("amixer"):
+        said = _run(["amixer", "set", "Master", {
+            "set_volume": f"{level}%", "volume_up": f"{STEP}%+",
+            "volume_down": f"{STEP}%-", "mute": "mute", "unmute": "unmute",
+        }[action]])
+        found = re.search(r"\[(\d+)%\]", said)
+        return found.group(1) if found else ""
+    raise ComputerError(
+        "No sound control found: Flash uses wpctl, pactl or amixer."
+    )
+
+
+# --- Apps, links and files --------------------------------------------
+
+
+def _app_name(value: str) -> str:
+    name = value.strip().removesuffix(".app").removesuffix(".exe")
+    if not _APP_NAME.match(name):
+        raise ComputerError(
+            "Name the app the way it is called, like Spotify or Visual "
+            "Studio Code: not a path or a command."
+        )
+    return name
+
+
+def _device_hint(name: str) -> str:
+    """For an app that is on an iPhone or Apple Watch, not the Mac (like
+    Wallet): where to open it instead."""
+
+    from . import xcode
+
+    key = " ".join(name.lower().split()).removesuffix(" app")
+    if key not in xcode.APPS and key not in xcode.WATCH_APPS:
+        return ""
+    if not xcode.available():
+        return (f". {name} is an iPhone and Apple Watch app, not a Mac one. Opening it on "
+                "the user's iPhone or Watch needs Xcode on this Mac (from the App Store), "
+                "with the device paired in it.")
+    return (f". {name} is an iPhone and Apple Watch app, not a Mac one: open it on the "
+            "user's device with the xcode tool, action open_app, app "
+            f"{name}, target the device (\"watch\" for their Apple Watch, "
+            "\"iphone\" for their iPhone).")
+
+
+def _app(kind: str, action: str, name: str) -> str:
+    if kind == "mac":
+        if action == "open_app":
+            try:
+                _run(["open", "-a", name])
+            except ComputerError as exc:
+                raise ComputerError(f"{exc}{_device_hint(name)}") from None
+            return f"Opened {name}."
+        said = _jxa(
+            f"const app = Application({json.dumps(name)});"
+            "app.running() ? (app.quit(), 'quit') : 'not running'"
+        )
+        if said == "not running":
+            return f"{name} was not open."
+        return f"Asked {name} to quit."
+    if kind == "windows":
+        if action == "open_app":
+            # The shell finds it by name, the way Run does; "start"
+            # treats the first quoted argument as a title.
+            _run(["cmd", "/c", "start", "", name])
+            return f"Opened {name}."
+        # Asked to close, as its window's close button does, not killed.
+        _run(["taskkill", "/IM", f"{name}.exe"])
+        return f"Asked {name} to quit."
+    if action == "open_app":
+        found = shutil.which(name) or shutil.which(name.lower())
+        if found:
+            subprocess.Popen(  # nosec B603
+                [found], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+            return f"Opened {name}."
+        if shutil.which("gtk-launch"):
+            _run(["gtk-launch", name.lower()])
+            return f"Opened {name}."
+        raise ComputerError(f"No app called {name} was found.")
+    try:
+        _run(["pkill", "-x", "-i", name])
+    except ComputerError:
+        return f"{name} was not open."
+    return f"Asked {name} to quit."
+
+
+def _open(kind: str, value: str) -> str:
+    target = _openable(value)
+    if kind == "windows":
+        os.startfile(target)  # type: ignore[attr-defined]  # nosec B606
+    else:
+        _run(["open" if kind == "mac" else "xdg-open", target])
+    return f"Opened {target}."
+
+
+def _openable(value: str) -> str:
+    """VALUE, when it is a link or a file or folder to show rather than
+    something that would run."""
+
+    if not value:
+        raise ComputerError("open needs a link, file or folder as its value.")
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in _SCHEMES:
+        return value
+    if parsed.scheme and len(parsed.scheme) > 1:
+        raise ComputerError(
+            f"Only web and mail links open this way, not {parsed.scheme}:."
+        )
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise ComputerError(f"Nothing is at {path}.")
+    path = path.resolve()
+    if path.suffix.lower() in _RUNS or (
+        path.is_file() and os.name != "nt" and os.access(path, os.X_OK)
+    ):
+        raise ComputerError(
+            f"{path.name} would run rather than open, so it was not opened. "
+            "Use open_app for an app."
+        )
+    return str(path)
+
+
+# --- The screen, the clipboard and the look ----------------------------
+
+
+def _lock(kind: str) -> str:
+    if kind == "mac":
+        # Sleeping the display locks a Mac set to ask for its password
+        # straight away, as it is by default.
+        _run(["pmset", "displaysleepnow"])
+        return "The display is asleep, and the Mac locked."
+    if kind == "windows":
+        import ctypes
+
+        ctypes.windll.user32.LockWorkStation()  # type: ignore[attr-defined]
+        return "Locked."
+    for argv in (["loginctl", "lock-session"], ["xdg-screensaver", "lock"]):
+        if shutil.which(argv[0]):
+            _run(argv)
+            return "Locked."
+    raise ComputerError("No way to lock the screen was found.")
+
+
+def _sleep_display(kind: str) -> str:
+    if kind == "mac":
+        _run(["pmset", "displaysleepnow"])
+    elif kind == "windows":
+        import ctypes
+
+        # The monitor's power, off: to every window, without waiting.
+        ctypes.windll.user32.PostMessageW(  # type: ignore[attr-defined]
+            0xFFFF, 0x0112, 0xF170, 2,
+        )
+    elif shutil.which("xset"):
+        _run(["xset", "dpms", "force", "off"])
+    else:
+        raise ComputerError("No way to turn the display off was found.")
+    return "The display is off."
+
+
+def _copy(kind: str, value: str) -> str:
+    if not value:
+        raise ComputerError("copy needs the text as its value.")
+    text = value[:COPY_CHARS]
+    if kind == "mac":
+        _run(["pbcopy"], text)
+    elif kind == "windows":
+        # clip takes UTF-16 with its mark, which keeps every character.
+        try:
+            subprocess.run(  # nosec B603 B607
+                ["clip"], input=("\ufeff" + text).encode("utf-16-le"),
+                timeout=TIMEOUT, check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ComputerError(f"clip could not run: {exc}") from None
+    else:
+        for argv in (["wl-copy"], ["xclip", "-selection", "clipboard"],
+                     ["xsel", "--clipboard", "--input"]):
+            if shutil.which(argv[0]):
+                _run(argv, text)
+                break
+        else:
+            raise ComputerError(
+                "No clipboard tool found: Flash uses wl-copy, xclip or xsel."
+            )
+    return f"Copied {len(text)} characters to the clipboard."
+
+
+def _on(value: str) -> Optional[bool]:
+    said = value.lower()
+    if said in ("on", "dark", "true", "1", "yes"):
+        return True
+    if said in ("off", "light", "false", "0", "no"):
+        return False
+    return None
+
+
+def _dark_mode(kind: str, value: str) -> str:
+    dark = _on(value)
+    if dark is None:
+        raise ComputerError("dark_mode needs on or off as its value.")
+    if kind == "mac":
+        _jxa(
+            "Application('System Events').appearancePreferences.darkMode = "
+            + ("true" if dark else "false")
+        )
+    elif kind == "windows":
+        import winreg  # type: ignore[import-not-found]
+
+        light = 0 if dark else 1
+        with winreg.CreateKey(  # type: ignore[attr-defined]
+            winreg.HKEY_CURRENT_USER,  # type: ignore[attr-defined]
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            for name in ("AppsUseLightTheme", "SystemUsesLightTheme"):
+                winreg.SetValueEx(  # type: ignore[attr-defined]
+                    key, name, 0, winreg.REG_DWORD,  # type: ignore
+                    light,
+                )
+    elif shutil.which("gsettings"):
+        _run(["gsettings", "set", "org.gnome.desktop.interface",
+              "color-scheme", "prefer-dark" if dark else "default"])
+    else:
+        raise ComputerError("No way to switch dark mode was found.")
+    return f"Dark mode is {'on' if dark else 'off'}."
+
+
+# --- Messages ---------------------------------------------------------
+
+# At most this much text in one message.
+MESSAGE_CHARS = 10_000
+# Messages may have to open first, so it gets longer than the rest.
+MESSAGE_TIMEOUT = 30
+# A phone number as people write one, or an email address: either is
+# what iMessage sends to.
+_PHONE = re.compile(r"^\+?[\d\s().-]{6,24}$")
+_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# Everyone in Contacts whose name or nickname has the one asked for in
+# it, any case, with their numbers and addresses, ten at most.
+_CONTACTS_JS = """
+const want = %s;
+const people = Application("Contacts").people.whose({_or: [
+  {name: {_contains: want}}, {nickname: {_contains: want}}]})();
+const all = (list) => list.map((x) => ({label: String(x.label() || ""),
+  value: String(x.value() || "")}));
+JSON.stringify(people.slice(0, 10).map((p) => ({name: p.name(),
+  nickname: String(p.nickname() || ""), phones: all(p.phones()),
+  emails: all(p.emails())})));
+"""
+# Sent from the user's iMessage account in Messages, to the number or
+# address in argv[1], the text in argv[2]: both arguments, never script.
+_SEND = (
+    "on run argv",
+    'tell application "Messages"',
+    "set chosen to 1st account whose service type = iMessage",
+    "send (item 2 of argv) to participant (item 1 of argv) of chosen",
+    "end tell",
+    "end run",
+)
+# A file, by its path: Messages sends it as its own message.
+_SEND_FILE = (
+    "on run argv",
+    'tell application "Messages"',
+    "set chosen to 1st account whose service type = iMessage",
+    "send (POSIX file (item 2 of argv)) to participant (item 1 of argv) "
+    "of chosen",
+    "end tell",
+    "end run",
+)
+
+
+def _is_number(text: str) -> bool:
+    return bool(_PHONE.match(text)) and sum(c.isdigit() for c in text) >= 6
+
+
+def _digits(number: str) -> str:
+    """A phone number as Messages takes it: "+1 (555) 010-2000" is
+    "+15550102000"."""
+
+    return re.sub(r"[^\d+]", "", number)
+
+
+def _label(raw: str) -> str:
+    """A Contacts label as it shows: "_$!<Mobile>!$_" is "Mobile"."""
+
+    return re.sub(r"^_\$!<(.*)>!\$_$", r"\1", raw)
+
+
+def _known_as(person: dict) -> str:
+    """PERSON's name, and their nickname when it is something else:
+    "Samantha Lee (Sam)"."""
+
+    nickname = str(person.get("nickname") or "").strip()
+    if nickname and nickname.lower() not in person["name"].lower():
+        return f"{person['name']} ({nickname})"
+    return person["name"]
+
+
+def _handle(person: dict) -> str:
+    """Where a message to PERSON goes: their mobile or iPhone number,
+    else any number, else an email address. "" when they have none."""
+
+    phones = person.get("phones") or []
+    for phone in phones:
+        if re.search(r"mobile|iphone|cell", _label(phone["label"]), re.I):
+            return phone["value"]
+    if phones:
+        return phones[0]["value"]
+    emails = person.get("emails") or []
+    return emails[0]["value"] if emails else ""
+
+
+def _not_allowed(exc: ComputerError, app: str) -> bool:
+    said = str(exc)
+    return "-1743" in said or "Not authorized" in said or \
+        "not allowed" in said.lower() and app in said
+
+
+def recipient(to: str) -> tuple[str, str]:
+    """Who TO is, for a message: (who to show, the number or address it
+    goes to). A number or address is taken as it is; a name or nickname
+    is looked up in Contacts. Raises ComputerError when it is no one, or
+    more than one person and it cannot tell which."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be sent from a Mac.")
+    to = " ".join(str(to or "").split())
+    if not to:
+        raise ComputerError("Say who the message is to: a name from "
+                            "Contacts, a phone number or an email address.")
+    if _EMAIL.match(to):
+        return to, to
+    if _is_number(to):
+        return to, _digits(to)
+    if len(to) > 80:
+        raise ComputerError("That is not a name, number or address.")
+    try:
+        with _as_found(CONTACTS_APP):
+            found = json.loads(_jxa(_CONTACTS_JS % json.dumps(to)) or "[]")
+    except ComputerError as exc:
+        if _not_allowed(exc, "Contacts"):
+            raise ComputerError(
+                "macOS has to let the app Flash runs in (Terminal, iTerm "
+                "and the like) see Contacts before Flash can find someone "
+                "by name. Turn it on in System Settings > Privacy & "
+                "Security > Contacts, or give a phone number instead."
+            ) from None
+        raise
+    except ValueError:
+        found = []
+    if not found:
+        raise ComputerError(f"No one called {to} is in Contacts. Ask the "
+                            "user for their number.")
+    # The whole name, or the whole nickname, settles it among several.
+    exact = [p for p in found
+             if to.lower() in (p["name"].lower(),
+                               str(p.get("nickname") or "").lower())]
+    if len(found) > 1 and len(exact) == 1:
+        found = exact
+    if len(found) > 1:
+        raise ComputerError(
+            f"More than one person in Contacts is called {to}: "
+            + ", ".join(_known_as(p) for p in found)
+            + ". Ask the user which one."
+        )
+    person = found[0]
+    handle = _handle(person)
+    if not handle:
+        raise ComputerError(f"{person['name']} has no phone number or "
+                            "email address in Contacts.")
+    return _known_as(person), \
+        _digits(handle) if _is_number(handle) else handle
+
+
+def send_imessage(handle: str, text: str, attachment: str = "") -> str:
+    """Send TEXT to HANDLE, a number or address, as an iMessage from the
+    user's account in Messages, then ATTACHMENT, a file's full path, if
+    given. Raises ComputerError when it could not."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be sent from a Mac.")
+    text = str(text or "").strip()
+    attachment = str(attachment or "").strip()
+    if not text and not attachment:
+        raise ComputerError("The message has nothing in it.")
+    if len(text) > MESSAGE_CHARS:
+        raise ComputerError(f"A message can be at most {MESSAGE_CHARS} "
+                            "characters.")
+    if attachment and not Path(attachment).is_file():
+        raise ComputerError(f"{attachment} is not a file.")
+    sends = ([(_SEND, text)] if text else []) + (
+        [(_SEND_FILE, attachment)] if attachment else [])
+    try:
+        for script, what in sends:
+            argv = ["osascript"]
+            for line in script:
+                argv += ["-e", line]
+            _run([*argv, handle, what], timeout=MESSAGE_TIMEOUT)
+    except ComputerError as exc:
+        said = str(exc)
+        if _not_allowed(exc, "Messages"):
+            raise ComputerError(
+                "macOS has to let the app Flash runs in (Terminal, iTerm "
+                "and the like) control Messages. Turn it on in System "
+                "Settings > Privacy & Security > Automation, then ask "
+                "again."
+            ) from None
+        if "account" in said.lower():
+            raise ComputerError(
+                "Messages is not signed in to iMessage on this Mac. Open "
+                "Messages and sign in with the Apple Account, then ask "
+                "again."
+            ) from None
+        raise
+    return f"Sent to {handle}."
+
+
+# Where Messages keeps every message, and the address book's own files:
+# only readable once macOS gives the app Flash runs in Full Disk Access.
+MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
+ADDRESS_BOOK = Path.home() / "Library" / "Application Support" / "AddressBook"
+READ_LIMIT = 30
+MOST_READ = 200
+# Messages counts time from the start of 2001, in nanoseconds (seconds,
+# before macOS 10.13).
+_APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+_RECENT = """
+SELECT m.ROWID, m.date, m.is_from_me, m.is_read, m.text, m.attributedBody,
+       m.cache_has_attachments, h.id, c.display_name, c.chat_identifier,
+       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID),
+       {app}, {payload}
+FROM message m
+LEFT JOIN handle h ON h.ROWID = m.handle_id
+LEFT JOIN chat_message_join cm ON cm.message_id = m.ROWID
+LEFT JOIN chat c ON c.ROWID = cm.chat_id
+WHERE m.item_type = 0 {where}
+ORDER BY m.date DESC
+LIMIT ?
+"""
+_FULL_DISK = (
+    "macOS keeps messages private until the app Flash runs in (Terminal, "
+    "iTerm and the like) has Full Disk Access. Turn it on in System "
+    "Settings > Privacy & Security > Full Disk Access, quit and reopen "
+    "that app, then ask again."
+)
+
+
+def _app_message(app, payload, mine: bool) -> str:
+    """What a message made by an app inside Messages says, when its own
+    words are only a placeholder: Apple Cash (an amount sent or asked
+    for). Empty for any other app's."""
+
+    if not app or "PeerPayment" not in str(app):
+        return ""
+    data = bytes(payload or b"")
+    amount = re.search(rb"\$\s?\d[\d,]*(?:\.\d\d)?", data)
+    money = amount.group(0).decode("ascii", "ignore").replace(" ", "") \
+        if amount else ""
+    asked = b"request" in data.lower()
+    if mine:
+        return (f"You asked for {money} with Apple Cash" if asked else
+                f"You sent {money} with Apple Cash").replace("  ", " ")
+    return (f"Asked you for {money} with Apple Cash" if asked else
+            f"Sent you {money} with Apple Cash").replace("  ", " ")
+
+
+def _recent(db, where: str, limit: int) -> list:
+    """The newest messages matching WHERE. An app's messages (Apple Cash)
+    say what they are in columns an older Messages database may not
+    have: those come back as None there."""
+
+    have = {r[1] for r in db.execute("PRAGMA table_info(message)")}
+    app = "m.balloon_bundle_id" if "balloon_bundle_id" in have else "NULL"
+    payload = "m.payload_data" if "payload_data" in have else "NULL"
+    return db.execute(_RECENT.format(where=where, app=app, payload=payload),  # nosec B608
+                      (limit,)).fetchall()
+
+
+def _words(text, body, app, payload, mine: bool) -> str:
+    """A message's words as shown: an app's (Apple Cash) said plainly."""
+
+    words = _readable((text or _body_text(body)).replace("\ufffc", "")).strip()
+    made = _app_message(app, payload, mine)
+    if made:
+        words = made + (f": {words}" if words and "$" not in words
+                        and not words.startswith("Apple Cash") else "")
+    return words
+
+
+def _readable(words: str) -> str:
+    """Characters only Apple's fonts draw, made plain: its logo (as in
+    " Cash") becomes "Apple", and a character that could not be read
+    (shown as a question mark in a diamond) is dropped."""
+
+    return words.replace("\uf8ff", "Apple").replace("\ufffd", "")
+
+
+def _when(stamp) -> Optional[datetime]:
+    try:
+        stamp = int(stamp or 0)
+    except (TypeError, ValueError):
+        return None
+    if not stamp:
+        return None
+    seconds = stamp / 1e9 if stamp > 10**11 else stamp
+    # Stored in UTC; shown in this computer's time.
+    return (_APPLE_EPOCH + timedelta(seconds=seconds)).astimezone()
+
+
+def _body_text(blob) -> str:
+    """The words in a message macOS kept only as styled text (an
+    archived NSAttributedString), as it does for most since Ventura."""
+
+    if not blob:
+        return ""
+    data = bytes(blob)
+    at = data.find(b"NSString")
+    if at < 0:
+        return ""
+    data = data[at + len(b"NSString"):]
+    plus = data.find(b"+")
+    if plus < 0 or plus > 8:
+        return ""
+    data = data[plus + 1:]
+    if not data:
+        return ""
+    # The length: one byte, or a marker and two or four little-endian.
+    size, start = data[0], 1
+    if size == 0x81:
+        size, start = int.from_bytes(data[1:3], "little"), 3
+    elif size == 0x82:
+        size, start = int.from_bytes(data[1:5], "little"), 5
+    return data[start:start + size].decode("utf-8", "replace")
+
+
+def _key(handle: str) -> str:
+    """HANDLE as it is matched against Contacts: an address in lower
+    case, a number by its last ten digits."""
+
+    handle = str(handle or "").strip().lower()
+    if "@" in handle:
+        return handle
+    digits = re.sub(r"\D", "", handle)
+    return digits[-10:]
+
+
+def _address_book() -> dict[str, str]:
+    """Every number and address in Contacts, by _key, to who it is.
+    Empty when they cannot be read."""
+
+    names: dict[str, str] = {}
+    for db in sorted(ADDRESS_BOOK.glob("**/AddressBook-v22.abcddb")):
+        try:
+            with contextlib.closing(sqlite3.connect(
+                    f"file:{db}?mode=ro", uri=True, timeout=2)) as book:
+                for table, column in (("ZABCDPHONENUMBER", "ZFULLNUMBER"),
+                                      ("ZABCDEMAILADDRESS", "ZADDRESS")):
+                    rows = book.execute(
+                        "SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZNICKNAME, "
+                        f"r.ZORGANIZATION, t.{column} FROM {table} t "  # nosec
+                        "JOIN ZABCDRECORD r ON r.Z_PK = t.ZOWNER"
+                    ).fetchall()
+                    for first, last, nickname, company, value in rows:
+                        name = " ".join(x for x in (first, last) if x) \
+                            or nickname or company
+                        if name and value and _key(value):
+                            names.setdefault(_key(value), name)
+        except sqlite3.Error:
+            continue
+    return names
+
+
+_ATTACHMENTS = """
+SELECT j.message_id, a.filename, a.mime_type, a.transfer_name
+FROM message_attachment_join j
+JOIN attachment a ON a.ROWID = j.attachment_id
+WHERE j.message_id IN ({marks})
+"""
+
+
+def _attachments(db, ids: list) -> dict[int, list[str]]:
+    """The files sent with each message in IDS, by its ROWID: each its
+    name, kind and where it is on this Mac. Empty when they cannot be
+    read (an older Messages, say)."""
+
+    out: dict[int, list[str]] = {}
+    if not ids:
+        return out
+    try:
+        rows = db.execute(_ATTACHMENTS.format(  # nosec B608 (marks only)
+            marks=",".join("?" * len(ids))), ids).fetchall()
+    except sqlite3.Error:
+        return out
+    for message, filename, mime, name in rows:
+        path = str(filename or "")
+        if path.startswith("~"):
+            path = str(Path(path).expanduser())
+        shown = name or (Path(path).name if path else "a file")
+        if mime:
+            shown += f" ({mime})"
+        if path:
+            shown += f" at {path}"
+        out.setdefault(message, []).append(shown)
+    return out
+
+
+def read_imessages(with_: str = "", limit=READ_LIMIT,
+                   unread_only: bool = False) -> str:
+    """The user's newest iMessages and texts, newest first: everyone's,
+    or only those with WITH_ (a name or nickname from Contacts, a number
+    or an address). Raises ComputerError when they cannot be read."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be read on a Mac.")
+    try:
+        limit = max(1, min(int(limit or READ_LIMIT), MOST_READ))
+    except (TypeError, ValueError):
+        limit = READ_LIMIT
+    names = _address_book()
+    keys: set[str] = set()
+    who = " ".join(str(with_ or "").split())
+    if who:
+        shown, handle = recipient(who)
+        keys = {_key(handle)}
+        # Everyone's other numbers and addresses count too.
+        keys |= {k for k, n in names.items() if n == shown.split(" (")[0]}
+    if not MESSAGES_DB.exists():
+        raise ComputerError("There is no Messages history on this Mac.")
+    where = "AND m.is_read = 0 AND m.is_from_me = 0" if unread_only else ""
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            # Filtered here rather than in SQL: a number is matched by
+            # its digits, however it was written.
+            rows = _recent(db, where, limit * 20 if keys else limit)
+            files = _attachments(db, [r[0] for r in rows if r[6]])
+    except sqlite3.Error as exc:
+        if "unable to open" in str(exc) or "authoriz" in str(exc):
+            raise ComputerError(_FULL_DISK) from None
+        raise ComputerError(f"Messages could not be read: {exc}") from None
+
+    lines = []
+    for (rowid, date, mine, read, text, body, attached, handle, group,
+         chat, people, app, payload) in rows:
+        if keys and _key(handle or chat or "") not in keys:
+            continue
+        words = _words(text, body, app, payload, bool(mine))
+        if attached:
+            sent = files.get(rowid)
+            tag = ("[attachment: " + "; ".join(sent) + "]") if sent \
+                else "[attachment]"
+            words = (words + " " + tag).strip()
+        if not words:
+            continue
+        sender = "You" if mine else names.get(_key(handle), handle or "?")
+        place = ""
+        if people and people > 1:
+            place = f" in {group or 'a group chat'}"
+        elif mine:
+            other = names.get(_key(chat or ""), chat or "")
+            place = f" to {other}" if other else ""
+        moment = _when(date)
+        stamp = moment.strftime("%a %b %d, %H:%M") if moment else "?"
+        new = "" if mine or read else " (unread)"
+        lines.append(f"{stamp} · {sender}{place}{new}: {words}")
+        if len(lines) >= limit:
+            break
+    if not lines:
+        return ("No unread messages." if unread_only else
+                f"No messages with {who}." if who else "No messages.")
+    return (f"{len(lines)} message{'s' if len(lines) != 1 else ''}, newest "
+            "first:\n" + "\n".join(lines))
+
+
+# Each conversation with something unread in it: who it is with, its
+# name (a group's), how many are in it, and how many are unread.
+_UNREAD_CHATS = """
+SELECT c.chat_identifier, c.display_name,
+       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID),
+       COUNT(*)
+FROM message m
+JOIN chat_message_join cm ON cm.message_id = m.ROWID
+JOIN chat c ON c.ROWID = cm.chat_id
+WHERE m.item_type = 0 AND m.is_from_me = 0 AND m.is_read = 0
+GROUP BY c.ROWID
+ORDER BY MAX(m.date) DESC
+"""
+# How long Messages shows each chat, for it to count as read, and how
+# many it opens at most in one go.
+MARK_PAUSE = 1.5
+MOST_MARKED = 12
+
+
+def _unread_chats() -> list[tuple[str, str, int, int]]:
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            return [(str(ident or ""), str(name or ""), int(people or 0),
+                     int(count or 0))
+                    for ident, name, people, count
+                    in db.execute(_UNREAD_CHATS).fetchall()]
+    except sqlite3.Error as exc:
+        if "unable to open" in str(exc) or "authoriz" in str(exc):
+            raise ComputerError(_FULL_DISK) from None
+        raise ComputerError(f"Messages could not be read: {exc}") from None
+
+
+MESSAGES_APP = "com.apple.MobileSMS"
+CONTACTS_APP = "com.apple.AddressBook"
+
+
+def _running(bundle: str) -> bool:
+    """Whether the app BUNDLE (its bundle id) is open."""
+
+    try:
+        said = _run(["osascript", "-e",
+                     f'application id "{bundle}" is running'])
+        return said.strip() == "true"
+    except ComputerError:
+        return False
+
+
+def _quit(bundle: str) -> None:
+    _run(["osascript", "-e", f'tell application id "{bundle}" to quit'])
+
+
+def _hide(bundle: str) -> None:
+    _run(["osascript", "-e",
+          'tell application "System Events" to set visible of (first '
+          f'process whose bundle identifier is "{bundle}") to false'])
+
+
+@contextlib.contextmanager
+def _as_found(bundle: str):
+    """Asking app BUNDLE something opens it: closed again afterwards
+    when it was not open before, so nothing is left on screen that the
+    user did not open."""
+
+    was = _running(bundle)
+    try:
+        yield
+    finally:
+        if not was and _running(bundle):
+            with contextlib.suppress(ComputerError):
+                _quit(bundle)
+
+
+def _front_app() -> str:
+    """The bundle id of the app in front, to come back to; "" if it
+    cannot be told."""
+
+    try:
+        front = _run(["lsappinfo", "front"])
+        said = _run(["lsappinfo", "info", "-only", "bundleid", front])
+    except ComputerError:
+        return ""
+    found = re.search(r'"CFBundleIdentifier"="([^"]+)"', said)
+    return found.group(1) if found else ""
+
+
+def mark_imessages_read(with_: str = "") -> str:
+    """Mark the user's unread iMessages read: everyone's, or only those
+    with WITH_. Messages has no command for it, and its history is not
+    Flash's to write, so Messages is shown each conversation for a
+    moment, as the user would open it, and the app that was in front
+    comes back. Group chats cannot be opened that way, so are left."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be marked read on a Mac.")
+    if not MESSAGES_DB.exists():
+        raise ComputerError("There is no Messages history on this Mac.")
+    names = _address_book()
+    who = " ".join(str(with_ or "").split())
+    keys: set[str] = set()
+    if who:
+        shown, handle = recipient(who)
+        keys = {_key(handle)}
+        keys |= {k for k, n in names.items() if n == shown.split(" (")[0]}
+    unread = _unread_chats()
+    singles = [(ident, count) for ident, _, people, count in unread
+               if people <= 1 and (not keys or _key(ident) in keys)]
+    groups = [(name or "a group chat", count)
+              for _, name, people, count in unread
+              if people > 1 and not keys]
+    if not singles and not groups:
+        return f"Nothing from {who} is unread." if who \
+            else "No unread messages."
+
+    def named(ident: str) -> str:
+        return names.get(_key(ident), ident)
+
+    def shown(idents: list[str], behind: bool) -> None:
+        for ident in idents:
+            _run(["open", *(["-g"] if behind else []),
+                  f"imessage://{quote(ident, safe='+@.')}"])
+            time.sleep(MARK_PAUSE)
+
+    opened = singles[:MOST_MARKED]
+    if opened:
+        back = _front_app()
+        running = _running(MESSAGES_APP)
+        # Behind whatever the user is looking at first, the briefing say:
+        # Messages clears a conversation it shows even from there.
+        shown([ident for ident, _ in opened], behind=True)
+        unread = {i for i, _, people, _ in _unread_chats() if people <= 1}
+        again = [ident for ident, _ in opened if ident in unread]
+        if again:
+            # Some it only clears in front: those, for a moment.
+            shown(again, behind=False)
+        # Messages as it was: closed again when Flash opened it, out of
+        # the way when it was open already; then what was in front.
+        with contextlib.suppress(ComputerError):
+            if not running:
+                _quit(MESSAGES_APP)
+            elif again and back != MESSAGES_APP:
+                _hide(MESSAGES_APP)
+            if again and back and back != MESSAGES_APP:
+                _run(["open", "-b", back])
+    left = {ident for ident, _, people, _ in _unread_chats() if people <= 1}
+    done = [f"{named(i)} ({n})" for i, n in opened if i not in left]
+    stuck = [named(i) for i, _ in opened if i in left]
+    said = []
+    if done:
+        said.append("Marked read: " + ", ".join(done) + ".")
+    if stuck:
+        said.append(
+            "Still unread: " + ", ".join(stuck) + ". Messages may not have "
+            "shown them long enough, or was in another Space; opening "
+            "them in Messages clears them."
+        )
+    if len(singles) > MOST_MARKED:
+        said.append(f"{len(singles) - MOST_MARKED} more conversations are "
+                    "unread: ask again for the rest.")
+    if groups:
+        said.append(
+            "Group chats are left as they are, as Messages cannot be told "
+            "to open one: " + ", ".join(f"{g} ({n})" for g, n in groups)
+            + "."
+        )
+    return " ".join(said)
+
+
+def newest_imessage() -> int:
+    """The newest message's number in Messages, to tell new ones by: 0
+    when there are none, or they cannot be read."""
+
+    if system() != "mac" or not MESSAGES_DB.exists():
+        return 0
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            found = db.execute("SELECT MAX(ROWID) FROM message").fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(found[0] or 0) if found else 0
+
+
+def imessages_after(number: int, most: int = 20) -> list[str]:
+    """The messages that came in after message NUMBER, oldest first, a
+    line each as read_imessages shows them: none of the user's own."""
+
+    if system() != "mac" or not MESSAGES_DB.exists():
+        return []
+    names = _address_book()
+    where = f"AND m.ROWID > {int(number)} AND m.is_from_me = 0"
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            rows = _recent(db, where, most)
+    except sqlite3.Error:
+        return []
+    lines = []
+    for (_, date, _, _, text, body, attached, handle, group, _,
+         people, app, payload) in reversed(rows):
+        words = _words(text, body, app, payload, False)
+        if attached:
+            words = (words + " [attachment]").strip()
+        if not words:
+            continue
+        sender = names.get(_key(handle), handle or "?")
+        place = f" in {group or 'a group chat'}" if people and people > 1 \
+            else ""
+        moment = _when(date)
+        stamp = moment.strftime("%a %b %d, %H:%M") if moment else "?"
+        lines.append(f"{stamp} · {sender}{place}: {words}")
+    return lines

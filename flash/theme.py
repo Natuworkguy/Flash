@@ -1,4 +1,4 @@
-"""Shared terminal theme for Flash CLI, styled after Claude Code's CLI.
+"""Shared terminal theme for Flash CLI.
 
 Centralizes the color palette and the "tool call" line format (a bulleted
 header line followed by an indented result) so ai.py and tools.py render
@@ -10,13 +10,21 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Optional
+from typing import Any, Optional
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
 from rich.control import Control
+from rich.live import Live as _RichLive
 from rich.markdown import Markdown
+from rich.cells import cell_len
 from rich.text import Text
+
+from . import progress
+from .loaders import BUILTIN as BUILTIN_LOADERS
+from .loaders import Loader
+from .loaders import chosen as chosen_loader
+from .loaders import find as find_loader
 
 ACCENT = "#d97757"
 DIM = "grey62"
@@ -24,6 +32,87 @@ ERROR = "#e5484d"
 WARN = "#d9a63f"
 DIFF_ADD = "#3fb950"
 DIFF_DEL = "#e5484d"
+
+
+# The dock: the input box and status bar, kept at the foot of the screen
+# while a turn runs (repl_input.Dock). Output reaches the screen above it
+# through prompt_toolkit, which draws the dock again underneath, but a
+# question read with input(), or a Live redrawing its rows in place,
+# needs the terminal to itself: those step the dock aside while they
+# run, and it comes back, typing and all, when they are done.
+_dock = None
+
+
+def set_dock(dock) -> None:
+    global _dock
+    _dock = dock
+
+
+def dock_active() -> bool:
+    return _dock is not None
+
+
+def current_dock():
+    return _dock
+
+
+@contextmanager
+def screen_to_itself() -> Iterator[None]:
+    """The terminal without the dock, for as long as this runs."""
+
+    dock = _dock
+    if dock is None:
+        yield
+        return
+    dock.pause()
+    try:
+        yield
+    finally:
+        dock.resume()
+
+
+class Live(_RichLive):
+    """A Live that steps the dock aside while it runs."""
+
+    _holding = False
+
+    def start(self, refresh: bool = False) -> None:
+        if _dock is not None and not self._holding:
+            self._holding = True
+            _dock.pause()
+        super().start(refresh)
+
+    def stop(self) -> None:
+        try:
+            super().stop()
+        finally:
+            if self._holding:
+                self._holding = False
+                if _dock is not None:
+                    _dock.resume()
+
+
+class _HeldStatus:
+    """console.status(), with the dock stepped aside while it shows."""
+
+    def __init__(self, status) -> None:
+        self._status = status
+        self._held = None
+
+    def __enter__(self):
+        self._held = screen_to_itself()
+        self._held.__enter__()
+        self._status.__enter__()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self._status.__exit__(*exc)
+        finally:
+            self._held.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._status, name)
 
 
 class ScreenConsole(Console):
@@ -55,7 +144,21 @@ class ScreenConsole(Console):
         finally:
             self._not_keeping -= 1
 
+    def status(self, *args, **kwargs):
+        return _HeldStatus(super().status(*args, **kwargs))
+
+    # Whether a question has stepped the dock aside, for typed() to
+    # bring it back once the answer is in.
+    asking = False
+
     def print(self, *objects, **kwargs) -> None:
+        # Printed with no line end, under the dock, it is a question:
+        # the answer goes on the same line, typed into the terminal, so
+        # the dock steps aside first.
+        if (_dock is not None and kwargs.get("end") == ""
+                and not self.asking):
+            self.asking = True
+            _dock.pause()
         if not (objects and all(isinstance(o, Control) for o in objects)):
             self.keep(("print", objects, kwargs))
         super().print(*objects, **kwargs)
@@ -147,6 +250,16 @@ class ScreenConsole(Console):
 console = ScreenConsole()
 
 
+def loader_frame(elapsed: float, loader: "Optional[Loader]" = None) -> str:
+    """The loader's frame ELAPSED seconds in: LOADER's, or the one the
+    LOADER setting picks, in its own glyphs where the terminal can show
+    them and in ASCII where it cannot."""
+
+    if loader is None:
+        loader = find_loader(chosen_loader()) or BUILTIN_LOADERS[0]
+    return loader.frame(elapsed, can_encode("".join(loader.frames)))
+
+
 def can_encode(text: str) -> bool:
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     try:
@@ -210,7 +323,9 @@ def ansi(colour: str) -> str:
     return f"\033[38;2;{red};{green};{blue}m"
 
 
-ToolSink = Callable[[str, str, str], None]
+# What a sink answers: whether it took the output, for most kinds; for
+# a question ("debate-poll"), its answer.
+ToolSink = Callable[[str, str, str], Any]
 
 _capture = threading.local()
 
@@ -224,11 +339,14 @@ def capture_tool_output(sink: ToolSink) -> Iterator[None]:
     land in the middle of whatever the main loop is drawing.
     """
 
+    # Nested, as a spark asked something mid-shift is, the outer one
+    # gets its sink back when the inner one is done.
+    before = getattr(_capture, "sink", None)
     _capture.sink = sink
     try:
         yield
     finally:
-        _capture.sink = None
+        _capture.sink = before
 
 
 def _sink() -> Optional[ToolSink]:
@@ -248,22 +366,41 @@ def answer_from(answerer: Answerer) -> Iterator[None]:
     going to make.
     """
 
+    before = getattr(_capture, "answerer", None)
     _capture.answerer = answerer
     try:
         yield
     finally:
-        _capture.answerer = None
+        _capture.answerer = before
 
 
 def remote_answer(question: str) -> Optional[str]:
-    """The answer from this thread's answerer, or None to ask here."""
+    """The answer from this thread's answerer, or None to ask here.
+    Asked from the terminal and the web alike, it is where a turn is
+    known to be waiting on the user."""
 
+    progress.ask(question)
     answerer = getattr(_capture, "answerer", None)
 
     if answerer is None:
         return None
 
-    return (answerer(question) or "").strip().lower()
+    said, _, why = (answerer(question) or "").strip().partition("\n")
+    _capture.why = why.strip()
+    return said.strip().lower()
+
+
+def set_denial_why(why: str) -> None:
+    _capture.why = why
+
+
+def denial_why() -> str:
+    """Why the user said no to the last question on this thread, if they
+    said: once, then it is gone."""
+
+    why = getattr(_capture, "why", "") or ""
+    _capture.why = ""
+    return why
 
 
 # Past this many lines a tool's output is cut down on screen, since a
@@ -288,6 +425,7 @@ def clear_collapsed() -> None:
     """Forget the cut outputs, once a new turn starts making its own."""
 
     _collapsed.clear()
+    forget_expanded()
 
 
 def tool_line(label: str) -> None:
@@ -329,6 +467,24 @@ def tool_file(path: str) -> bool:
     return True
 
 
+def drawn_elsewhere() -> bool:
+    """Whether this thread's tool output goes to a page, not here."""
+
+    return _sink() is not None
+
+
+def tool_audio(path: str, play: bool = False) -> bool:
+    """Hand a sound file to whoever is drawing, to play in the chat:
+    PLAY starts it as it arrives, as a reading asked for does. False in
+    the terminal, which plays it its own way."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("audio", json.dumps({"path": path, "play": bool(play)}), "")
+    return True
+
+
 def tool_browser(
     path: str, *, run: str, url: str, title: str = "", note: str = "",
 ) -> bool:
@@ -363,6 +519,105 @@ def tool_document(path: str, comments: list[dict]) -> bool:
     return True
 
 
+def tool_debate(event: dict) -> bool:
+    """Hand a debate the agent started (the debate tool) to whoever is
+    drawing it, a piece at a time: True when something took it, as the
+    web UI does; the terminal shows the summary once it is in."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("debate", json.dumps(event), "")
+    return True
+
+
+def tool_call(event: dict) -> bool:
+    """Hand one turn of a phone call Flash is on (or its start or end) to
+    whoever is drawing it, as it happens: True when something took it, as
+    the web UI does; the terminal prints the turn instead."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    return bool(sink("call", json.dumps(event), ""))
+
+
+def tool_music(event: dict) -> Optional[str]:
+    """Hand music to the page's player (play_music): what it did, in
+    words, or None where there is no page to play it (the terminal)."""
+
+    sink = _sink()
+    said = sink("music", json.dumps(event), "") if sink else None
+    return said if isinstance(said, str) else None
+
+
+def tool_course(subject: str) -> bool:
+    """Show SUBJECT's course on the page, in the chat this turn is in
+    (tutor): False where there is no page (the terminal)."""
+
+    sink = _sink()
+    return bool(sink("course", json.dumps({"subject": subject}), "")) \
+        if sink else False
+
+
+def tool_chess(lesson: dict) -> bool:
+    """Show a chess LESSON (chess.build_lesson) on the page, as a board
+    the user steps through: False where there is no page (the
+    terminal)."""
+
+    sink = _sink()
+    return bool(sink("chess", json.dumps(lesson), "")) if sink else False
+
+
+def tool_canvas(state: dict) -> bool:
+    """Show the agent's canvas, as it is now (STATE: id, title, format,
+    content), in the panel beside the chat, live: False where there is
+    no page (the terminal)."""
+
+    sink = _sink()
+    return bool(sink("canvas", json.dumps(state), "")) if sink else False
+
+
+def tool_canvas_op(asked: dict) -> Any:
+    """Patch, run code in, read or look at a live canvas (ASKED: id, op,
+    and what the op needs), through the page showing it: the page's
+    answer as a dict, or None where there is no page (the terminal)."""
+
+    sink = _sink()
+    return sink("canvas-op", json.dumps(asked), "") if sink else None
+
+
+def tool_chess_move(game: str, move: str) -> Optional[dict]:
+    """Flash's MOVE in the chess GAME on the page (play_chess): the game
+    after it, {"error": ...} when the page refused it, or None where
+    there is no page (the terminal)."""
+
+    sink = _sink()
+    said = sink("chess-move", json.dumps({"id": game, "move": move}), "") \
+        if sink else None
+    return said if isinstance(said, dict) else None
+
+
+def tool_project(event: dict) -> Optional[dict]:
+    """Make the chat this turn is in a project (make_project): what the
+    page made of it, or None where there is no chat to move (the
+    terminal)."""
+
+    sink = _sink()
+    said = sink("project", json.dumps(event), "") if sink else None
+    return said if isinstance(said, dict) else None
+
+
+def tool_debate_poll(debate_id: str, take: bool = False) -> dict:
+    """Whether the user has stopped debate DEBATE_ID (or the turn), and,
+    with TAKE, what they have said to steer it since last asked."""
+
+    sink = _sink()
+    said = sink("debate-poll", json.dumps({"id": debate_id, "take": take}),
+                "") if sink else None
+    return said if isinstance(said, dict) else {}
+
+
 def tool_plan(steps: list[dict]) -> bool:
     """Hand the plan's checklist to whoever is drawing, as its steps.
 
@@ -378,9 +633,54 @@ def tool_plan(steps: list[dict]) -> bool:
     return True
 
 
+def tool_notify(title: str, message: str) -> bool:
+    """Hand a notification for the user to whoever is drawing.
+
+    True when it was shown there: the web UI, which pops it up in the
+    page and, with the tab out of sight, as the browser's own. False
+    when nothing took it, and the desktop is the place for it.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    return bool(sink("notify", json.dumps({
+        "title": title, "message": message,
+    }), ""))
+
+
+def tool_say(text: str) -> None:
+    """Show the user a line in the chat now, in the middle of a turn, not
+    folded into a tool's output: a link they need before the reply comes,
+    say. Markdown, so a link can be clicked."""
+
+    sink = _sink()
+    if sink:
+        sink("say", text, "")
+        return
+    line = Text()
+    line.append(f"{BULLET} ", style=ACCENT)
+    line.append(text)
+    console.print(line)
+
+
+def _scrub(text: str) -> str:
+    """TEXT with any secret's value hidden behind its name (vault.py)."""
+
+    try:
+        from .vault import scrub
+
+        return scrub(text)
+    except Exception:  # noqa: BLE001  (no vault, nothing to hide)
+        return text
+
+
 def tool_result(text: str, *, style: str = DIM) -> None:
     """Print an indented result block under the most recent tool_line()."""
 
+    # A secret's value never reaches the screen or a saved chat.
+    if text:
+        text = _scrub(text)
     sink = _sink()
     if sink:
         sink("result", text or "", style)
@@ -413,22 +713,59 @@ def tool_result(text: str, *, style: str = DIM) -> None:
         console.print(Text(f"     {line}", style=style))
 
 
-def expand_collapsed() -> None:
-    """Print, whole, every tool output this turn cut short."""
+# Rows the last Ctrl+O printed, while nothing has been printed since: a
+# second Ctrl+O takes them off the screen again. 0 when there is nothing
+# to take back.
+_expanded_rows = 0
 
+
+def forget_expanded() -> None:
+    """Something else was printed (a message, a turn): Ctrl+O's block is
+    no longer the last thing on screen, so it is no longer taken back."""
+
+    global _expanded_rows
+    _expanded_rows = 0
+
+
+def _rows(text: str) -> int:
+    width = max(20, console.width or 80)
+    return max(1, -(-cell_len(text) // width))
+
+
+def expand_collapsed() -> None:
+    """Ctrl+O: print, whole, every tool output this turn cut short; pressed
+    again, take that back off the screen, leaving them cut short."""
+
+    global _expanded_rows
+    if _expanded_rows:
+        rows, _expanded_rows = _expanded_rows, 0
+        height = getattr(console, "height", 0) or 0
+        if console.is_terminal and rows < max(1, height - 2):
+            # Up to where the block began, and clear from there down.
+            console.file.write(f"\x1b[{rows}F\x1b[J")
+            console.file.flush()
+        else:
+            dim("Cut short again (the full output has scrolled out of reach).")
+        return
     if not _collapsed:
         dim("No tool output was cut short this turn.")
         return
 
+    rows = 0
     for label, text in _collapsed:
         head = Text()
         head.append(f"{BULLET} ", style=ACCENT)
         head.append(label or "Tool output")
         console.print(head)
+        rows += _rows(head.plain)
 
         for index, line in enumerate(text.splitlines()):
             lead = f"  {BRANCH}  " if index == 0 else "     "
             console.print(Text(lead + line, style=DIM))
+            rows += _rows(lead + line)
+    hint = Text("  Ctrl+O again to cut it short.", style=DIM)
+    console.print(hint)
+    _expanded_rows = rows + 1
 
 
 def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:
@@ -468,21 +805,141 @@ def typed() -> str:
     answer.
     """
 
-    answer = input()
+    try:
+        with screen_to_itself():
+            answer = input()
+    finally:
+        if console.asking:
+            console.asking = False
+            if _dock is not None:
+                _dock.resume()
     console.keep(answer + "\n")
     return answer.strip().lower()
 
 
+def mouse_on() -> bool:
+    """Whether to take clicks: where the terminal is a real one that
+    reports them (nearly all do: VS Code's, iTerm, Terminal, Windows
+    Terminal), unless MOUSE=0 says not."""
+
+    import os
+
+    said = os.environ.get("MOUSE", "1").strip().lower()
+    if said in ("0", "off", "no", "false"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    return sys.stdin.isatty() and console.is_terminal
+
+
+def yes_no() -> str:
+    """The answer to a yes-or-no question just printed: "y" or "n". Two
+    buttons under it take a click, and y, n, Enter, the arrows and Esc
+    work too. Without a terminal to draw them on, a typed line, as
+    typed() reads it."""
+
+    if not mouse_on():
+        return typed()
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    picked = {"at": 0}
+
+    def choose(answer: str):
+        def handler(event) -> None:
+            if event.event_type == MouseEventType.MOUSE_UP:
+                app.exit(result=answer)
+            elif event.event_type == MouseEventType.MOUSE_MOVE:
+                picked["at"] = 0 if answer == "y" else 1
+        return handler
+
+    def render() -> StyleAndTextTuples:
+        out: StyleAndTextTuples = [("", "     ")]
+        for n, (answer, label) in enumerate((("y", " Yes "), ("n", " No "))):
+            on = picked["at"] == n
+            style = (f"bg:{ACCENT} #ffffff bold" if on and answer == "y"
+                     else "reverse bold" if on else f"{DIM_HEX}")
+            out.append((style, f"[{label}]", choose(answer)))
+            out.append(("", "  "))
+        out.append((DIM_HEX, "  y / n, or click"))
+        return out
+
+    keys = KeyBindings()
+
+    @keys.add("y")
+    def _yes(event) -> None:
+        event.app.exit(result="y")
+
+    @keys.add("n")
+    @keys.add("escape")
+    @keys.add("c-c")
+    def _no(event) -> None:
+        event.app.exit(result="n")
+
+    @keys.add("left")
+    @keys.add("right")
+    @keys.add("tab")
+    def _move(event) -> None:
+        picked["at"] = 1 - picked["at"]
+
+    @keys.add("enter")
+    def _enter(event) -> None:
+        event.app.exit(result="y" if picked["at"] == 0 else "n")
+
+    @keys.add("c-d")
+    def _eof(event) -> None:
+        event.app.exit(exception=EOFError)
+
+    app: Application = Application(
+        layout=Layout(Window(FormattedTextControl(render), height=1,
+                             always_hide_cursor=True)),
+        key_bindings=keys, mouse_support=True, erase_when_done=True,
+    )
+    try:
+        console.file.write("\n")
+        console.file.flush()
+        with screen_to_itself():
+            answer = app.run()
+    finally:
+        if console.asking:
+            console.asking = False
+            if _dock is not None:
+                _dock.resume()
+    said = "yes" if answer == "y" else "no"
+    # Under the question, where the buttons were: what was picked.
+    console.print(Text(f"     {said}", style=f"bold {ACCENT}" if answer ==
+                       "y" else DIM))
+    return answer
+
+
+# Set by -y on the command line: every confirm() is a yes, said as one.
+ASSUME_YES = False
+
+
+def assume_yes(on: bool = True) -> None:
+    global ASSUME_YES
+    ASSUME_YES = bool(on)
+
+
 def confirm(question: str) -> bool:
-    """Ask QUESTION on one y/n line. True only for a plain yes."""
+    """Ask QUESTION on one y/n line. True only for a plain yes, or
+    always under -y."""
 
     ask = Text(f"  {question} ", style=DIM)
     ask.append("y", style=f"bold {ACCENT}")
     ask.append("/n ", style=DIM)
+
     console.print(ask, end="")
+    if ASSUME_YES:
+        console.print("y (-y)", style=DIM)
+        return True
 
     try:
-        answer = typed()
+        answer = yes_no()
     except EOFError:
         console.print()
         return False
@@ -502,6 +959,10 @@ def dim(text: str) -> None:
 
 
 def error(text: str) -> None:
+    # Said on the first screen, not lost with the startup face's.
+    from . import startup
+
+    startup.stop()
     console.print(Markdown(text, style=ERROR))
 
 

@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 440" width="1280" height="440" role="img" aria-label="Flash: the fast local agent shell">
+  <title>Flash: the fast local agent shell</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17110d"/>
+      <stop offset="0.55" stop-color="#120e0c"/>
+      <stop offset="1" stop-color="#1c1210"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff8a1f" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#ff6a00" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ff6a00" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="word" x1="0" y1="222" x2="0" y2="299" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd23f"/>
+      <stop offset="0.5" stop-color="#ff8a0c"/>
+      <stop offset="1" stop-color="#e44e10"/>
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <rect x="11" y="11" width="2" height="2" fill="#ffffff" opacity="0.05"/>
+    </pattern>
+    <clipPath id="card"><rect width="1280" height="440" rx="28"/></clipPath>
+  </defs>
+  <style>
+    .bob { animation: bob 5.5s ease-in-out infinite; }
+    .blink { transform-box: fill-box; transform-origin: center; animation: blink 4.6s infinite; }
+    .pulse { transform-box: fill-box; transform-origin: center; animation: pulse 3.2s ease-in-out infinite; }
+    .bolt { animation: float 4s ease-in-out infinite; }
+    .star { animation: twinkle 3s ease-in-out infinite; }
+    .cursor { animation: cursor 1.1s steps(1) infinite; }
+    .shine { animation: shine 6s ease-in-out infinite; }
+    @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+    @keyframes pulse { 0%, 100% { opacity: 0.75; transform: scale(1); } 50% { opacity: 1; transform: scale(1.08); } }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    @keyframes twinkle { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
+    @keyframes cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+    @keyframes shine { 0%, 70% { transform: translateX(-420px); } 100% { transform: translateX(1700px); } }
+    @media (prefers-reduced-motion: reduce) {
+      .bob, .blink, .pulse, .bolt, .star, .cursor, .shine { animation: none; }
+    }
+  </style>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="440" fill="url(#bg)"/>
+    <rect width="1280" height="440" fill="url(#dots)"/>
+    <ellipse class="pulse" cx="640.0" cy="108" rx="330" ry="210" fill="url(#glow)"/>
+    <rect class="star" x="252" y="62" width="4" height="4" fill="#ffd9a8" style="animation-delay:-2.6s"/>
+    <rect class="star" x="430" y="120" width="4" height="4" fill="#ffd9a8" style="animation-delay:-1.0s"/>
+    <rect class="star" x="840" y="70" width="4" height="4" fill="#ffd9a8" style="animation-delay:-1.0s"/>
+    <rect class="star" x="1010" y="210" width="4" height="4" fill="#ffd9a8" style="animation-delay:-2.0s"/>
+    <rect class="star" x="560" y="382" width="4" height="4" fill="#ffd9a8" style="animation-delay:-1.2s"/>
+    <rect class="star" x="742" y="396" width="4" height="4" fill="#ffd9a8" style="animation-delay:-1.0s"/>
+    <rect class="star" x="1150" y="54" width="4" height="4" fill="#ffd9a8" style="animation-delay:-0.4s"/>
+    <rect class="star" x="70" y="170" width="4" height="4" fill="#ffd9a8" style="animation-delay:-0.0s"/>
+    <rect class="star" x="1230" y="190" width="4" height="4" fill="#ffd9a8" style="animation-delay:-1.0s"/>
+    <rect class="star" x="400" y="236" width="4" height="4" fill="#ffd9a8" style="animation-delay:-0.6s"/>
+
+  <g class="bob" style="animation-delay:-0.0s">
+    <g transform="translate(190 132)">
+      <circle r="48.0" fill="#f2a65a" opacity="0.08"/>
+      <circle r="30" fill="#f2a65a"/>
+      <g class="blink" style="animation-delay:-1.2s">
+        <ellipse cx="-9.6" cy="-1.5" rx="3.9" ry="6.0" fill="#1b1410"/>
+        <ellipse cx="9.6" cy="-1.5" rx="3.9" ry="6.0" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+
+  <g class="bob" style="animation-delay:-1.1s">
+    <g transform="translate(318 318)">
+      <circle r="35.2" fill="#5ab0f2" opacity="0.08"/>
+      <circle r="22" fill="#5ab0f2"/>
+      <g class="blink" style="animation-delay:-3.4s">
+        <ellipse cx="-7.0" cy="-1.1" rx="2.9" ry="4.4" fill="#1b1410"/>
+        <ellipse cx="7.0" cy="-1.1" rx="2.9" ry="4.4" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+
+  <g class="bob" style="animation-delay:-2.0s">
+    <g transform="translate(112 300)">
+      <circle r="24.0" fill="#7bd88f" opacity="0.08"/>
+      <circle r="15" fill="#7bd88f"/>
+      <g class="blink" style="animation-delay:-0.4s">
+        <ellipse cx="-4.8" cy="-0.8" rx="2.0" ry="3.0" fill="#1b1410"/>
+        <ellipse cx="4.8" cy="-0.8" rx="2.0" ry="3.0" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+
+  <g class="bob" style="animation-delay:-0.6s">
+    <g transform="translate(1086 120)">
+      <circle r="41.6" fill="#c792ea" opacity="0.08"/>
+      <circle r="26" fill="#c792ea"/>
+      <g class="blink" style="animation-delay:-2.6s">
+        <ellipse cx="-8.3" cy="-1.3" rx="3.4" ry="5.2" fill="#1b1410"/>
+        <ellipse cx="8.3" cy="-1.3" rx="3.4" ry="5.2" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+
+  <g class="bob" style="animation-delay:-1.7s">
+    <g transform="translate(968 322)">
+      <circle r="48.0" fill="#ffd166" opacity="0.08"/>
+      <circle r="30" fill="#ffd166"/>
+      <g class="blink" style="animation-delay:-4.1s">
+        <ellipse cx="-9.6" cy="-1.5" rx="3.9" ry="6.0" fill="#1b1410"/>
+        <ellipse cx="9.6" cy="-1.5" rx="3.9" ry="6.0" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+
+  <g class="bob" style="animation-delay:-2.6s">
+    <g transform="translate(1182 284)">
+      <circle r="25.6" fill="#ff7a90" opacity="0.08"/>
+      <circle r="16" fill="#ff7a90"/>
+      <g class="blink" style="animation-delay:-1.9s">
+        <ellipse cx="-5.1" cy="-0.8" rx="2.1" ry="3.2" fill="#1b1410"/>
+        <ellipse cx="5.1" cy="-0.8" rx="2.1" ry="3.2" fill="#1b1410"/>
+      </g>
+    </g>
+  </g>
+    <g class="bolt" shape-rendering="crispEdges">
+      <rect x="582" y="36" width="117" height="9" fill="#FFD23F"/>
+      <rect x="582" y="45" width="117" height="9" fill="#FFC21F"/>
+      <rect x="590" y="54" width="99" height="9" fill="#FFA219"/>
+      <rect x="590" y="63" width="45" height="18" fill="#FF9412"/>
+      <rect x="600" y="81" width="45" height="9" fill="#FF880C"/>
+      <rect x="600" y="90" width="90" height="18" fill="#FF7A00"/>
+      <rect x="608" y="108" width="72" height="9" fill="#FA6E05"/>
+      <rect x="608" y="117" width="45" height="18" fill="#F2620A"/>
+      <rect x="618" y="135" width="45" height="9" fill="#EB570E"/>
+      <rect x="618" y="144" width="45" height="9" fill="#E44E10"/>
+      <rect x="618" y="153" width="45" height="9" fill="#3FB8E8"/>
+      <rect x="626" y="162" width="36" height="9" fill="#2FA6DE"/>
+      <rect x="626" y="171" width="27" height="9" fill="#33C06A"/>
+      <rect x="636" y="180" width="18" height="9" fill="#2BAE5E"/>
+    </g>
+    <g shape-rendering="crispEdges" fill="url(#word)">
+      <rect x="458" y="222" width="55" height="11"/>
+      <rect x="458" y="233" width="11" height="11"/>
+      <rect x="458" y="244" width="11" height="11"/>
+      <rect x="458" y="255" width="44" height="11"/>
+      <rect x="458" y="266" width="11" height="11"/>
+      <rect x="458" y="277" width="11" height="11"/>
+      <rect x="458" y="288" width="11" height="11"/>
+      <rect x="536" y="222" width="11" height="11"/>
+      <rect x="536" y="233" width="11" height="11"/>
+      <rect x="536" y="244" width="11" height="11"/>
+      <rect x="536" y="255" width="11" height="11"/>
+      <rect x="536" y="266" width="11" height="11"/>
+      <rect x="536" y="277" width="11" height="11"/>
+      <rect x="536" y="288" width="55" height="11"/>
+      <rect x="624" y="222" width="33" height="11"/>
+      <rect x="612" y="233" width="11" height="11"/>
+      <rect x="656" y="233" width="11" height="11"/>
+      <rect x="612" y="244" width="11" height="11"/>
+      <rect x="656" y="244" width="11" height="11"/>
+      <rect x="612" y="255" width="55" height="11"/>
+      <rect x="612" y="266" width="11" height="11"/>
+      <rect x="656" y="266" width="11" height="11"/>
+      <rect x="612" y="277" width="11" height="11"/>
+      <rect x="656" y="277" width="11" height="11"/>
+      <rect x="612" y="288" width="11" height="11"/>
+      <rect x="656" y="288" width="11" height="11"/>
+      <rect x="700" y="222" width="44" height="11"/>
+      <rect x="690" y="233" width="11" height="11"/>
+      <rect x="690" y="244" width="11" height="11"/>
+      <rect x="700" y="255" width="33" height="11"/>
+      <rect x="734" y="266" width="11" height="11"/>
+      <rect x="734" y="277" width="11" height="11"/>
+      <rect x="690" y="288" width="44" height="11"/>
+      <rect x="766" y="222" width="11" height="11"/>
+      <rect x="810" y="222" width="11" height="11"/>
+      <rect x="766" y="233" width="11" height="11"/>
+      <rect x="810" y="233" width="11" height="11"/>
+      <rect x="766" y="244" width="11" height="11"/>
+      <rect x="810" y="244" width="11" height="11"/>
+      <rect x="766" y="255" width="55" height="11"/>
+      <rect x="766" y="266" width="11" height="11"/>
+      <rect x="810" y="266" width="11" height="11"/>
+      <rect x="766" y="277" width="11" height="11"/>
+      <rect x="810" y="277" width="11" height="11"/>
+      <rect x="766" y="288" width="11" height="11"/>
+      <rect x="810" y="288" width="11" height="11"/>
+    </g>
+    <clipPath id="letters"><rect x="458" y="222" width="55" height="11"/><rect x="458" y="233" width="11" height="11"/><rect x="458" y="244" width="11" height="11"/><rect x="458" y="255" width="44" height="11"/><rect x="458" y="266" width="11" height="11"/><rect x="458" y="277" width="11" height="11"/><rect x="458" y="288" width="11" height="11"/><rect x="536" y="222" width="11" height="11"/><rect x="536" y="233" width="11" height="11"/><rect x="536" y="244" width="11" height="11"/><rect x="536" y="255" width="11" height="11"/><rect x="536" y="266" width="11" height="11"/><rect x="536" y="277" width="11" height="11"/><rect x="536" y="288" width="55" height="11"/><rect x="624" y="222" width="33" height="11"/><rect x="612" y="233" width="11" height="11"/><rect x="656" y="233" width="11" height="11"/><rect x="612" y="244" width="11" height="11"/><rect x="656" y="244" width="11" height="11"/><rect x="612" y="255" width="55" height="11"/><rect x="612" y="266" width="11" height="11"/><rect x="656" y="266" width="11" height="11"/><rect x="612" y="277" width="11" height="11"/><rect x="656" y="277" width="11" height="11"/><rect x="612" y="288" width="11" height="11"/><rect x="656" y="288" width="11" height="11"/><rect x="700" y="222" width="44" height="11"/><rect x="690" y="233" width="11" height="11"/><rect x="690" y="244" width="11" height="11"/><rect x="700" y="255" width="33" height="11"/><rect x="734" y="266" width="11" height="11"/><rect x="734" y="277" width="11" height="11"/><rect x="690" y="288" width="44" height="11"/><rect x="766" y="222" width="11" height="11"/><rect x="810" y="222" width="11" height="11"/><rect x="766" y="233" width="11" height="11"/><rect x="810" y="233" width="11" height="11"/><rect x="766" y="244" width="11" height="11"/><rect x="810" y="244" width="11" height="11"/><rect x="766" y="255" width="55" height="11"/><rect x="766" y="266" width="11" height="11"/><rect x="810" y="266" width="11" height="11"/><rect x="766" y="277" width="11" height="11"/><rect x="810" y="277" width="11" height="11"/><rect x="766" y="288" width="11" height="11"/><rect x="810" y="288" width="11" height="11"/></clipPath>
+    <g clip-path="url(#letters)"><rect class="shine" x="0" y="212" width="70" height="97" fill="#fff8e6" opacity="0.55" transform="skewX(-20)"/></g>
+    <text x="412" y="363" textLength="434" lengthAdjust="spacingAndGlyphs" fill="#cdb8a6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="26"><tspan fill="#ff8a1f">&gt;</tspan> the fast local agent shell</text>
+    <rect class="cursor" x="854" y="341" width="14" height="28" fill="#ff8a1f"/>
+    <rect width="1280" height="440" rx="28" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  </g>
+</svg>

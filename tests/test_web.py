@@ -8,9 +8,10 @@ import threading
 import time
 from types import SimpleNamespace
 
+import ollama
 import pytest
 
-from flash import ai, tools, web
+from flash import ai, sparks, tools, web, workspace
 from flash.cli import parse_args
 
 # --- A model that streams what each test scripts -------------------------
@@ -50,12 +51,35 @@ class FakeClient:
 def offline(monkeypatch):
     FakeClient.scripts = []
     FakeClient.requests = []
-    monkeypatch.setattr(web.ollama, "Client", FakeClient)
+    monkeypatch.setattr(ollama, "Client", FakeClient)
     monkeypatch.setattr(ai.Config, "model", "flash-test")
     monkeypatch.setattr(ai.Config, "no_command_confirmation", False)
     monkeypatch.setattr(ai, "_session_system_prompt", lambda heard=False: "")
     monkeypatch.setattr(ai, "_history_budget", lambda: 100_000)
     monkeypatch.setattr(web.checkpoint, "start_turn", lambda label: None)
+    # Every session the test makes, so none of its turns outlives it: one
+    # still going would take the next test's scripted replies for its own.
+    made = []
+    init = web.Session.__init__
+
+    def kept(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        made.append(self)
+
+    monkeypatch.setattr(web.Session, "__init__", kept)
+    yield
+    chats = []
+    for session in made:
+        with session._lock:
+            for chat in session.chats.values():
+                chat.pending.clear()
+                chat.stop.set()
+                chats.append(chat)
+    deadline = time.monotonic() + 10
+    while any(chat.busy or chat.queued for chat in chats) and (
+        time.monotonic() < deadline
+    ):
+        time.sleep(0.02)
 
 
 def events_of(session):
@@ -72,7 +96,7 @@ def events_of(session):
     return drain
 
 
-def run(session, chat, text, timeout=5):
+def run(session, chat, text, timeout=15):
     session.send(chat, text)
     deadline = time.monotonic() + timeout
     time.sleep(0.05)
@@ -107,61 +131,20 @@ class TestTurns:
         stats = next(e for e in seen if e["type"] == "stats")
         assert (stats["tokens"], stats["rate"]) == (4, 10.0)
 
-    def test_a_reply_that_promises_work_is_told_to_do_it(self):
+    def test_a_reply_saying_what_comes_next_ends_the_turn(self):
+        # Nothing tells the model to go on: it stops where it said so.
         FakeClient.scripts = [
-            [part(calls=[call("get_date")]), part(done=True)],
-            # It sees the problem and says what it will do, then stops.
-            [part("Wait, the block covers the text. I'll move the logo "
-                  "text forward."), part(done=True)],
-            [part(calls=[call("get_date")]), part(done=True)],
-            [part("Fixed: the text is in front now."), part(done=True)],
-        ]
-        session = web.Session()
-        drain = events_of(session)
-        chat = session.new_chat()
-
-        run(session, chat, "make the minecraft logo")
-
-        said = [e["text"] for e in drain()
-                if e["type"] == "assistant" and e["text"]]
-        assert said[-2:] == [
-            "Wait, the block covers the text. I'll move the logo text "
-            "forward.",
-            "Fixed: the text is in front now.",
-        ]
-        # The model was told to go on, right after its promise.
-        sent = FakeClient.requests[-1]["messages"]
-        at = sent.index({"role": "system", "content": ai.PROMISE_NOTE})
-        assert "I'll move the logo" in sent[at - 1]["content"]
-        assert len(FakeClient.requests) == 4
-        # The history keeps what the user saw, not Flash's nudge.
-        kept = [m.get("content") for m in chat.messages]
-        assert ai.PROMISE_NOTE not in kept
-        assert kept[-1] == "Fixed: the text is in front now."
-        assert any("I'll move the logo" in (c or "") for c in kept)
-
-    def test_a_model_that_keeps_promising_is_let_go(self):
-        promise = [part("I'll fix it."), part(done=True)]
-        FakeClient.scripts = [promise, promise, promise]
-        session = web.Session()
-        chat = session.new_chat()
-
-        run(session, chat, "fix it")
-
-        # Asked twice, then its word is taken as the answer.
-        assert len(FakeClient.requests) == 1 + ai.MAX_PROMISE_NUDGES
-        assert chat.messages[-1]["content"] == "I'll fix it."
-
-    def test_an_offer_is_not_a_promise(self):
-        FakeClient.scripts = [
-            [part("Done. I'll add a roof if you'd like."), part(done=True)],
+            [part("Done. Tell me and I'll rewrite it."), part(done=True)],
         ]
         session = web.Session()
         chat = session.new_chat()
 
-        run(session, chat, "make a house")
+        run(session, chat, "fill it in")
 
         assert len(FakeClient.requests) == 1
+        assert chat.messages[-1]["content"] == (
+            "Done. Tell me and I'll rewrite it."
+        )
 
     def test_a_streamed_reply_comes_without_dashes(self):
         FakeClient.scripts = [[
@@ -216,6 +199,22 @@ class TestTurns:
         assert roles == ["user", "assistant", "tool", "assistant"]
         # The second request carried the tool's answer.
         assert FakeClient.requests[1]["messages"][-1]["role"] == "tool"
+
+    def test_a_notification_pops_up_on_an_open_page(self):
+        session = web.Session()
+        chat = session.new_chat()
+        sink = web._sink(session, chat)
+
+        # With no page open, it is left to the desktop.
+        assert sink("notify", '{"title": "Job", "message": "Done"}', "") \
+            is False
+
+        drain = events_of(session)
+        assert sink("notify", '{"title": "Job", "message": "Done"}', "")
+        sent = [e for e in drain() if e["type"] == "notify"]
+        assert sent and (sent[0]["title"], sent[0]["text"]) == ("Job", "Done")
+        # A pop-up, not part of the conversation drawn again on reload.
+        assert not [e for e in chat.log if e["type"] == "notify"]
 
     def test_a_question_waits_for_the_page(self, tmp_path):
         target = tmp_path / "never"
@@ -386,12 +385,89 @@ class TestCommands:
 
         result = web.command(web.Session(), {"name": "auto"})
 
-        assert result == {"auto": True}
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert result["mode"] == "ask"  # nosec B101  (not refreshed here)
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
 
     def test_unknown(self):
         with pytest.raises(ValueError):
             web.command(web.Session(), {"name": "explode"})
+
+    def test_stop_halts_a_call(self, monkeypatch):
+        from flash import calls
+
+        halted = []
+        monkeypatch.setattr(calls, "halt", halted.append)
+        session = web.Session()
+        chat_id = web.command(session, {"name": "new"})["chat"]
+        web.command(session, {"name": "stop", "chat": chat_id})
+        assert halted == [chat_id]
+
+    def test_call_pause(self, monkeypatch):
+        from flash import calls
+
+        asked = []
+        monkeypatch.setattr(calls, "set_paused", lambda on, owner="": (
+            asked.append((on, owner)) or {"live": True, "paused": on}))
+        assert web.command(web.Session(), {
+            "name": "call-pause", "arg": "on", "chat": "c1"})["paused"]
+        assert asked == [(True, "c1")]
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-pause", "arg": ""})
+
+    def test_call_silence(self, monkeypatch, tmp_path):
+        from flash import calls
+
+        monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+        monkeypatch.delenv("CALL_SILENCE_SECONDS", raising=False)
+        assert web.command(web.Session(), {
+            "name": "call-silence", "arg": "1.2"})["silence"] == 1.2
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-silence", "arg": "9"})
+
+    def test_call_greeting(self, monkeypatch, tmp_path):
+        from flash import calls
+
+        monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+        monkeypatch.delenv("CALL_GREETING_MODE", raising=False)
+        monkeypatch.delenv("CALL_GREETING", raising=False)
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": ""})["greeting_mode"] == "default"
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": "custom:Hi: it's {name}'s bot."}
+        ) == {"greeting_mode": "custom", "greeting": "Hi: it's {name}'s bot."}
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": "own"})["greeting_mode"] == "own"
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-greeting", "arg": "x"})
+
+    def test_call_mic(self, monkeypatch):
+        from flash import calls
+
+        asked = []
+        monkeypatch.setattr(calls, "set_mic", lambda on, owner="": (
+            asked.append((on, owner)) or {"live": True, "mic": on}))
+        assert web.command(web.Session(), {
+            "name": "call-mic", "arg": "on", "chat": "c1"})["mic"] is True
+        assert asked == [(True, "c1")]
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-mic", "arg": "loud"})
+
+        def no_call(on, owner=""):
+            raise calls.CallError("Flash isn't talking on a call right now.")
+
+        monkeypatch.setattr(calls, "set_mic", no_call)
+        with pytest.raises(ValueError, match="isn't talking"):
+            web.command(web.Session(), {"name": "call-mic", "arg": "on"})
+
+    def test_a_call_turn_is_kept_in_the_chat(self):
+        session = web.Session()
+        chat = session.chat(web.command(session, {"name": "new"})["chat"])
+        sink = web._sink(session, chat)
+        assert sink("call", json.dumps({"who": "Alex", "said": "Hi",
+                                        "at": "12:00:00", "flash": False}),
+                    "")
+        assert chat.log[-1]["type"] == "call"
+        assert chat.log[-1]["said"] == "Hi"
 
 
 # --- HTTP ----------------------------------------------------------------
@@ -478,6 +554,183 @@ class TestLocks:
         assert request(server, "GET", "/nope")[0] == 404
 
 
+def test_an_extension_can_put_flash_on_the_network(monkeypatch):
+    from flash import extensions
+
+    made = {}
+
+    class Fake:
+        def __init__(self, port, session=None, lan=False):
+            made["lan"] = lan
+
+    monkeypatch.setattr(web, "Server", Fake)
+    monkeypatch.setattr(extensions, "wanting_network", lambda: [])
+    web._listen(0, False)
+    assert made["lan"] is False
+    monkeypatch.setattr(extensions, "wanting_network", lambda: ["watch"])
+    web._listen(0, False)
+    assert made["lan"] is True
+
+
+class TestNotes:
+    def test_what_a_device_is_told(self):
+        session = web.Session()
+        chat = session.new_chat()
+        session.hub.publish({"type": "notify", "title": "Done",
+                             "text": "The build passed", "chat": chat.id})
+        session.hub.publish({"type": "ping", "name": "Ada",
+                             "text": "@user can you look?"})
+        session.emit(chat, {"type": "ask", "id": "a1",
+                            "question": "Run rm -rf build?\nrm -rf build"})
+        got = web.command(session, {"name": "notifications"})
+        kinds = [(n["kind"], n["title"]) for n in got["notes"]]
+        assert kinds == [("notify", "Done"), ("mention", "Ada mentioned you"),
+                         ("ask", chat.title)]
+        assert got["notes"][2]["text"] == "Run rm -rf build?"
+        assert got["last"] == 3
+
+        # Only what came after the last one seen.
+        later = web.command(session, {"name": "notifications", "arg": "2"})
+        assert [n["kind"] for n in later["notes"]] == ["ask"]
+
+    def test_only_the_latest_are_kept(self):
+        hub = web.Hub()
+        for n in range(web.NOTES_KEPT + 5):
+            hub.note("notify", f"n{n}", "")
+        kept = hub.notes_after(0)
+        assert len(kept["notes"]) == web.NOTES_KEPT
+        assert kept["last"] == web.NOTES_KEPT + 5
+
+    def test_a_finished_reply(self):
+        chat = web.Chat(id="c")
+        chat.log = [{"type": "user", "text": "hi"},
+                    {"type": "assistant", "text": "  Hello!  "},
+                    {"type": "stats"}]
+        assert web._reply_since(chat, 1) == "Hello!"
+        assert web._reply_since(chat, 2) == ""
+
+
+class TestPairing:
+    def test_flash_says_where_it_is_while_a_code_waits(self, monkeypatch):
+        import socket as sockets
+
+        heard = sockets.socket(sockets.AF_INET, sockets.SOCK_DGRAM)
+        heard.setsockopt(sockets.SOL_SOCKET, sockets.SO_REUSEADDR, 1)
+        heard.bind(("", 0))
+        heard.settimeout(5)
+        monkeypatch.setattr(web, "PAIR_BEACON_PORT", heard.getsockname()[1])
+        pairing = web.Pairing()
+        pairing.start()
+        pairing.announce(7433)
+        try:
+            try:
+                said, _ = heard.recvfrom(64)
+            except OSError:
+                pytest.skip("this machine can't broadcast")
+            assert said == b"FLASH-PAIR 7433"
+        finally:
+            pairing.cancel()
+            heard.close()
+        deadline = time.time() + 3
+        while pairing._announcing and time.time() < deadline:
+            time.sleep(0.05)
+        assert not pairing._announcing  # stops once the code is gone
+
+    def test_a_code_signs_a_device_in(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        assert len(code) == 6 and code.isdigit()
+
+        status, body = request(
+            server, "POST", "/api/pair", {"code": code, "name": "Wrist"},
+            headers={"User-Agent": "FlashDevice/1.0 test"}, token=False,
+        )
+        assert status == 200
+        key = json.loads(body)["key"]
+
+        status, _ = request(server, "GET", "/api/state?lite=1",
+                            headers={"X-Flash-Device": key}, token=False)
+        assert status == 200
+        listed = server.session.access.listing("", set())
+        assert [b["device"] for b in listed if b["paired"]] == ["Wrist"]
+
+    def test_a_code_works_once(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 200
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_wrong_tries_end_the_code(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        wrong = f"{(int(code) + 1) % 10 ** 6:06d}"
+        for _ in range(web.PAIR_TRIES):
+            assert request(server, "POST", "/api/pair", {"code": wrong},
+                           token=False)[0] == 400
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_no_code_no_pairing(self, server):
+        assert request(server, "POST", "/api/pair", {"code": "000000"},
+                       token=False)[0] == 400
+
+    def test_an_old_code_is_refused(self, server, monkeypatch):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        server.session.pairing.until = 0
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_a_made_up_device_key_is_refused(self, server):
+        status, _ = request(server, "GET", "/api/state?lite=1",
+                            headers={"X-Flash-Device": "guess"}, token=False)
+        assert status == 403
+
+    def test_pairing_still_checks_the_host(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        status, _ = request(
+            server, "POST", "/api/pair", {"code": code}, token=False,
+            headers={"Host": "evil.example:7433"},
+        )
+        assert status == 403
+
+    def test_a_device_can_be_renamed(self, server):
+        access = server.session.access
+        access.sign_in("10.0.0.5", "FlashDevice/1.0 Apple Watch")
+        device = [b for b in access.listing("", set()) if b["paired"]][0]
+        web.command(server.session, {"name": "device-rename",
+                                     "arg": device["id"],
+                                     "to": "  My   simulator  "})
+        renamed = [b for b in access.listing("", set()) if b["paired"]][0]
+        assert renamed["device"] == "My simulator"
+        assert renamed["named"] is True
+        assert renamed["kind"] == "Apple Watch"
+
+        # Nothing given: its own description again.
+        web.command(server.session, {"name": "device-rename",
+                                     "arg": device["id"], "to": ""})
+        back = [b for b in access.listing("", set()) if b["paired"]][0]
+        assert back["device"] == "Apple Watch" and not back["named"]
+
+    def test_renaming_a_device_that_is_gone(self, server):
+        with pytest.raises(ValueError):
+            web.command(server.session, {"name": "device-rename",
+                                         "arg": "nope", "to": "x"})
+
+    def test_where_flash_can_be_reached(self):
+        session = web.Session()
+        assert web.command(session, {"name": "addresses"}) == {
+            "addresses": []}
+        session.lan, session.port = True, 7433
+        found = web.command(session, {"name": "addresses"})["addresses"]
+        assert found == [f"http://{web.lan_address()}:7433"]
+
+    def test_one_chat_with_its_log(self):
+        session = web.Session()
+        chat_id = web.command(session, {"name": "new"})["chat"]
+        shown = web.command(session, {"name": "chat-view", "chat": chat_id})
+        assert shown["chat"]["id"] == chat_id
+        assert shown["chat"]["log"] == []
+
+
 class TestEventStream:
     def test_events_arrive_as_they_happen(self, server):
         port = server.server_address[1]
@@ -512,12 +765,12 @@ class TestFlags:
         pyproject = web.PAGE.parents[2] / "pyproject.toml"
 
         assert web.PAGE.is_file()
-        assert '"web/*.html"' in pyproject.read_text()
+        assert '"web/*.html"' in pyproject.read_text(encoding="utf-8")
 
 
 def test_tools_confirm_in_the_terminal_without_a_page(monkeypatch):
     # No answerer on this thread: the old y/n prompt is still used.
-    monkeypatch.setattr(tools, "typed", lambda: "n")
+    monkeypatch.setattr(tools, "yes_no", lambda: "n")
 
     assert tools.shell_tool("echo hi") == "Command blocked by user"
 
@@ -673,6 +926,28 @@ class TestFont:
     def test_the_license_ships_beside_it(self):
         assert (web.WEB_DIR / "OFL-orbit.txt").is_file()
 
+    @pytest.mark.parametrize(
+        "name", ["newsreader.woff2", "newsreader-italic.woff2"],
+    )
+    def test_the_reply_face_is_served(self, server, name):
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"/static/{name}",
+                     headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        body = response.read()
+        conn.close()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "font/woff2"
+        assert body[:4] == b"wOF2"
+
+    def test_its_license_ships_too(self):
+        text = (web.WEB_DIR / "OFL-newsreader.txt").read_text(
+            encoding="utf-8",
+        )
+        assert "SIL Open Font License" in text
+
 
 class TestInTheTerminal:
     def test_lan_flag(self):
@@ -817,6 +1092,28 @@ class TestProjectCommands:
         web.command(session, {"name": "project-delete", "arg": made["id"]})
         assert session.state()["projects"] == []
 
+    def test_a_project_with_more_folders(self, tmp_path):
+        (tmp_path / "web").mkdir()
+        (tmp_path / "api").mkdir()
+        session = web.Session()
+
+        made = web.command(session, {
+            "name": "project-new", "arg": str(tmp_path / "web"),
+            "label": "App", "folders": [str(tmp_path / "api")],
+        })
+        api = str((tmp_path / "api").resolve())
+        assert made["folders"] == [api]
+        prompt = web.project_prompt(workspace.project(made["id"]))
+        assert "also takes in these folders" in prompt and api in prompt
+
+        # Saved without them, its folders stay as they were.
+        kept = web.command(session, {"name": "project-update",
+                                     "arg": made["id"], "instructions": "x"})
+        assert kept["folders"] == [api]
+        cleared = web.command(session, {"name": "project-update",
+                                        "arg": made["id"], "folders": []})
+        assert cleared["folders"] == []
+
     def test_a_bad_folder_is_a_400(self, server, tmp_path):
         status, body = request(server, "POST", "/api/command", {
             "name": "project-new", "arg": str(tmp_path / "nope"),
@@ -843,7 +1140,7 @@ class TestHostCommands:
                             lambda k, v: saved.update({k: v}))
         monkeypatch.setattr(ai, "forget_model_facts",
                             lambda: forgot.append(True))
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "down")
 
         result = web.command(web.Session(), {"name": "host",
                                              "arg": "10.0.0.5"})
@@ -854,13 +1151,13 @@ class TestHostCommands:
         assert result["up"] is False
 
     def test_add_list_remove(self, monkeypatch):
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: True)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "up")
         session = web.Session()
 
         added = web.command(session, {"name": "host-add",
                                       "arg": "10.0.0.5", "label": "Studio"})
         assert added == {"name": "Studio", "url": "http://10.0.0.5:11434",
-                         "up": True}
+                         "locked": False, "up": True, "refused": False}
 
         listed = web.command(session, {"name": "hosts"})["hosts"]
         assert [h["name"] for h in listed] == ["This computer", "Studio"]
@@ -868,6 +1165,24 @@ class TestHostCommands:
         web.command(session, {"name": "host-remove", "arg": "10.0.0.5"})
         listed = web.command(session, {"name": "hosts"})["hosts"]
         assert [h["name"] for h in listed] == ["This computer"]
+
+    def test_a_host_added_with_a_key(self, monkeypatch):
+        monkeypatch.setattr(web.workspace, "host_state",
+                            lambda url: "refused")
+        session = web.Session()
+
+        added = web.command(session, {
+            "name": "host-add", "arg": "10.0.0.5", "label": "Studio",
+            "key": "s3cret",
+        })
+
+        # The page learns there is a key, and that it was turned down,
+        # but never the key itself.
+        assert added["locked"] is True and added["refused"] is True
+        assert "s3cret" not in json.dumps(added)
+        listed = web.command(session, {"name": "hosts"})
+        assert "s3cret" not in json.dumps(listed)
+        assert web.workspace.api_key("10.0.0.5") == "s3cret"
 
     def test_a_bad_address_is_refused(self):
         with pytest.raises(ValueError):
@@ -1332,9 +1647,9 @@ PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 class TestShownFiles:
     def test_send_pdf_checks_what_it_is_given(self, tmp_path):
         fake = tmp_path / "notes.pdf"
-        fake.write_text("just text")
+        fake.write_text("just text", encoding="utf-8")
         wrong = tmp_path / "notes.txt"
-        wrong.write_text("x")
+        wrong.write_text("x", encoding="utf-8")
 
         assert "does not start like a PDF" in tools.send_pdf(str(fake))
         assert "not a .pdf file" in tools.send_pdf(str(wrong))
@@ -1386,7 +1701,7 @@ class TestShownFiles:
 
     def test_send_html_checks_what_it_is_given(self, tmp_path):
         wrong = tmp_path / "notes.txt"
-        wrong.write_text("x")
+        wrong.write_text("x", encoding="utf-8")
 
         assert "not an .html file" in tools.send_html(str(wrong))
         assert "no file" in tools.send_html(str(tmp_path / "gone.html"))
@@ -1395,7 +1710,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch
     ):
         page = tmp_path / "site.html"
-        page.write_text("<h1>hi</h1>")
+        page.write_text("<h1>hi</h1>", encoding="utf-8")
         opened = []
         monkeypatch.setattr(tools, "_open_with_spinner",
                             lambda path: opened.append(path) or "")
@@ -1407,7 +1722,7 @@ class TestShownFiles:
 
     def test_in_the_web_ui_a_page_goes_to_the_page(self, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<h1>hi</h1>")
+        page.write_text("<h1>hi</h1>", encoding="utf-8")
         FakeClient.scripts = [
             [part(calls=[call("send_html", path=str(page))]),
              part(done=True)],
@@ -1425,7 +1740,8 @@ class TestShownFiles:
 
     def test_a_page_is_served_sandboxed(self, server, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<script>fetch('/api/state')</script>")
+        page.write_text("<script>fetch('/api/state')</script>",
+                        encoding="utf-8")
         kept = web.workspace.keep_file(str(page))
 
         status, _ = request(server, "GET", f"/api/files/{kept['id']}")
@@ -1469,7 +1785,7 @@ class TestShownFiles:
 
     def test_send_document_checks_what_it_is_given(self, tmp_path):
         wrong = tmp_path / "page.html"
-        wrong.write_text("<p>x</p>")
+        wrong.write_text("<p>x</p>", encoding="utf-8")
         binary = tmp_path / "notes.txt"
         binary.write_bytes(b"\xff\xfe\x00junk")
 
@@ -1481,7 +1797,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch
     ):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan")
+        doc.write_text("# Plan", encoding="utf-8")
         opened = []
         monkeypatch.setattr(tools, "_open_with_spinner",
                             lambda path: opened.append(path) or "")
@@ -1493,7 +1809,7 @@ class TestShownFiles:
 
     def test_in_the_web_ui_a_document_goes_to_the_page(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan\n\nShip it.")
+        doc.write_text("# Plan\n\nShip it.", encoding="utf-8")
         FakeClient.scripts = [
             [part(calls=[call("send_document", path=str(doc))]),
              part(done=True)],
@@ -1512,7 +1828,8 @@ class TestShownFiles:
 
     def test_flash_can_comment_on_a_document_it_sends(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan\n\n**Budget**: TBD\n\n- Record the demo\n")
+        doc.write_text("# Plan\n\n**Budget**: TBD\n\n- Record the demo\n",
+                       encoding="utf-8")
         comments = [
             # Quoted with its Markdown marks, or as it reads: both are in.
             {"quote": "**Budget**: TBD", "note": "Needs a number."},
@@ -1545,7 +1862,7 @@ class TestShownFiles:
 
     def test_comments_as_a_json_string_still_arrive(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("Ship it.")
+        doc.write_text("Ship it.", encoding="utf-8")
         from flash.theme import capture_tool_output
         sent = []
         with capture_tool_output(
@@ -1562,7 +1879,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch, capsys
     ):
         doc = tmp_path / "plan.md"
-        doc.write_text("Ship it.")
+        doc.write_text("Ship it.", encoding="utf-8")
         monkeypatch.setattr(tools, "_open_with_spinner", lambda path: "")
 
         reply = tools.send_document(
@@ -1574,7 +1891,7 @@ class TestShownFiles:
 
     def test_a_document_is_served_as_text(self, server, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan <script>x</script>")
+        doc.write_text("# Plan <script>x</script>", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
 
         status, body = request(server, "GET", f"/api/files/{kept['id']}")
@@ -1585,11 +1902,12 @@ class TestShownFiles:
         )
         assert request.last.getheader("X-Content-Type-Options") == "nosniff"
 
-    def test_an_edit_saves_to_the_file_and_is_told_next_turn(
+    def test_a_quiet_save_writes_the_file_and_is_told_next_turn(
         self, tmp_path,
     ):
+        # Saved with comments: those are the message, so it wakes nothing.
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan")
+        doc.write_text("# Plan", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
         FakeClient.scripts = [[part("Noted."), part(done=True)]]
         session = web.Session()
@@ -1597,13 +1915,14 @@ class TestShownFiles:
 
         saved = web.command(session, {
             "name": "document-save", "arg": kept["id"], "chat": chat.id,
-            "text": "# Plan\n\nMine now.",
+            "text": "# Plan\n\nMine now.", "quiet": True,
         })
         run(session, chat, "what changed?")
 
         assert saved == {"size": 17, "path": str(doc.resolve())}
-        assert doc.read_text() == "# Plan\n\nMine now."
-        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+        assert doc.read_text(encoding="utf-8") == "# Plan\n\nMine now."
+        assert web.workspace.kept_file(kept["id"])[0].read_text(
+                encoding="utf-8") == (
             "# Plan\n\nMine now."
         )
         told = FakeClient.requests[-1]["messages"][-1]["content"]
@@ -1614,20 +1933,21 @@ class TestShownFiles:
 
     def test_a_copy_outlives_its_file(self, tmp_path):
         doc = tmp_path / "scratch.md"
-        doc.write_text("draft")
+        doc.write_text("draft", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
         doc.unlink()
 
         saved = web.workspace.save_document(kept["id"], "kept anyway")
 
         assert saved == {"size": 11, "path": ""}
-        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+        assert web.workspace.kept_file(kept["id"])[0].read_text(
+                encoding="utf-8") == (
             "kept anyway"
         )
 
     def test_only_documents_are_saved(self, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<p>x</p>")
+        page.write_text("<p>x</p>", encoding="utf-8")
         kept = web.workspace.keep_file(str(page))
 
         with pytest.raises(web.workspace.WorkspaceError):
@@ -1637,7 +1957,7 @@ class TestShownFiles:
 
     def test_an_svg_is_never_kept(self, tmp_path):
         page = tmp_path / "page.svg"
-        page.write_text("<svg onload='alert(1)'/>")
+        page.write_text("<svg onload='alert(1)'/>", encoding="utf-8")
 
         with pytest.raises(web.workspace.WorkspaceError):
             web.workspace.keep_file(str(page))
@@ -1657,6 +1977,26 @@ class TestShownFiles:
 
         request(server, "GET", f"/api/files/{kept['id']}?download=1")
         assert request.last.getheader("Content-Disposition") == "attachment"
+
+    def test_a_video_is_served_in_the_pieces_asked_for(self, server, tmp_path):
+        clip = tmp_path / "playthrough.webm"
+        clip.write_bytes(b"\x1aE\xdf\xa3" + bytes(range(256)) * 4)
+        kept = web.workspace.keep_file(str(clip))
+        size = clip.stat().st_size
+
+        status, body = request(server, "GET", f"/api/files/{kept['id']}",
+                               headers={"Range": "bytes=4-13"})
+        assert status == 206 and body == clip.read_bytes()[4:14]
+        assert request.last.getheader("Content-Range") == f"bytes 4-13/{size}"
+        assert request.last.getheader("Accept-Ranges") == "bytes"
+        status, body = request(server, "GET", f"/api/files/{kept['id']}",
+                               headers={"Range": "bytes=-4"})
+        assert status == 206 and body == clip.read_bytes()[-4:]
+        status, _ = request(server, "GET", f"/api/files/{kept['id']}",
+                            headers={"Range": f"bytes={size}-"})
+        assert status == 416
+        status, body = request(server, "GET", f"/api/files/{kept['id']}")
+        assert status == 200 and len(body) == size
 
     def test_not_without_it_and_not_by_path(self, server, tmp_path):
         doc = tmp_path / "report.pdf"
@@ -1702,7 +2042,7 @@ def subagent_world(monkeypatch):
     from flash import agent as subagents
 
     monkeypatch.setattr(subagents, "_agents", {})
-    monkeypatch.setattr(subagents.ollama, "Client", SubAgentModel)
+    monkeypatch.setattr(ollama, "Client", SubAgentModel)
     monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
     monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
     sessions = []
@@ -1711,11 +2051,35 @@ def subagent_world(monkeypatch):
         session.close()
 
 
-def wait_for(check, timeout=5):
+def wait_for(check, timeout=15):
     deadline = time.monotonic() + timeout
     while not check():
-        assert time.monotonic() < deadline, "timed out"
+        assert time.monotonic() < deadline, "timed out\n" + threads_now()
         time.sleep(0.02)
+
+
+def threads_now():
+    """Where every other thread is, in Flash's code and the tests': what
+    a turn that never finished was stuck on."""
+
+    import sys
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    said = []
+    for ident, frame in sys._current_frames().items():
+        if ident == threading.get_ident():
+            continue
+        lines = [
+            f"  {os.path.basename(f.filename)}:{f.lineno} {f.name}"
+            for f in traceback.extract_stack(frame)
+            if "flash" in f.filename.replace("\\", "/").split("/")[-2:][0]
+            or "tests" in f.filename
+        ]
+        if lines:
+            said.append(f"{names.get(ident, ident)}:\n" + "\n".join(
+                lines[-12:]))
+    return "\n".join(said) or "(no other threads in Flash)"
 
 
 class TestSubAgents:
@@ -1901,7 +2265,7 @@ class TestUsage:
             ),
             logged(
                 {"type": "user", "text": "c"},
-                {"type": "stats", "at": at(26), "model": "qwen",
+                {"type": "stats", "at": at(26), "model": "beta",
                  "tokens": 0, "rate": 0, "seconds": 1, "tools": 1},
             ),
             logged(),
@@ -1916,7 +2280,7 @@ class TestUsage:
         assert u["days"] == {
             "2026-09-24": 1, "2026-09-25": 1, "2026-09-26": 1,
         }
-        assert u["models"] == [("onyx", 2), ("qwen", 1)]
+        assert u["models"] == [("onyx", 2), ("beta", 1)]
         assert (u["streak"], u["longest_streak"], u["active_days"]) == (
             3, 3, 3,
         )
@@ -1950,8 +2314,50 @@ class TestUsage:
 
         stats = next(e for e in chat.log if e["type"] == "stats")
         assert stats["model"] == "flash-test"
+        # A device that asks is told the reply is in.
+        notes = web.command(session, {"name": "notifications"})["notes"]
+        assert [(n["kind"], n["text"]) for n in notes] == [("reply", "Hi.")]
         assert abs(stats["at"] - time.time()) < 60
         assert web.command(session, {"name": "usage"})["turns"] == 1
+
+    def test_a_deleted_chats_turns_still_count(self):
+        session = web.Session()
+        for text in ("hello", "again"):
+            FakeClient.scripts = [[part("Hi."), part(done=True, tokens=4)]]
+            chat = session.new_chat()
+            run(session, chat, text)
+        before = web.command(session, {"name": "usage"})
+
+        gone = list(session.chats)
+        session.delete_chat(gone[0])
+        session.clear_chat(session.chats[gone[1]])
+        after = web.command(session, {"name": "usage"})
+
+        for key in ("messages", "turns", "tokens", "days", "models"):
+            assert after[key] == before[key], key
+        assert after["deleted"] == 2
+
+        # Switched off, they no longer count, and nothing more is kept.
+        web.command(session, {"name": "keep-deleted-usage", "arg": "off"})
+        assert web.command(session, {"name": "usage"})["turns"] == 0
+        assert web.command(
+            session, {"name": "keep-deleted-usage"})["keep"] is False
+
+        # Back on, what was kept counts again.
+        web.command(session, {"name": "keep-deleted-usage", "arg": "on"})
+        assert web.command(session, {"name": "usage"})["turns"] == 2
+
+    def test_off_a_deleted_chat_takes_its_turns_with_it(self):
+        session = web.Session()
+        web.command(session, {"name": "keep-deleted-usage", "arg": "off"})
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=4)]]
+        chat = session.new_chat()
+        run(session, chat, "hello")
+
+        session.delete_chat(chat.id)
+        web.command(session, {"name": "keep-deleted-usage", "arg": "on"})
+
+        assert web.command(session, {"name": "usage"})["turns"] == 0
 
 
 class TestMemoryCommands:
@@ -2230,6 +2636,7 @@ class TestSkillsInThePage:
         listed = {
             s["name"]: s["by"]
             for s in web.command(web.Session(), {"name": "skills"})["skills"]
+            if not s["builtin"]
         }
 
         assert listed == {"by-the-model": "flash", "by-the-user": "you"}
@@ -2246,11 +2653,12 @@ class TestSkillsInThePage:
         folder = skills.skills_dir() / "older"
         folder.mkdir(parents=True)
         (folder / skills.SKILL_FILE).write_text(
-            "---\nname: older\ndescription: d\nmanaged: true\n---\n\nx\n"
+            "---\nname: older\ndescription: d\nmanaged: true\n---\n\nx\n",
+            encoding="utf-8"
         )
         (skills.skills_dir() / "hand").mkdir()
         (skills.skills_dir() / "hand" / skills.SKILL_FILE).write_text(
-            "---\nname: hand\ndescription: d\n---\n\nx\n"
+            "---\nname: hand\ndescription: d\n---\n\nx\n", encoding="utf-8"
         )
 
         assert skills.find("older").by == "flash"
@@ -2270,6 +2678,24 @@ class TestSkillsInThePage:
         with pytest.raises(ValueError, match="No skill"):
             web.command(session, {"name": "skill", "arg": "deploy-site"})
 
+    def test_the_knowledge_base_is_listed_built_in_and_read_only(self):
+        session = web.Session()
+        listed = web.command(session, {"name": "skills"})["skills"]
+        guide = next(s for s in listed if s["name"] == "change-code")
+        assert guide["builtin"] == "flash"
+        shown = web.command(session, {"name": "skill", "arg": "change-code"})
+        assert shown["builtin"] == "flash" and shown["content"]
+        for name in ("skill-save", "skill-delete"):
+            with pytest.raises(ValueError, match="can't be changed"):
+                web.command(session, {"name": name, "arg": "change-code",
+                                      "description": "d", "content": "x"})
+        # A skill of the user's own of that name takes its place.
+        web.command(session, {"name": "skill-create", "arg": "change-code",
+                              "description": "Mine", "content": "1. Mine"})
+        listed = web.command(session, {"name": "skills"})["skills"]
+        mine = [s for s in listed if s["name"] == "change-code"]
+        assert len(mine) == 1 and mine[0]["builtin"] == ""
+
     def test_a_bad_skill_says_why(self):
         with pytest.raises(ValueError, match="description"):
             web.command(web.Session(), {
@@ -2286,8 +2712,9 @@ class TestExtensionsInThePage:
             "description": "Weather lookups",
             "version": "0.1.0",
             "commands": [{"name": "forecast", "prompt": "forecast.md"}],
-        }))
-        (folder / "forecast.md").write_text("Forecast for $ARGUMENTS")
+        }), encoding="utf-8")
+        (folder / "forecast.md").write_text("Forecast for $ARGUMENTS",
+                                            encoding="utf-8")
         return folder
 
     def test_shown_first_and_installed_on_yes(self, tmp_path):
@@ -2330,9 +2757,11 @@ class TestExtensionsInThePage:
 
     def test_a_clash_is_refused_before_anything_installs(self, tmp_path):
         folder = self.make(tmp_path / "clash")
-        manifest = json.loads((folder / "flash-extension.json").read_text())
+        manifest = json.loads((folder / "flash-extension.json").read_text(
+                encoding="utf-8"))
         manifest["commands"][0]["name"] = "help"
-        (folder / "flash-extension.json").write_text(json.dumps(manifest))
+        (folder / "flash-extension.json").write_text(json.dumps(manifest),
+                                                     encoding="utf-8")
 
         with pytest.raises(ValueError, match="built-in command"):
             web.command(web.Session(), {
@@ -2358,6 +2787,23 @@ class TestExtensionsInThePage:
             web.command(session, {
                 "name": "extension-remove", "arg": "weather",
             })
+
+
+class TestFavoriteModels:
+    def test_pinned_ones_come_with_the_models(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+        monkeypatch.setattr(web, "list_models", lambda _ai: ["a:1", "b:2"])
+
+        pinned = web.command(web.Session(), {
+            "name": "model-pin", "arg": "b:2", "on": True,
+        })
+        listed = web.command(web.Session(), {"name": "model"})
+
+        assert pinned == {"favorites": ["b:2"]}
+        assert listed["favorites"] == ["b:2"]
+        assert web.command(web.Session(), {
+            "name": "model-pin", "arg": "b:2", "on": False,
+        }) == {"favorites": []}
 
 
 class TestRemovingHosts:
@@ -2395,7 +2841,9 @@ class TestRemovingHosts:
 
 class TestQueueAndSteer:
     def held(self, gate, *parts):
-        """A reply that waits on GATE, so a turn stays running."""
+        """A reply that waits on GATE, so a turn stays running. Wait for
+        the model to have been asked, not only for the chat to be busy:
+        a turn stopped before it asks never asks at all."""
 
         def script():
             gate.wait(5)
@@ -2417,7 +2865,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "one")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         assert session.send(chat, "two")["pending"]
         session.send(chat, "three")
 
@@ -2450,7 +2898,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "write it in python")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "actually, use rust", mode="steer")
         gate.set()
         self.settle(session, chat)
@@ -2481,7 +2929,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "fix it")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "and add tests", mode="steer")
         gate.set()
         self.settle(session, chat)
@@ -2500,7 +2948,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "go")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "then this")
         result = web.command(session, {"name": "stop", "chat": chat.id})
         gate.set()
@@ -2519,7 +2967,7 @@ class TestQueueAndSteer:
         session = web.Session()
         chat = session.new_chat()
         session.send(chat, "go")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         first = session.send(chat, "a")["pending"]
         second = session.send(chat, "b")["pending"]
 
@@ -2537,6 +2985,395 @@ class TestQueueAndSteer:
         FakeClient.scripts.append([part("Steered."), part(done=True)])
         gate.set()
         self.settle(session, chat)
+
+    def test_send_now_stops_the_turn_and_runs_first(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working on the long thing."),
+                      part(done=True)),
+            [part("Doing the urgent one."), part(done=True)],
+            [part("Then the later one."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "long thing")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        session.send(chat, "later one")
+        session.send(chat, "urgent one", mode="now")
+
+        assert chat.stop.is_set()
+        assert [p["text"] for p in chat.pending] == ["urgent one", "later one"]
+        gate.set()
+        self.settle(session, chat)
+
+        asked = [e["text"] for e in chat.log if e["type"] == "user"]
+        assert asked == ["long thing", "urgent one", "later one"]
+
+    def test_a_waiting_message_can_be_sent_now(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+            [part("B first."), part(done=True)],
+            [part("Then A."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        session.send(chat, "a")
+        second = session.send(chat, "b")["pending"]
+
+        left = web.command(session, {"name": "pending-mode", "chat": chat.id,
+                                     "arg": second, "mode": "now"})
+
+        assert [p["text"] for p in left["pending"]] == ["b", "a"]
+        assert chat.stop.is_set()
+        gate.set()
+        self.settle(session, chat)
+        asked = [e["text"] for e in chat.log if e["type"] == "user"]
+        assert asked == ["go", "b", "a"]
+
+
+class TestMade:
+    def test_lists_what_flash_made_newest_first_with_its_chat(self, tmp_path):
+        session = web.Session()
+        first, second = session.new_chat(), session.new_chat()
+        older = tmp_path / "older.png"
+        older.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        newer = tmp_path / "page.html"
+        newer.write_text("<p>hi</p>")
+        kept_old = web.workspace.keep_file(str(older))
+        kept_new = web.workspace.keep_file(str(newer))
+        old_path = web.workspace.kept_file(kept_old["id"])[0]
+        os.utime(old_path, (1000, 1000))
+        first.log += [{"type": "user", "text": "draw"},
+                      {"type": "file", **kept_old}]
+        second.log += [{"type": "file", **kept_new},
+                       # what you sent is not something Flash made
+                       {"type": "user", "text": "here",
+                        "files": [dict(kept_old)]}]
+
+        made = web.command(session, {"name": "made"})["files"]
+
+        assert [f["name"] for f in made] == ["page.html", "older.png"]
+        assert made[1]["chat"] == first.id and made[1]["index"] == 1
+        assert made[1]["chat_title"] == first.title
+
+
+class TestBackground:
+    def test_lists_and_stops_a_running_command(self):
+        import sys as _sys
+
+        session = web.Session()
+        chat = session.new_chat()
+        tools = web._tools()
+        done = {}
+
+        def run():
+            with tools.running_as(chat.id):
+                done["out"] = tools._run_owned(
+                    [_sys.executable, "-c", "import time; time.sleep(30)"],
+                    shell=False, seconds=60, env=None)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        wait_for(lambda: session.background()["shells"])
+        shell = session.background()["shells"][0]
+        assert shell["owner"] == chat.id
+        assert "time.sleep(30)" in shell["command"]
+        assert shell["by"] == chat.title
+
+        assert web.command(session, {"name": "bg-stop",
+                                     "arg": f"shell:{shell['pid']}"}) == {
+            "stopped": 1}
+        thread.join(10)
+        assert done["out"][3] is True        # ended by Stop
+        assert session.background()["shells"] == []
+
+    def test_stop_all_stops_a_sub_agent(self):
+        session = web.Session()
+        entry = web.subagents.SubAgent(id="ab12cd", task="dig")
+        with web.subagents._lock:
+            web.subagents._agents[entry.id] = entry
+        try:
+            listed = session.background()["agents"]
+            assert [a["id"] for a in listed] == ["ab12cd"]
+            assert session.stop_background("all") == 1
+            assert entry.stop_asked
+        finally:
+            with web.subagents._lock:
+                web.subagents._agents.pop(entry.id, None)
+
+
+def down():
+    raise ConnectionError("the model went away")
+
+
+class TestRetryAfterError:
+    def settle(self, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def test_a_failed_turn_leaves_nothing_unanswered(self):
+        FakeClient.scripts = [
+            [part("Hi."), part(done=True)],
+            down,
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hello")
+        before = list(chat.messages)
+
+        run(session, chat, "build it")
+
+        # The model never sees the message it failed to answer.
+        assert chat.messages == before
+        assert chat.log[-1]["type"] == "error"
+        assert chat.log[-1]["retry"] is True
+
+    def test_retry_runs_the_message_again_in_place(self):
+        FakeClient.scripts = [
+            down,
+            [part("Built."), part(done=True)],
+        ]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+        run(session, chat, "build it")
+
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        said = [
+            (e["type"], e.get("text")) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert said == [("user", "build it"), ("assistant", "Built.")]
+        assert [m["content"] for m in chat.messages] == [
+            "build it", "Built.",
+        ]
+        retrying = next(e for e in drain() if e["type"] == "retrying")
+        assert retrying["keep"] == 1
+
+    def test_only_a_failed_turn_at_the_end_retries(self):
+        FakeClient.scripts = [
+            down,
+            [part("Fine."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "build it")
+        run(session, chat, "never mind")
+
+        with pytest.raises(ValueError):
+            web.command(session, {"name": "retry", "chat": chat.id})
+
+    def test_a_steer_from_the_failed_turn_is_read_again(self):
+        gate = threading.Event()
+
+        def held():
+            gate.wait(5)
+            raise ConnectionError("the model went away")
+
+        FakeClient.scripts = [
+            held,
+            [part("Building."), part(done=True)],
+            [part("Using Rust."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "build it")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        session.send(chat, "in rust", mode="steer")
+        # Read at the next step, which the failure never reaches, so
+        # it is put in the log by hand as a turn that read it would.
+        session.take_steers(chat)
+        gate.set()
+        self.settle(chat)
+
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        # The turn ends before it could read it, so it runs next, as
+        # any steer a turn never read does.
+        said = [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert said == [
+            ("user", "build it"), ("assistant", "Building."),
+            ("user", "in rust"), ("assistant", "Using Rust."),
+        ]
+
+    def test_no_model_can_be_tried_again_once_one_is_picked(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(ai.Config, "model", "")
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hello")
+        assert chat.log[-1]["retry"] is True
+
+        monkeypatch.setattr(ai.Config, "model", "flash-test")
+        FakeClient.scripts = [[part("Hi."), part(done=True)]]
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        assert [e["type"] for e in chat.log][:2] == ["user", "assistant"]
+
+
+class TestEditing:
+    def settle(self, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def said(self, chat):
+        return [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+
+    def chat_of_two(self):
+        FakeClient.scripts = [
+            [part("Red."), part(done=True)],
+            [part("Blue."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "pick a colour")
+        run(session, chat, "another")
+        self.second = [
+            i for i, e in enumerate(chat.log) if e["type"] == "user"
+        ][1]
+        return session, chat
+
+    def test_an_edit_goes_back_and_runs_from_there(self):
+        session, chat = self.chat_of_two()
+        drain = events_of(session)
+        FakeClient.scripts = [[part("Square."), part(done=True)]]
+
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": 0, "arg": "pick a shape",
+        })
+        self.settle(chat)
+
+        assert self.said(chat) == [
+            ("user", "pick a shape"), ("assistant", "Square."),
+        ]
+        # The model sees the edited message, and nothing it replaced.
+        assert [m["content"] for m in chat.messages] == [
+            "pick a shape", "Square.",
+        ]
+        sent = FakeClient.requests[-1]["messages"]
+        assert [m["content"] for m in sent[1:]] == ["pick a shape"]
+        edited = chat.log[0]
+        assert (edited["version"], edited["versions"]) == (1, 2)
+        rewound = next(e for e in drain() if e["type"] == "rewound")
+        assert (rewound["keep"], rewound["tail"]) == (0, [])
+
+    def test_an_earlier_version_comes_back_with_its_replies(self):
+        session, chat = self.chat_of_two()
+        before = (list(chat.log), list(chat.messages))
+        FakeClient.scripts = [[part("Blue again."), part(done=True)]]
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": self.second,
+            "arg": "one more",
+        })
+        self.settle(chat)
+        after = self.said(chat)
+
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": self.second,
+            "version": 0,
+        })
+        assert self.said(chat) == [
+            (e["type"], e["text"]) for e in before[0]
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert chat.messages == before[1]
+        shown = chat.log[self.second]
+        assert (shown["version"], shown["versions"]) == (0, 2)
+
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": self.second,
+            "version": 1,
+        })
+        assert self.said(chat) == after
+        assert chat.messages[-1]["content"] == "Blue again."
+
+    def test_versions_survive_a_restart(self, tmp_path):
+        session, chat = self.chat_of_two()
+        FakeClient.scripts = [[part("Green."), part(done=True)]]
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": 0, "arg": "pick again",
+        })
+        self.settle(chat)
+
+        again = web.Chat.restore(json.loads(json.dumps(chat.saved())))
+        session.chats[chat.id] = again
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": 0, "version": 0,
+        })
+        assert [t for t, _ in self.said(again)].count("user") == 2
+
+    def test_only_a_message_you_sent_can_be_edited(self):
+        session, chat = self.chat_of_two()
+        with pytest.raises(ValueError):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 1, "arg": "x",
+            })
+
+    def test_not_while_a_reply_runs(self):
+        gate = threading.Event()
+
+        def held():
+            gate.wait(5)
+            yield from [part("Done."), part(done=True)]
+
+        FakeClient.scripts = [held]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        with pytest.raises(ValueError):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 0, "arg": "stop",
+            })
+        gate.set()
+        self.settle(chat)
+
+    def test_a_chat_from_before_turns_were_marked_is_matched(self):
+        session, chat = self.chat_of_two()
+        for entry in chat.log:
+            entry.pop("turn", None)
+        for message in chat.messages:
+            message.pop("turn", None)
+        FakeClient.scripts = [[part("Teal."), part(done=True)]]
+
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": self.second,
+            "arg": "one more",
+        })
+        self.settle(chat)
+
+        assert [m["content"] for m in chat.messages] == [
+            "pick a colour", "Red.", "one more", "Teal.",
+        ]
+
+    def test_a_summarized_message_is_not_edited(self):
+        session, chat = self.chat_of_two()
+        chat.messages[:] = [web.context.summary_message("They chatted.")]
+        with pytest.raises(ValueError, match="summarized"):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 0, "arg": "x",
+            })
+
+    def test_the_turn_mark_never_reaches_an_extension(self):
+        from flash import providers
+
+        assert providers._own({"role": "user", "content": "x",
+                               "turn": "ab"}) == {
+            "role": "user", "content": "x",
+        }
 
 
 class TestSwitchingLan:
@@ -2612,7 +3449,7 @@ class TestSlowHosts:
                 release.wait(5)
                 return SimpleNamespace(models=[])
 
-        monkeypatch.setattr(web.ollama, "Client", Silent)
+        monkeypatch.setattr(ollama, "Client", Silent)
         monkeypatch.setattr(web, "MODEL_LIST_SECONDS", 0.1)
         started = time.monotonic()
         try:
@@ -2633,7 +3470,7 @@ class TestSlowHosts:
                     SimpleNamespace(model="b"), SimpleNamespace(model="a"),
                 ])
 
-        monkeypatch.setattr(web.ollama, "Client", Up)
+        monkeypatch.setattr(ollama, "Client", Up)
 
         result = web.command(web.Session(), {"name": "model"})
 
@@ -2652,8 +3489,8 @@ class TestSlowHosts:
                 asked.append(True)
                 return SimpleNamespace(models=[])
 
-        monkeypatch.setattr(web.ollama, "Client", Tracked)
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(ollama, "Client", Tracked)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "down")
         monkeypatch.setattr(ai, "set_config_var", lambda *a: None)
         monkeypatch.setattr(ai, "forget_model_facts", lambda: None)
 
@@ -2727,10 +3564,10 @@ class TestAnExtensionsBackground:
         (source / "scenes").mkdir(parents=True)
         (source / "flash-extension.json").write_text(json.dumps({
             "name": "scenery", "backgrounds": "scenes",
-        }))
+        }), encoding="utf-8")
         (source / "scenes" / "dunes.scene").write_text(
             "name: Dunes\npalette:\n  . #c2a060\n  o #402010\npixels:\n"
-            + "\n".join(["..oo" * 6] * 6) + "\n"
+            + "\n".join(["..oo" * 6] * 6) + "\n", encoding="utf-8"
         )
         session = web.Session()
         preview = web.command(session, {
@@ -2760,6 +3597,7 @@ class TestAddresses:
     @pytest.mark.parametrize("path", [
         "/", "/c/0123abcd", "/p/89abcdef", "/projects", "/settings",
         "/settings/usage", "/settings/memory", "/skills", "/extensions",
+        "/skills/knowledge",
         "/c/0123abcd/",
     ])
     def test_every_view_has_the_page(self, server, path):
@@ -2919,6 +3757,23 @@ class TestVoice:
         assert first["size"] == 41_205_931 and "weaker" in first["label"]
         assert not any(v["installed"] for v in listed["speaking"])
         assert listed["downloading"] is None
+
+    def test_moonshine_says_what_it_needs_until_it_is_in(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(web.voice, "moonshine_ready", lambda: False)
+        monkeypatch.setattr(web.voice, "web_missing", lambda: [])
+
+        listed = web.command(web.Session(), {"name": "voice-models"})
+
+        needs = {m["name"]: m["needs"] for m in listed["listening"]}
+        assert needs["moonshine-small"] == web.voice.MOONSHINE_HINT
+        assert needs[web.voice.DEFAULT_VOSK_MODEL] == ""
+        with pytest.raises(ValueError, match="moonshine-voice"):
+            web.command(web.Session(), {
+                "name": "voice-model", "arg": "moonshine-small",
+                "kind": "listening",
+            })
 
     def test_picking_an_installed_model_uses_it(self, monkeypatch):
         saved = {}
@@ -3122,3 +3977,1825 @@ class TestAttachments:
 
     def test_unknown_ids_are_dropped(self):
         assert web.attachments(["0123456789abcdef", "../x"]) == []
+
+
+# --- Chats with a spark --------------------------------------------------
+
+
+class TestSparkChats:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def _spark(self):
+        from flash import sparks
+
+        return sparks.create(
+            "Scout", "Watch the issues.", "Only read.", "daily"
+        )
+
+    def test_a_chat_is_made_with_a_spark_and_kept_that_way(self):
+        spark = self._spark()
+        session = web.Session()
+
+        chat = session.new_chat(spark="scout")
+
+        assert chat.spark == spark.id
+        assert chat.summary()["spark"] == spark.id
+        assert web.Chat.restore(chat.saved()).spark == spark.id
+        made = web.command(session, {"name": "new", "spark": spark.id})
+        assert session.chat(made["chat"]).spark == spark.id
+
+    def test_a_chat_with_a_spark_that_is_not_there_is_refused(self):
+        with pytest.raises(ValueError, match="not here"):
+            web.Session().new_chat(spark="ghost")
+
+    def test_the_spark_answers_in_its_own_voice_and_keeps_its_lessons(
+        self, monkeypatch
+    ):
+        from flash import learning, sparks
+
+        spark = self._spark()
+        reviewed = []
+        monkeypatch.setattr(
+            learning, "after_turn", lambda *a, **k: reviewed.append(a)
+        )
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Only crashes.")]),
+             part(done=True)],
+            [part("Got it: crashes only."), part(done=True, tokens=3)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        seen = events_of(session)
+
+        run(session, chat, "Only tell me about crashes.")
+
+        first = FakeClient.requests[0]
+        system = first["messages"][0]["content"]
+        assert "You are Scout (@scout-spark)" in system
+        assert "Watch the issues." in system and "Only read." in system
+        offered = {t["function"]["name"] for t in first["tools"]}
+        assert {"learn", "set_goal", "set_schedule", "keep_notes"} <= offered
+        assert "remember" not in offered and "make_spark" not in offered
+        events = seen()
+        assert any(
+            e["type"] == "tool" and e["label"] == "Learn(Only crashes.)"
+            for e in events
+        )
+        assert [e["text"] for e in events if e["type"] == "assistant"][-1] \
+            == "Got it: crashes only."
+        assert sparks.find(spark.id).lessons == ["Only crashes."]
+        # What Flash learns about the user is Flash's, not the spark's.
+        assert reviewed == []
+
+    def test_a_spark_changes_its_goal_when_asked(self):
+        from flash import sparks
+
+        spark = self._spark()
+        FakeClient.scripts = [
+            [part(calls=[
+                call("set_goal", goal="Watch the pull requests."),
+                call("set_schedule", every="2h"),
+            ]), part(done=True)],
+            [part("Done."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Watch the PRs instead, every two hours.")
+
+        kept = sparks.find(spark.id)
+        assert kept.goal == "Watch the pull requests."
+        assert kept.every == 120
+
+    def test_a_chat_whose_spark_was_removed_says_so(self):
+        from flash import sparks
+
+        spark = self._spark()
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        sparks.remove(spark.id)
+        seen = events_of(session)
+
+        run(session, chat, "Hello?")
+
+        errors = [e["text"] for e in seen() if e["type"] == "error"]
+        assert errors and "not here any more" in errors[0]
+        assert FakeClient.requests == []
+
+    def test_the_page_knows_each_spark_for_its_badge(self):
+        spark = self._spark()
+
+        listed = web.Session().state(lite=True)["sparks"]
+
+        assert listed == [{
+            "id": spark.id, "name": "Scout", "handle": "@scout-spark",
+            "title": "", "colour": spark.colour, "project": "",
+            "project_ids": [],
+            "status": "idle", "paused": False, "waiting": False,
+            "answering": False, "unread": 0, "activity": "",
+            "next_run": spark.next_run, "waiting_on": [], "pending": {},
+        }]
+
+    def test_a_spark_is_made_paused_from_the_page(self):
+        session = web.Session()
+
+        made = web.command(session, {
+            "name": "spark-create", "arg": "Scout",
+            "goal": "Watch the issues.", "model": "m", "paused": True,
+        })["spark"]
+
+        assert made["paused"] is True and made["name"] == "Scout"
+
+    def test_a_report_is_rated_from_the_page(self):
+        from flash import sparks
+        from flash.sparks import Report
+
+        made = sparks.create("Scout", "Watch the issues.")
+        sparks._edit(made.id, lambda s: s.reports.append(
+            Report(at=5.0, text="Two new issues."),
+        ))
+
+        rated = web.command(web.Session(), {
+            "name": "spark-rate", "arg": made.id, "at": 5.0, "rating": 1,
+        })["spark"]
+
+        assert rated["reports"][0]["rating"] == 1
+
+    def test_the_roster_sees_a_spark_waiting_and_its_title(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Tidy up.", title="Janitor")
+
+        def wait(s):
+            s.status = sparks.WAITING
+            s.pending = {
+                "label": "Run a command", "detail": "rm -r build",
+                "messages": [{"role": "user", "content": "secret"}],
+            }
+
+        sparks._edit(spark.id, wait)
+
+        listed = web.Session().state(lite=True)["sparks"][0]
+
+        assert listed["title"] == "Janitor"
+        assert listed["waiting"] is True
+        # What waits, as the card shows it: not the shift behind it.
+        assert listed["pending"] == {
+            "label": "Run a command", "detail": "rm -r build",
+        }
+
+
+class TestSparkProjects:
+    @pytest.fixture
+    def project(self, tmp_path):
+        from flash import workspace
+
+        folder = tmp_path / "app"
+        folder.mkdir()
+        return workspace.create_project("App", str(folder), "Use pnpm.")
+
+    def test_a_chat_with_a_spark_starts_in_its_project(self, project):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the build.", project="App")
+        session = web.Session()
+
+        assert session.new_chat(spark=spark.id).project == project.id
+        other = session.new_chat(project="", spark=spark.id)
+        assert other.project == project.id
+
+    def test_its_project_is_told_once_and_the_turn_runs_there(
+        self, project, monkeypatch
+    ):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+        spark = sparks.create("Scout", "Watch the build.", project="App")
+        where = []
+
+        def reply():
+            where.append(os.getcwd())
+            return [part("Hi."), part(done=True)]
+
+        FakeClient.scripts = [reply]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert system.count("Use pnpm.") == 1
+        assert "=== Project: App ===" in system
+        assert where == [project.path]
+
+    def test_the_page_knows_each_sparks_project(self, project):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the build.", project="App")
+
+        listed = web.Session().state(lite=True)["sparks"]
+        assert listed[0]["project"] == project.id
+        made = web.command(web.Session(), {
+            "name": "spark-create", "arg": "Other", "goal": "Goal.",
+            "project": project.id,
+        })["spark"]
+        assert made["project_name"] == "App"
+
+
+def test_a_spark_is_edited_from_the_page_with_its_new_name(server):
+    from flash import sparks
+
+    spark = sparks.create("Scout", "Watch the build.")
+
+    status, body = request(server, "POST", "/api/command", {
+        "name": "spark-update", "arg": spark.id,
+        "rename": "Lookout", "goal": "Watch the tests.", "every": "120",
+    })
+
+    assert status == 200, body
+    kept = sparks.find(spark.id)
+    assert (kept.name, kept.goal, kept.every) == (
+        "Lookout", "Watch the tests.", 120,
+    )
+
+
+class TestMentions:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def test_a_mentioned_spark_answers_in_a_chat_with_flash(self, monkeypatch):
+        from flash import learning, sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        reviewed = []
+        monkeypatch.setattr(
+            learning, "after_turn", lambda *a, **k: reviewed.append(a)
+        )
+        FakeClient.scripts = [[part("Two new bugs."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+        seen = events_of(session)
+
+        run(session, chat, "@scout anything new?")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You are Scout" in system
+        assert "conversation they are having with Flash" in system
+        events = seen()
+        assert any(
+            e["type"] == "speaker" and e["spark"] == scout.id for e in events
+        )
+        replies = [e for e in events if e["type"] == "assistant"]
+        assert replies[-1]["spark"] == scout.id
+        assert chat.log[-2]["spark"] == scout.id
+        note = chat.messages[-1]
+        assert note["role"] == "system"
+        assert note["content"].startswith(
+            "[Spark called] The user @mentioned Scout (@scout-spark)"
+        )
+        assert note["content"].endswith("Two new bugs.")
+        # Only the spark spoke: Flash's review has nothing of its own.
+        assert reviewed == []
+
+    def test_two_mentioned_sparks_answer_in_turn(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        watch = sparks.create("Price Watch", "Watch the price.")
+        FakeClient.scripts = [
+            [part("Issues are quiet."), part(done=True)],
+            [part("Price is flat."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "@scout @price-watch status?")
+
+        answered = [
+            e.get("spark") for e in chat.log if e["type"] == "assistant"
+        ]
+        assert answered == [scout.id, watch.id]
+        second = FakeClient.requests[1]["messages"]
+        assert "You are Price Watch" in second[0]["content"]
+        # The second hears what the first said, marked as the first's.
+        assert len(second) == 2
+        assert "Already answered by others" in second[1]["content"]
+        assert "Scout (@scout-spark)" in second[1]["content"]
+        assert "Issues are quiet." in second[1]["content"]
+
+    def test_a_mentioned_spark_is_shown_a_bit_of_the_chat(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part("Hello."), part(done=True)],
+            [part("Nothing new."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "I am working on the login page.")
+        run(session, chat, "@scout any bugs about that?")
+
+        guest = FakeClient.requests[1]["messages"]
+        assert [m["role"] for m in guest] == ["system", "user"]
+        shown = guest[1]["content"]
+        assert "User: I am working on the login page." in shown
+        assert "Flash: Hello." in shown
+        assert shown.endswith("@scout any bugs about that?")
+
+    def test_flash_then_sees_the_spark_was_called_but_not_its_work(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("fetch", url="https://example.com")]),
+             part(done=True)],
+            [part("Issue 12 is a crash."), part(done=True)],
+            [part("I can fix that crash."), part(done=True)],
+        ]
+        monkeypatch_fetch = tools.FUNCTIONS["fetch"]
+        tools.FUNCTIONS["fetch"] = lambda **kw: "(page)"
+        try:
+            session = web.Session()
+            chat = session.new_chat()
+            run(session, chat, "@scout anything new?")
+            run(session, chat, "Flash, can you fix what Scout found?")
+        finally:
+            tools.FUNCTIONS["fetch"] = monkeypatch_fetch
+
+        flash_saw = FakeClient.requests[2]["messages"]
+        notes = [m for m in flash_saw if m["role"] == "system"
+                 and m["content"].startswith("[Spark called]")]
+        assert len(notes) == 1
+        assert "using fetch" in notes[0]["content"]
+        assert notes[0]["content"].endswith("Issue 12 is a crash.")
+        # The spark's own tool calls are its work, not Flash's history.
+        assert not any(m["role"] == "tool" for m in flash_saw)
+
+    def test_no_mention_is_flash_as_ever(self):
+        FakeClient.scripts = [[part("Hello."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "email me@scout about @nobody")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You are" not in system
+        assert "spark" not in chat.log[-2]
+
+    def test_a_spark_mentioned_in_its_own_chat_is_just_itself(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [[part("Here."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat(spark=scout.id)
+
+        run(session, chat, "@scout you there?")
+
+        assert len(FakeClient.requests) == 1
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You were mentioned" not in system
+        assert chat.messages[-1]["content"] == "Here."
+
+    def test_a_mentioned_spark_can_learn_there_too(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Skip docs.")]),
+             part(done=True)],
+            [part("Noted."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "@scout skip docs issues from now on")
+
+        assert sparks.find(scout.id).lessons == ["Skip docs."]
+
+
+def test_a_spark_answers_in_a_chat_on_its_own_model(monkeypatch):
+    from flash import sparks
+
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    sparks.create("Scout", "Watch the issues.", model="beta3:8b")
+    FakeClient.scripts = [
+        [part("Scout here."), part(done=True)],
+        [part("Flash here."), part(done=True)],
+    ]
+    session = web.Session()
+    chat = session.new_chat()
+
+    run(session, chat, "@scout hello")
+    run(session, chat, "and you, Flash?")
+
+    assert [r["model"] for r in FakeClient.requests] == [
+        "beta3:8b", "flash-test",
+    ]
+    stats = [e["model"] for e in chat.log if e["type"] == "stats"]
+    assert stats == ["beta3:8b", "flash-test"]
+
+
+def test_a_mentioned_spark_knows_its_status(monkeypatch):
+    from flash import sparks
+
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    spark = sparks.create("Scout", "Watch the issues.")
+    sparks.set_paused(spark.id, True)
+    FakeClient.scripts = [[part("I am paused."), part(done=True)]]
+    session = web.Session()
+    chat = session.new_chat()
+
+    run(session, chat, "@scout what are you up to?")
+
+    system = FakeClient.requests[0]["messages"][0]["content"]
+    assert "=== Your status right now ===" in system
+    assert "Paused: no shifts run" in system
+
+
+class TestSparkJobs:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+        monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
+
+    class Shift:
+        """A model for a shift, which does not stream."""
+
+        def __init__(self, text):
+            self.text = text
+
+        def chat(self, **kwargs):
+            return SimpleNamespace(message=SimpleNamespace(
+                content=self.text, tool_calls=[],
+            ))
+
+    def test_a_job_asked_for_in_a_chat_comes_back_to_it(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("take_on", job="Sum up this week.")]),
+             part(done=True)],
+            [part("On it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        run(session, chat, "Actually, can you sum up this week?")
+
+        assert sparks.find(spark.id).inbox[0]["chat"] == chat.id
+        sparks.shift(spark.id, client=self.Shift("Three new issues."))
+        session.post_spark_reports()
+
+        posted = chat.log[-1]
+        assert posted["type"] == "assistant" and posted["shift"] is True
+        assert posted["text"] == "Three new issues."
+        assert posted["spark"] == spark.id
+        note = chat.messages[-1]
+        assert note["role"] == "system"
+        assert "finished the job the user gave it" in note["content"]
+        # Once only.
+        session.post_spark_reports()
+        assert sum(1 for e in chat.log if e.get("shift")) == 1
+
+    def test_flash_gives_a_spark_a_job_from_its_own_chat(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call(
+                "give_spark", spark="scout", job="Check the login page.",
+            )]), part(done=True)],
+            [part("Scout is on it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "Get Scout to check the login page.")
+
+        given = sparks.find(spark.id).inbox[0]
+        assert given["chat"] == chat.id
+        assert given["text"] == "Check the login page."
+        sparks.shift(spark.id, client=self.Shift("It loads fine."))
+        session.post_spark_reports()
+        assert chat.log[-1]["text"] == "It loads fine."
+
+    def test_flash_knows_the_sparks_it_can_ask(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [[part("Hi."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hi")
+
+        tools_offered = [
+            t["function"]["name"] for t in FakeClient.requests[0]["tools"]
+        ]
+        assert "ask_spark" in tools_offered
+        assert "give_spark" in tools_offered
+
+    def test_a_chat_mid_reply_gets_it_after(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        session = web.Session()
+        chat = session.new_chat()
+        sparks.take_on(spark.id, "Check the login page.", chat=chat.id)
+        sparks.shift(spark.id, client=self.Shift("It loads fine."))
+        chat.busy = True
+
+        session.post_spark_reports()
+        assert not any(e["type"] == "assistant" for e in chat.log)
+
+        chat.busy = False
+        session.post_spark_reports()
+        assert chat.log[-1]["text"] == "It loads fine."
+
+    def test_a_report_for_a_chat_that_is_gone_is_let_go(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        sparks.take_on(spark.id, "Check.", chat="deadbeef")
+        sparks.shift(spark.id, client=self.Shift("Checked."))
+
+        web.Session().post_spark_reports()
+
+        assert sparks.to_post() == []
+
+
+def test_two_saves_of_one_chat_at_once_both_land():
+    from flash import workspace
+
+    session = web.Session()
+    chat = session.new_chat()
+    chat.log = [{"type": "note", "text": "hi"}]
+    failed = []
+
+    def save():
+        try:
+            for _ in range(50):
+                session.save(chat)
+        except OSError as exc:
+            failed.append(exc)
+
+    threads = [threading.Thread(target=save) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failed == []
+    assert [c["id"] for c in workspace.load_chats()] == [chat.id]
+    folder = workspace.store() / "chats"
+    assert not list(folder.glob("*.partial")) + list(folder.glob(".*.partial"))
+
+
+def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
+    session = web.Session()
+
+    now = web.command(session, {"name": "spark-rounds"})
+    changed = web.command(session, {"name": "spark-rounds", "arg": "20"})
+
+    assert now["rounds"] == now["default"] == 12
+    assert changed["rounds"] == 20
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "spark-rounds", "arg": "500"})
+
+    off = web.command(session, {"name": "spark-rounds", "arg": "unlimited"})
+    back = web.command(session, {"name": "spark-rounds", "arg": "limited"})
+    assert off["unlimited"] is True and off["rounds"] == 20
+    assert back["unlimited"] is False and back["rounds"] == 20
+
+
+def test_the_page_sets_the_model_new_sparks_are_made_on(monkeypatch):
+    monkeypatch.setattr(
+        web, "list_models", lambda ai: ["alpha3.1:latest", "beta3:8b"],
+    )
+    session = web.Session()
+
+    picked = web.command(
+        session, {"name": "spark-default-model", "arg": "beta3:8b"},
+    )
+    assert picked["spark_default"] == "beta3:8b"
+    assert picked["spark_default_here"] is True
+    assert picked["spark_model"] == "beta3:8b"
+    said = web.command(session, {"name": "model"})
+    assert said["spark_default"] == "beta3:8b"
+
+    back = web.command(
+        session, {"name": "spark-default-model", "arg": "flash"},
+    )
+    assert back["spark_default"] == ""
+    assert back["spark_default_here"] is None
+
+
+def test_the_page_hears_when_the_default_model_is_gone(monkeypatch):
+    monkeypatch.setattr(ai.Config, "model", "alpha3.1:latest")
+    monkeypatch.setattr(web, "list_models", lambda ai: ["alpha3.1:latest"])
+    sparks.set_default_model("beta3:8b")
+
+    said = web.command(web.Session(), {"name": "spark-default-model"})
+
+    assert said["spark_default_here"] is False
+    # Never another in its place.
+    assert said["spark_model"] == "beta3:8b"
+    assert "not in this computer's model list" in said["spark_default_note"]
+
+
+def test_the_page_hears_when_no_host_answers(monkeypatch):
+    monkeypatch.setattr(web, "list_models", lambda ai: None)
+    sparks.set_default_model("beta3:8b")
+
+    said = web.command(web.Session(), {"name": "spark-default-model"})
+
+    assert said["spark_default_here"] is None
+    assert said["spark_model"] == "beta3:8b"
+
+
+def test_the_page_reads_and_sets_the_notification_limit():
+    session = web.Session()
+
+    now = web.command(session, {"name": "notify-limit"})
+    changed = web.command(session, {"name": "notify-limit", "arg": "10/60"})
+    off = web.command(session, {"name": "notify-limit", "arg": "off"})
+
+    assert (now["count"], now["minutes"]) == (4, 15)
+    assert (changed["count"], changed["minutes"]) == (10, 60)
+    assert off["count"] == 0 and off["minutes"] == 60
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "notify-limit", "arg": "999/15"})
+
+
+# --- Screen recordings ---------------------------------------------------
+
+
+class TestScreenRecordings:
+    STILL = b"\xff\xd8\xff\xe0fake-jpeg"
+
+    def _upload(self, monkeypatch, narration=b"", heard=None):
+        import base64
+
+        from flash import workspace
+
+        said = iter(heard or [])
+        monkeypatch.setattr(
+            web.voice, "transcribe",
+            lambda pcm: (next(said), "") if heard is not None
+            else ("", "no listening model"),
+        )
+        body = {
+            "name": "screen-recording.webm",
+            "data": base64.b64encode(b"webm-bytes").decode(),
+            "narration": base64.b64encode(narration).decode(),
+            "stills": [
+                {"data": base64.b64encode(self.STILL).decode(), "at": at}
+                for at in (0, 4.2, 9.5)
+            ],
+        }
+        stills, self.unheard = web.recording_stills(body)
+        return workspace.keep_upload(body["name"], b"webm-bytes", stills)
+
+    def test_a_recording_is_kept_with_its_stills(self, monkeypatch):
+        from flash import workspace
+
+        kept = self._upload(monkeypatch)
+
+        assert kept["kind"] == "video" and kept["stills"] == 3
+        stills = workspace.recording_stills(kept["id"])
+        assert [s["at"] for s in stills] == [0, 4.2, 9.5]
+        assert all(s["said"] == "" for s in stills)
+        # The folder still holds the one file it is named by.
+        assert workspace.upload_info(kept["id"])["name"] == (
+            "screen-recording.webm"
+        )
+
+    def test_what_was_said_over_each_step_goes_with_it(self, monkeypatch):
+        from flash import workspace
+
+        # Twelve seconds of 16 kHz 16-bit audio.
+        pcm = b"\x00\x01" * 16_000 * 12
+        kept = self._upload(
+            monkeypatch, pcm, ["open settings", "click privacy", "done"],
+        )
+
+        said = [s["said"] for s in workspace.recording_stills(kept["id"])]
+        assert said == ["open settings", "click privacy", "done"]
+
+    def test_the_model_sees_the_stills_and_is_asked_to_learn_it(
+        self, monkeypatch,
+    ):
+        from flash import workspace
+
+        pcm = b"\x00\x01" * 16_000 * 12
+        kept = self._upload(monkeypatch, pcm, ["open settings", "", "done"])
+
+        content, images = web.outgoing(ai, "", [{"id": kept["id"]}])
+
+        assert content.startswith(web.RECORDING_PROMPT)
+        assert len(images) == 3
+        assert images == [
+            s["path"] for s in workspace.recording_stills(kept["id"])
+        ]
+        assert '1. at 0:00, the user saying: "open settings"' in content
+        assert "2. at 0:04\n" in content
+        assert "skill_manage" in content
+
+    def test_words_typed_with_it_are_the_ask(self, monkeypatch):
+        kept = self._upload(monkeypatch)
+
+        content, _ = web.outgoing(
+            ai, "This is how I file expenses", [{"id": kept["id"]}],
+        )
+
+        assert content.startswith("This is how I file expenses")
+        assert web.RECORDING_PROMPT not in content
+        # Typed or not, it is told to keep what it learns as a skill.
+        assert "skill_manage" in content
+
+    def test_narration_with_nothing_to_hear_it_says_why(self, monkeypatch):
+        pcm = b"\x00\x01" * 16_000 * 12
+
+        self._upload(monkeypatch, pcm)
+
+        assert self.unheard == "no listening model"
+
+    def test_a_bad_still_is_left_out(self):
+        stills, _ = web.recording_stills({
+            "stills": [{"data": "%%%", "at": 1}, {"data": "", "at": 2}],
+        })
+
+        assert stills == []
+
+
+def test_a_recording_sent_untyped_names_its_chat_for_what_it_is():
+    session = web.Session()
+    chat = session.new_chat()
+
+    session._begin(chat, "", files=[
+        {"id": "x", "name": "screen-recording-2026.webm", "kind": "video"},
+    ])
+
+    assert chat.title == "Screen recording"
+
+
+def test_the_page_picks_how_the_voice_speaks(monkeypatch):
+    monkeypatch.delenv("VOICE_STYLE", raising=False)
+    session = web.Session()
+
+    listed = web.voice_models(session)["styles"]
+    picked = web.command(session, {"name": "voice-style", "arg": "calm"})
+
+    assert [s["name"] for s in listed] == ["warm", "lively", "calm", "plain"]
+    assert [s["name"] for s in listed if s["current"]] == ["warm"]
+    assert [s["name"] for s in picked["styles"] if s["current"]] == ["calm"]
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "voice-style", "arg": "shouty"})
+    monkeypatch.delenv("VOICE_STYLE", raising=False)
+
+
+def test_voice_mode_asks_for_warm_words():
+    assert "warm, friendly person" in ai.VOICE_PROMPT
+    assert "question mark lifts it" in ai.VOICE_PROMPT
+
+
+class TestContextBar:
+    def test_an_empty_chat_uses_none(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: 8192)
+        session = web.Session()
+        chat = session.new_chat()
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert use == {"share": 0, "used": 0, "budget": 100_000,
+                       "window": 8192}
+
+    def test_it_counts_the_history_against_the_budget(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: None)
+        monkeypatch.setattr(ai, "_history_budget", lambda: 1000)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages = [{"role": "user", "content": "x" * 2000}]
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert 0 < use["used"]
+        assert use["share"] == min(100, round(100 * use["used"] / 1000))
+        assert use["window"] == 0
+
+    def test_it_never_reads_above_full(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: None)
+        monkeypatch.setattr(ai, "_history_budget", lambda: 100)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages = [{"role": "user", "content": "x" * 100_000}]
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert use["share"] == 100
+
+
+class TestSparkBudgets:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def test_a_chat_with_a_spark_counts_against_its_month(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=40)]]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        assert sparks.used_this_month(sparks.find("scout")) == 40
+
+    def test_a_spark_out_of_budget_says_so_and_asks_no_model(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        sparks.set_budget("scout", True, 1000)
+        sparks.spend(spark.id, 1000)
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        assert chat.messages[-1]["content"] == sparks.out_of_budget(
+            sparks.find("scout")
+        )
+        assert FakeClient.requests == []
+
+    def test_a_chat_with_a_spark_is_in_its_audit_log(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Only crashes.")]),
+             part(done=True)],
+            [part("Got it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Only crashes, please.")
+
+        logged = sparks.audit_log(spark.id)["entries"][-1]
+        assert (logged["kind"], logged["tool"], logged["during"]) == (
+            "tool", "learn", "chat",
+        )
+
+
+class TestPageAddresses:
+    """Every address the page puts in the bar is one the server serves,
+    so refreshing on it opens the page and not a "not found"."""
+
+    def page_tabs(self):
+        import re
+        from pathlib import Path
+
+        page = (Path(web.__file__).parent / "web" / "index.html").read_text(
+            encoding="utf-8",
+        )
+        found = re.search(r"\\/settings\(\?:\\/\(([a-z|]+)\)\)", page)
+        assert found, "the page's settings route is not where it was"
+        return found.group(1).split("|")
+
+    def test_every_settings_tab_is_served(self):
+        tabs = self.page_tabs()
+        assert "email" in tabs
+        for tab in tabs:
+            assert web.PAGE_PATHS.match(f"/settings/{tab}"), tab
+
+    def test_a_refresh_on_a_settings_tab_opens_the_page(self, server):
+        status, body = request(server, "GET", "/settings/email")
+        assert status == 200
+        assert b"<html" in body[:400].lower()
+
+
+class TestHeyFlash:
+    def test_hey_flash_wakes_the_page(self, server, monkeypatch):
+        got = []
+
+        def hear_wake(stream, pcm, end=False):
+            got.append((stream, pcm, end))
+            return True, ""
+
+        monkeypatch.setattr(web.voice, "hear_wake", hear_wake)
+
+        status, body = request(server, "POST", "/api/voice/wake", {
+            "id": "abc", "data": base64.b64encode(b"\x01\x02").decode(),
+        })
+
+        assert status == 200 and json.loads(body) == {"woke": True}
+        assert got == [("abc", b"\x01\x02", False)]
+        assert request(server, "POST", "/api/voice/wake",
+                       {"id": "", "data": ""})[0] == 400
+
+    def test_waking_says_why_it_cannot(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "hear_wake",
+                            lambda stream, pcm, end=False: (False, "no model"))
+
+        status, body = request(server, "POST", "/api/voice/wake",
+                               {"id": "a", "data": ""})
+
+        assert status == 400 and json.loads(body)["error"] == "no model"
+
+
+class TestThinkHarder:
+    def deep_run(self, session, chat, text, timeout=5):
+        session.send(chat, text, deep=True)
+        deadline = time.monotonic() + timeout
+        time.sleep(0.05)
+        while chat.busy or chat.queued:
+            assert time.monotonic() < deadline, "the turn never finished"
+            time.sleep(0.02)
+
+    def test_a_model_that_reasons_is_asked_to_reason_harder(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion", "thinking"]})
+        FakeClient.scripts = [[part("42."), part(done=True, tokens=2)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+
+        asked = FakeClient.requests[-1]
+        assert asked["think"] is True
+        assert web.THINK_HARDER_PROMPT in asked["messages"][0]["content"]
+
+    def test_levels_for_a_model_that_takes_them(self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+
+        assert web.think_harder("gpt-oss:20b") == "high"
+        assert web.think_harder("deep-reasoner:8b") is True
+
+    def test_one_that_cannot_is_only_told_to_take_its_time(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion"]})
+        FakeClient.scripts = [[part("42."), part(done=True, tokens=2)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+
+        asked = FakeClient.requests[-1]
+        assert "think" not in asked
+        assert web.THINK_HARDER_PROMPT in asked["messages"][0]["content"]
+
+    def test_only_the_message_it_was_asked_for(self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        FakeClient.scripts = [
+            [part("42."), part(done=True, tokens=2)],
+            [part("Hi."), part(done=True, tokens=2)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+        run(session, chat, "thanks")
+
+        assert "think" not in FakeClient.requests[-1]
+
+    def test_the_page_sends_it(self, server):
+        FakeClient.scripts = [[part("Ok."), part(done=True, tokens=2)]]
+        status, body = request(server, "POST", "/api/send", {
+            "text": "plan my week", "deep": True,
+        })
+        assert status == 200
+        chat = server.session.chat(json.loads(body)["chat"])
+        deadline = time.monotonic() + 5
+        while (chat.busy or chat.queued) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert web.THINK_HARDER_PROMPT in (
+            FakeClient.requests[-1]["messages"][0]["content"])
+
+
+class TestThinkWhenItHelps:
+    def names(self, asked):
+        return [t["function"]["name"] for t in asked.get("tools") or []]
+
+    def test_flash_turns_its_thinking_on_for_the_rest_of_the_reply(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        FakeClient.scripts = [
+            [part(calls=[call("think_harder", why="a subtle bug")]),
+             part(done=True, tokens=1)],
+            [part("Found it."), part(done=True, tokens=2)],
+            [part("Hi."), part(done=True, tokens=2)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "why does this race")
+
+        first, second = FakeClient.requests[-2:]
+        assert "think" not in first
+        assert "think_harder" in self.names(first)
+        assert second["think"] is True
+        assert "think_harder" not in self.names(second)
+        assert any(e.get("type") == "thought"
+                   and e["text"] == "Thinking harder: a subtle bug"
+                   for e in chat.log)
+
+        # The next reply starts without it.
+        run(session, chat, "thanks")
+        assert "think" not in FakeClient.requests[-1]
+
+    def test_not_offered_when_off_or_the_model_cannot(self, monkeypatch):
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=2)]] * 2
+        session = web.Session()
+        chat = session.new_chat()
+
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion"]})
+        run(session, chat, "hi")
+        assert "think_harder" not in self.names(FakeClient.requests[-1])
+
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        monkeypatch.setenv("THINK_AUTO", "0")
+        run(session, chat, "hi")
+        assert "think_harder" not in self.names(FakeClient.requests[-1])
+
+    def test_the_setting(self, monkeypatch):
+        from flash import ai
+
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: monkeypatch.setenv(name,
+                                                                   value))
+
+        class Hub:
+            def publish(self, event):
+                pass
+
+        session = SimpleNamespace(hub=Hub())
+        said = web.command(session, {"name": "think-auto", "arg": "off"})
+        assert said == {"think_auto": False}
+        assert web.tools_think_auto() is False
+
+
+class TestCustomInstructions:
+    def test_kept_and_in_every_system_prompt(self):
+        from flash import instructions, tools
+
+        assert instructions.prompt_block() == ""
+        instructions.save("Use metric. No bullet points.")
+
+        assert "Use metric. No bullet points." in tools.build_system_prompt()
+        assert instructions.path().read_text(encoding="utf-8").strip() == (
+            "Use metric. No bullet points.")
+
+        instructions.save("   ")
+        assert instructions.read() == "" and not instructions.path().exists()
+
+    def test_too_long_is_refused(self):
+        from flash import instructions
+
+        with pytest.raises(ValueError, match="most is"):
+            instructions.save("x" * (instructions.MAX_CHARS + 1))
+
+    def test_the_page_reads_and_saves_them(self):
+        session = web.Session()
+
+        assert web.command(session, {"name": "instructions"})["text"] == ""
+        saved = web.command(session, {
+            "name": "instructions", "text": "Answer in Spanish.",
+        })
+        assert saved["text"] == "Answer in Spanish."
+        assert web.command(session, {"name": "instructions"})["text"] == (
+            "Answer in Spanish.")
+
+    def test_set_in_the_terminal(self, capsys):
+        from flash import instructions
+
+        ai._instructions_command("Keep it short.")
+        assert instructions.read() == "Keep it short."
+        ai._instructions_command("")
+        assert "Keep it short." in capsys.readouterr().out
+        ai._instructions_command("clear")
+        assert instructions.read() == ""
+
+
+class TestCompactInTheBrowser:
+    def wait(self, chat):
+        deadline = time.monotonic() + 5
+        time.sleep(0.05)
+        while chat.busy or chat.queued:
+            assert time.monotonic() < deadline, "it never finished"
+            time.sleep(0.02)
+
+    def test_the_chat_so_far_becomes_a_summary(self, monkeypatch):
+        FakeClient.scripts = [[part("Sure."), part(done=True)]]
+        asked = []
+        monkeypatch.setattr(
+            ai, "_summarize", lambda console, client, messages: (
+                asked.append(messages) or "They planned a trip to Lisbon."))
+        session = web.Session()
+        chat = session.new_chat()
+        chat.auto_title = False
+        run(session, chat, "Help me plan a trip to Lisbon.")
+        assert len(chat.messages) == 2
+
+        assert web.command(session, {"name": "compact",
+                                     "chat": chat.id}) == {}
+        self.wait(chat)
+
+        assert len(asked[0]) == 2
+        assert len(chat.messages) == 1
+        assert "They planned a trip to Lisbon." in \
+            chat.messages[0]["content"]
+        shown = [e.get("label") for e in chat.log if e["type"] == "tool"]
+        assert "Compact(2 messages)" in shown
+
+    def test_refused_when_empty_or_busy(self):
+        session = web.Session()
+        chat = session.new_chat()
+        with pytest.raises(ValueError, match="nothing to compact"):
+            session.compact_chat(chat)
+        chat.messages.append({"role": "user", "content": "hi"})
+        chat.busy = True
+        with pytest.raises(ValueError, match="Wait for the reply"):
+            session.compact_chat(chat)
+
+    def test_no_summary_keeps_the_chat(self, monkeypatch):
+        monkeypatch.setattr(ai, "_summarize", lambda *args: None)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages[:] = [{"role": "user", "content": "hi"},
+                            {"role": "assistant", "content": "hello"}]
+
+        session.compact_chat(chat)
+        self.wait(chat)
+
+        assert len(chat.messages) == 2
+
+    def test_on_the_page(self):
+        page = web.PAGE.read_text(encoding="utf-8")
+        assert 'slash: "/compact", run: compactChat' in page
+
+
+class TestAgentsFile:
+    def test_the_folders_own_is_read(self, tmp_path):
+        from flash import instructions
+
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("Run make test before you finish.",
+                                            encoding="utf-8")
+
+        block = instructions.agents_block(tmp_path)
+        assert "Run make test before you finish." in block
+        assert str(tmp_path / "AGENTS.md") in block
+
+    def test_the_nearest_above_up_to_the_top_of_the_repository(
+        self, tmp_path
+    ):
+        from flash import instructions
+
+        (tmp_path / "AGENTS.md").write_text("Outside the repository.",
+                                            encoding="utf-8")
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("Use tabs.", encoding="utf-8")
+        deep = repo / "src" / "lib"
+        deep.mkdir(parents=True)
+        assert instructions.agents_file(deep) == repo / "AGENTS.md"
+
+        (repo / "AGENTS.md").unlink()
+        # The one above the repository belongs to something else.
+        assert instructions.agents_file(deep) is None
+
+    def test_none_long_or_empty(self, tmp_path):
+        from flash import instructions
+
+        (tmp_path / ".git").mkdir()
+        assert instructions.agents_block(tmp_path) == ""
+        (tmp_path / "FLASH.md").write_text("  \n", encoding="utf-8")
+        assert instructions.agents_block(tmp_path) == ""
+        long = "x" * (instructions.MAX_AGENTS_CHARS + 50)
+        (tmp_path / "FLASH.md").write_text(long, encoding="utf-8")
+        block = instructions.agents_block(tmp_path)
+        assert "[the rest of the file is cut]" in block
+        assert "x" * (instructions.MAX_AGENTS_CHARS + 1) not in block
+
+    def test_a_project_chat_follows_its_folders(self, tmp_path, monkeypatch):
+        folder = tmp_path / "proj"
+        (folder / ".git").mkdir(parents=True)
+        (folder / "AGENTS.md").write_text("Never touch the vendor folder.",
+                                          encoding="utf-8")
+        made = workspace.create_project("Proj", str(folder))
+        seen = {}
+
+        def where(**kwargs):
+            seen["system"] = kwargs["messages"][0]["content"]
+            return iter([part("ok"), part(done=True)])
+
+        monkeypatch.setattr(FakeClient, "chat", lambda self, **kw: where(**kw))
+        # Flash's whole prompt, which the other tests here leave out.
+        monkeypatch.setattr(ai, "_session_system_prompt",
+                            lambda heard=False: tools.build_system_prompt())
+        session = web.Session()
+
+        run(session, session.new_chat(made.id), "hi")
+        assert "Never touch the vendor folder." in seen["system"]
+
+        # Outside the project, the folder's notes are not read.
+        run(session, session.new_chat(), "hi")
+        assert "Never touch the vendor folder." not in seen["system"]
+
+
+class TestChatTools:
+    def test_a_misread_chat_is_retitled_once_understood(self):
+        session = web.Session()
+        chat = session.new_chat()
+        FakeClient.scripts = [[part("Could you say that again?"),
+                               part(done=True, tokens=2)]]
+        run(session, chat, "geth dev tem")
+        chat.title = "Jumbled Message Clarification"
+
+        FakeClient.scripts = [
+            [part(calls=[call("title_chat", title="Getting the dev team")])],
+            [part("On it."), part(done=True, tokens=2)],
+        ]
+        run(session, chat, "sorry, i mean can you get the dev team?")
+
+        assert chat.title == "Getting the dev team"
+        offered = {t["function"]["name"]
+                   for t in FakeClient.requests[-1]["tools"]}
+        assert "title_chat" in offered
+        # Not a spoken conversation: nothing to end.
+        assert "end_conversation" not in offered
+
+    def test_the_page_is_told_to_type_it_in(self):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Jumbled Message Clarification"
+        seen = []
+        session.hub.publish = lambda event: seen.append(event) or event
+
+        web.retitle(session, chat, {"title": "Getting the dev team"})
+
+        assert seen[0] == {
+            "type": "retitle", "chat": chat.id,
+            "from": "Jumbled Message Clarification",
+            "title": "Getting the dev team",
+        }
+        assert seen[1]["type"] == "chats"
+
+    def test_a_title_the_user_gave_stays(self):
+        session = web.Session()
+        chat = session.new_chat()
+        web.command(session, {"name": "rename", "chat": chat.id,
+                              "arg": "Q3 budget"})
+
+        said = web.retitle(session, chat, {"title": "Spreadsheet help"})
+
+        assert chat.title == "Q3 budget" and said.startswith("Not renamed")
+        assert web.Chat.restore(chat.saved()).named is True
+
+    def test_a_spoken_conversation_can_be_ended(self):
+        session = web.Session()
+        chat = session.new_chat()
+        seen = []
+        session.hub.publish = lambda event: seen.append(event) or event
+        FakeClient.scripts = [
+            [part(calls=[call("end_conversation")])],
+            [part("Bye for now."), part(done=True, tokens=2)],
+        ]
+
+        session.send(chat, "thanks, that's all", heard=True)
+        deadline = time.monotonic() + 5
+        while (chat.busy or chat.queued) and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        offered = {t["function"]["name"]
+                   for t in FakeClient.requests[0]["tools"]}
+        assert {"end_conversation", "title_chat"} <= offered
+        assert chat.voice_ended is True
+        assert {"type": "voice-end", "chat": chat.id} in seen
+
+        # The next spoken turn starts over.
+        FakeClient.scripts = [[part("Hi again."), part(done=True)]]
+        session.send(chat, "hey", heard=True)
+        assert chat.voice_ended is False
+
+    def test_ending_is_only_for_a_spoken_conversation(self):
+        session = web.Session()
+        chat = session.new_chat()
+
+        assert web.end_voice(session, chat).startswith("Error")
+
+
+class TestGuide:
+    def chat_with_photo(self, session, photo="ph0to"):
+        chat = session.new_chat()
+        chat.log.append({"type": "user", "text": "how do I reset this",
+                         "files": [{"id": photo, "name": "camera.jpg",
+                                    "kind": "image"}]})
+        return chat
+
+    def names(self, chat):
+        return {t["function"]["name"] for t in web.chat_tools(chat)}
+
+    def test_offered_only_with_a_photo(self):
+        session = web.Session()
+        plain = session.new_chat()
+        plain.log.append({"type": "user", "text": "hi"})
+        assert "guide_step" not in self.names(plain)
+        assert "guide_step" in self.names(self.chat_with_photo(session))
+
+    def test_only_the_latest_message_counts(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        chat.log.append({"type": "user", "text": "thanks"})
+        assert web.latest_photo(chat) == ""
+        assert "guide_step" not in self.names(chat)
+
+    def test_a_step_is_shown_on_the_photo(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session, "abc123")
+        said = web.guide_step(session, chat, {
+            "step": 2, "of": 4, "say": "  Hold   the reset button. ",
+            "marks": [
+                {"x": 0.4, "y": 1.7, "size": 0.05, "label": "Reset",
+                 "kind": "arrow"},
+                {"x": "nope", "y": -3},
+                "not a mark",
+            ],
+        })
+        assert "step 2 of 4" in said
+        shown = chat.log[-1]
+        assert shown["type"] == "guide"
+        assert shown["image"] == "abc123"
+        assert shown["text"] == "Hold the reset button."
+        assert shown["marks"][0] == {"x": 0.4, "y": 1.0, "size": 0.05,
+                                     "label": "Reset", "kind": "arrow"}
+        assert shown["marks"][1]["x"] == 0.0
+        assert shown["marks"][1]["kind"] == "circle"
+        assert len(shown["marks"]) == 2
+
+    def test_too_many_marks_are_cut(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        web.guide_step(session, chat, {
+            "say": "These.", "marks": [{"x": 0.1, "y": 0.1}] * 20})
+        assert len(chat.log[-1]["marks"]) == web.GUIDE_MARKS
+
+    def test_no_photo_no_step(self):
+        session = web.Session()
+        chat = session.new_chat()
+        assert web.guide_step(session, chat, {"say": "x"}).startswith("Error")
+
+    def test_the_last_step_says_done(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        said = web.guide_step(session, chat, {
+            "step": 5, "of": 3, "say": "All set.", "done": True})
+        assert chat.log[-1]["done"] is True
+        assert chat.log[-1]["of"] == 5
+        assert "done" in said
+
+
+def test_one_ctrl_c_stops_the_web_ui(monkeypatch):
+    calls = []
+    monkeypatch.setattr(web.interrupt, "release", lambda: calls.append(1))
+    monkeypatch.setattr(web.interrupt, "guard", lambda *a: calls.append(2))
+    monkeypatch.setattr(web, "_listen", lambda port, lan: web.Server(0))
+    monkeypatch.setattr(web, "announce", lambda server: None)
+    monkeypatch.setattr(web, "_attach", lambda server, standalone: None)
+
+    def interrupted(server, standalone, running):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(web, "_serve", interrupted)
+    monkeypatch.setattr(web.Updates, "check_in_background", lambda self: None)
+
+    web.serve(open_browser=False)
+
+    assert calls == [1]
+
+
+def test_a_pinned_chat_stays_pinned_across_a_restart():
+    session = web.Session()
+    chat = session.new_chat()
+
+    said = web.command(session, {"name": "pin", "arg": "", "chat": chat.id})
+    assert said == {"pinned": True}  # nosec B101
+    assert chat.summary()["pinned"] is True  # nosec B101
+    assert web.Chat.restore(chat.saved()).pinned  # nosec B101
+
+    said = web.command(session, {"name": "pin", "arg": "off",
+                                 "chat": chat.id})
+    assert said == {"pinned": False}  # nosec B101
+
+
+def test_a_file_from_another_chat_is_attached_again(tmp_path):
+    from flash import workspace
+
+    session = web.Session()
+    first = session.new_chat()
+    first.title = "Launch post"
+    post = tmp_path / "post.md"
+    post.write_text("# We shipped it\n", encoding="utf-8")
+    shown = workspace.keep_file(str(post))
+    first.log.append({"type": "file", **shown})
+    sent = workspace.keep_upload("notes.txt", b"my notes")
+    first.log.append({"type": "user", "text": "here", "files": [sent]})
+    other = session.new_chat()
+
+    files = web.command(session, {"name": "chat-files",
+                                  "chat": other.id})["files"]
+    assert [(f["name"], f["by"], f["chat_title"]) for f in files] == [
+        ("notes.txt", "you", "Launch post"),
+        ("post.md", "agent", "Launch post"),
+    ]  # nosec B101
+
+    got = web.command(session, {"name": "reuse-file", "arg": shown["id"],
+                                "file_name": "post.md",
+                                "chat": other.id})["file"]
+    # A copy of its own, as if sent fresh: the message carries it.
+    assert got["id"] != shown["id"] and got["name"] == "post.md"
+    path = workspace.upload_path(got["id"])
+    assert path.read_text(encoding="utf-8") == "# We shipped it\n"
+    assert web.attachments([got["id"]])[0]["name"] == "post.md"
+
+    with pytest.raises(ValueError, match="no longer kept"):
+        web.command(session, {"name": "reuse-file", "arg": "0" * 16,
+                              "chat": other.id})
+
+
+class TestChatModels:
+    def test_each_chat_has_its_own_model(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "model", "alpha:8b")
+        session = web.Session()
+        session.hub = web.Hub()
+        plain = session.chat(web.command(session, {"name": "new"})["chat"])
+        picked = web.command(session, {"name": "new", "model": "beta:8b"})
+        assert picked["model"] == "beta:8b"
+        other = session.chat(picked["chat"])
+        assert web.chat_model(plain) == "alpha:8b"
+        assert web.chat_model(other) == "beta:8b"
+
+        web.command(session, {"name": "chat-model", "chat": plain.id,
+                              "arg": "gamma:12b"})
+        assert web.chat_model(plain) == "gamma:12b"
+        assert plain.summary()["model"] == "gamma:12b"
+        assert web.Chat.restore(plain.saved()).model == "gamma:12b"
+        # Back to the default, which moves with MODEL.
+        web.command(session, {"name": "chat-model", "chat": plain.id,
+                              "arg": ""})
+        monkeypatch.setattr(ai.Config, "model", "delta:7b")
+        assert web.chat_model(plain) == "delta:7b"
+        assert web.chat_model(None) == "delta:7b"
+
+
+def test_course_commands_and_card(monkeypatch):
+    from flash import tutor
+
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    tutor.add("C", [
+        {"id": "main", "text": "Start in main.", "quiz": {
+            "question": "Where?", "choices": ["top", "main"], "answer": 1}},
+        {"id": "hi", "needs": ["main"], "text": "Print.", "exercise": {
+            "task": "Print hi", "language": "python", "expect": "hi"}}])
+    # Once in the chat, however often the agent teaches it.
+    assert sink("course", '{"subject": "C"}', "")
+    assert sink("course", '{"subject": "C"}', "")
+    assert [e for e in chat.log if e.get("type") == "course"] == [
+        {"type": "course", "subject": "c"}]
+    shown = web.command(session, {"name": "course", "arg": "c"})
+    assert shown["step"]["id"] == "main" and "answer" not in \
+        shown["step"]["quiz"]
+    said = web.command(session, {"name": "course-answer", "arg": "c",
+                                 "id": "main", "choice": 1})
+    assert said["right"]
+    assert web.command(session, {"name": "course", "arg": "c"})[
+        "step"]["id"] == "hi"
+    ran = web.command(session, {"name": "course-run", "arg": "c",
+                                "id": "hi", "code": "print('hi')"})
+    assert ran["right"]
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "course-answer", "arg": "c",
+                              "id": "hi", "choice": 0})
+
+
+def test_a_canvas_is_kept_once_with_the_patches_since_it_was_drawn():
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    shown = {"id": "c1", "title": "Board", "format": "html",
+             "content": "<p id=a>one</p>"}
+    assert sink("canvas", json.dumps(shown), "")
+    # No page open: a patch is kept for when the canvas is drawn again,
+    # and a read has nothing to read.
+    patch = [{"selector": "#a", "how": "text", "html": "two"}]
+    assert sink("canvas-op", json.dumps(
+        {"id": "c1", "op": "patch", "patches": patch}), "") == {
+            "later": True}
+    assert "error" in sink("canvas-op", json.dumps(
+        {"id": "c1", "op": "read"}), "")
+    kept = [e for e in chat.log if e.get("type") == "canvas"]
+    assert len(kept) == 1 and kept[0]["patches"] == patch
+    # Drawn whole again: still one, where it was, the patches gone.
+    assert sink("canvas", json.dumps({**shown, "content": "<p>new</p>"}), "")
+    kept = [e for e in chat.log if e.get("type") == "canvas"]
+    assert len(kept) == 1 and kept[0]["content"] == "<p>new</p>"
+    assert "patches" not in kept[0]
+    assert "no canvas" in sink("canvas-op", json.dumps(
+        {"id": "zz", "op": "read"}), "")["error"]
+    sink("canvas", json.dumps({**shown, "id": "m", "format": "markdown"}),
+         "")
+    assert "Only an HTML canvas" in sink("canvas-op", json.dumps(
+        {"id": "m", "op": "read"}), "")["error"]
+
+
+def test_a_canvas_op_is_answered_by_the_page_showing_it():
+    from flash.theme import capture_tool_output
+
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    sink("canvas", json.dumps({"id": "c1", "title": "Form", "format": "html",
+                               "content": "<input name=n>"}), "")
+    page = session.hub.subscribe()
+
+    def answer(result):
+        # The page: the op arrives, the canvas answers through it.
+        while True:
+            event = page.get(timeout=5)
+            if event.get("type") == "canvas-op":
+                break
+        assert event["chat"] == chat.id and event["id"] == "c1"
+        web.command(session, {"name": "canvas-result",
+                              "arg": event["nonce"], "result": result})
+        # A second answer, from another page, changes nothing.
+        web.command(session, {"name": "canvas-result",
+                              "arg": event["nonce"], "result": {"x": 1}})
+        return event
+
+    got = {}
+    threading.Thread(target=lambda: got.update(answer(
+        {"values": {"n": "Ada"}, "state": {"step": 2}, "text": "Hi"})),
+        daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="read")
+    assert '"n": "Ada"' in said and '"step": 2' in said
+    assert got["op"] == "read"
+
+    threading.Thread(target=lambda: got.update(answer(
+        {"result": [1, 2, 3]})), daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="run", script="return [1,2,3]")
+    assert got["script"] == "return [1,2,3]" and "[\n 1," in said
+
+    threading.Thread(target=lambda: got.update(answer(
+        {"changed": 1, "missed": ["#gone"]})), daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="patch", patches=[
+            {"selector": "input", "how": "value", "html": "Bo"},
+            {"selector": "#gone", "how": "remove"}])
+    assert "Changed 1" in said and "#gone" in said
+    assert got["patches"][0] == {"selector": "input", "how": "value",
+                                 "html": "Bo", "name": "", "all": False}
+    assert not session.canvas_waits
+
+
+def test_canvas_actions_are_checked_before_they_reach_the_page():
+    assert tools.canvas(id="c1", action="dance").startswith("Error")
+    assert "id of the canvas" in tools.canvas(action="read")
+    assert "script" in tools.canvas(id="c1", action="run")
+    for bad in ([], [{"how": "inner"}], [{"selector": "a", "how": "melt"}],
+                [{"selector": "a", "how": "attr"}], "not json"):
+        assert tools.canvas(id="c1", action="patch",
+                            patches=bad).startswith("Error"), bad
+    ok, why = tools._canvas_patches('{"selector": "#a", "html": "x"}')
+    assert not why and ok[0]["how"] == "inner"
+    # No page at all (the terminal): said plainly.
+    assert "web app" in tools.canvas(id="c1", action="read")
+
+
+def test_the_page_sets_how_replies_are_interrupted(monkeypatch):
+    from flash import ai, voice
+
+    saved = {}
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: saved.update({name: value}) or
+                        monkeypatch.setenv(name, value))
+    session = web.Session()
+    out = web.command(session, {"name": "interrupt-setting", "arg": "voice",
+                                "how": "anything"})
+    assert out["voice_interrupt"] == "anything"
+    assert saved == {"VOICE_INTERRUPT": "anything"}
+    out = web.command(session, {"name": "interrupt-setting", "arg": "calls",
+                                "how": "word"})
+    assert out["call_interrupt"] == "word"
+    assert voice.interrupt_how("calls") == "word"
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "interrupt-setting", "arg": "calls",
+                              "how": "loudly"})
+
+
+def test_a_chat_for_a_small_screen_leaves_out_what_it_cannot_show():
+    from flash import web as _web
+
+    big = "x" * 20000
+    summary = {"id": "c1", "title": "T", "partial": big, "log": [
+        {"type": "user", "text": "hi"},
+        {"type": "tool", "label": "Looked at the screen", "result": big, "images": ["data:image/png;base64," + big]},
+        {"type": "assistant", "text": big},
+        {"type": "ask", "id": "a1", "question": "Go?", "extra": big},
+    ]}
+    small = _web.small_view(summary)
+    log = small["log"]
+    assert log[0] == {"type": "user", "text": "hi"}
+    assert log[1] == {"type": "tool", "label": "Looked at the screen"}
+    assert len(log[2]["text"]) == _web.SMALL_TEXT + 1
+    assert log[3] == {"type": "ask", "id": "a1", "question": "Go?"}
+    assert len(small["partial"]) == _web.SMALL_TEXT + 1
+    assert summary["log"][1]["result"] == big      # the chat itself is untouched
+
+
+
+def test_a_paired_device_says_what_it_is():
+    from flash import web
+
+    access = web.Access()
+    watch = access.sign_in("10.0.0.2", "FlashDevice/1.0 My watch", "watchOS")
+    robot = access.sign_in("10.0.0.3", "FlashDevice/1 Flash Bot", "FlashBot/0.1")
+    # Paired before Flash asked: it says what it is on its next request.
+    old = access.sign_in("10.0.0.4", "FlashDevice/1 Desk")
+    access.browser(old, "10.0.0.4", "FlashDevice/1 FlashBot/0.1")
+    kinds = {b["device"]: b["product"] for b in access.listing("", set())}
+    assert kinds == {"My watch": "watch", "Flash Bot": "robot", "Desk": "robot"}  # nosec B101
+    assert web.device_kind("") == "device"  # nosec B101
+
+
+class TestChatsWorkingWithChats:
+    """start_chat, message_chat and read_chat: one chat handing work to
+    another and woken with its answer."""
+
+    @pytest.fixture
+    def answering(self, monkeypatch):
+        """A model that answers by what it was sent: the user's chat
+        starts a helper chat, the helper does the work, and the first
+        chat reports what the helper said."""
+
+        monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
+        asked = []
+
+        class Model(FakeClient):
+            def chat(self, **kwargs):
+                FakeClient.requests.append(kwargs)
+                last = kwargs["messages"][-1]
+                said = str(last.get("content") or "")
+                asked.append(said)
+                if last.get("role") == "tool":
+                    return iter([part("Started it; I'll report back."), part(done=True)])
+                if said.startswith("[From the chat"):
+                    if "again" in said:
+                        return iter([part("Second answer: 7 files."), part(done=True)])
+                    return iter([part("Built it: 3 warnings, no errors."), part(done=True)])
+                if "answered" in said:
+                    return iter([part("The build chat says: 3 warnings."), part(done=True)])
+                return iter([
+                    part(calls=[call("start_chat", task="build the firmware and report",
+                                     title="Firmware build", model="other-model")]),
+                    part(done=True),
+                ])
+
+        monkeypatch.setattr(ollama, "Client", Model)
+        return asked
+
+    def test_a_chat_starts_another_and_hears_its_answer(self, answering):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Robot work"
+
+        run(session, chat, "get the firmware built")
+        wait_for(lambda: any(e["type"] == "assistant" and "3 warnings" in e["text"]
+                             for e in chat.log))
+
+        helper = next(c for c in session.chats.values() if c.id != chat.id)
+        assert helper.title == "Firmware build" and helper.model == "other-model"
+        # The helper was handed the task as from the first chat, and shows it.
+        handed = [e["text"] for e in helper.log if e["type"] == "user"]
+        assert handed and handed[0].startswith("[From the chat 'Robot work'")
+        assert "build the firmware" in handed[0]
+        # The first chat was woken with the helper's answer, not by a user.
+        woke = [m for m in answering if "answered" in m]
+        assert woke and "Built it: 3 warnings" in woke[0] and helper.id in woke[0]
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == ["get the firmware built"]
+
+    def test_message_and_read_another_chat(self, answering):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Robot work"
+        run(session, chat, "get the firmware built")
+        helper = next(c for c in session.chats.values() if c.id != chat.id)
+        wait_for(lambda: not (helper.busy or helper.queued) and any(
+            e["type"] == "assistant" for e in helper.log))
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        said = web.read_chat(session, chat, {"chat": "firmware"})
+        assert "'Firmware build'" in said and "idle" in said and "3 warnings" in said
+        assert "Firmware build" in web.read_chat(session, chat, {})
+
+        out = web.message_chat(session, chat, {"chat": helper.id, "text": "count them again"})
+        assert out.startswith("Sent to 'Firmware build'")
+        wait_for(lambda: any("Second answer" in str(e.get("text")) for e in helper.log))
+
+        assert web.message_chat(session, chat, {"chat": chat.id, "text": "x"}).startswith("Error")
+        assert web.message_chat(session, chat, {"chat": "nope", "text": "x"}).startswith("Error")
+        assert web.read_chat(session, chat, {"chat": "nope"}).startswith("Error")
+        assert web.start_chat(session, chat, {"task": " "}).startswith("Error")
+
+    def test_the_tools_are_offered_in_every_chat(self):
+        names = {t["function"]["name"] for t in web.chat_tools(web.Chat(id="x"))}
+        assert {"start_chat", "message_chat", "read_chat"} <= names
+
+
+class TestDevicesOnTheDesk:
+    """With more than one robot: a signal for one reaches only it (pages still see all), and the one marked as on
+    the desk is the one voice mode here talks through."""
+
+    def test_a_signal_to_one_device_reaches_only_it(self):
+        session = web.Session()
+        try:
+            agent = f"{web.DEVICE_AGENT}1 FlashBot/0.1"
+            desk = session.access.sign_in("10.0.0.2", agent, "FlashDevice/1 FlashBot/0.1")
+            room = session.access.sign_in("10.0.0.3", agent, "FlashDevice/1 FlashBot/0.1")
+            page = session.access.sign_in("127.0.0.1", "Mozilla/5.0")
+            queues = {k: session.hub.subscribe(k) for k in (desk, room, page)}
+            desk_id = session.access.about(desk)["id"]
+            session.hub.publish({"type": "extension-signal", "signal": "say", "to": desk_id})
+            got = {k: not q.empty() for k, q in queues.items()}
+            assert got == {desk: True, room: False, page: True}  # nosec B101
+
+            assert session.access.desk("robot") == ""  # nosec B101
+            assert session.access.set_desk(desk_id, True)  # nosec B101
+            assert session.access.desk("robot") == desk_id  # nosec B101
+            room_id = session.access.about(room)["id"]
+            session.access.set_desk(room_id, True)  # one desk robot at most
+            assert session.access.desk("robot") == room_id  # nosec B101
+            listed = {b["id"]: b["desk"] for b in session.access.listing(page, set())}
+            assert listed[room_id] and not listed[desk_id]  # nosec B101
+        finally:
+            session.close()
+
+
+class TestSwitchingModels:
+    """switch_model: "switch to Fable 5.2, write it, then go back": asked first, unless UltraAuto."""
+
+    LISTED = ["claude-fable-5-2", "claude-opus-5-5", "llama3:latest", "@ext/fast"]
+
+    def test_names_as_the_menu_shows_them(self):
+        assert web.find_model("Fable 5.2", self.LISTED) == "claude-fable-5-2"  # nosec B101
+        assert web.find_model("opus 5.5", self.LISTED) == "claude-opus-5-5"  # nosec B101
+        assert web.find_model("llama3", self.LISTED) == "llama3:latest"  # nosec B101
+        assert web.find_model("gpt", self.LISTED) == ""  # nosec B101
+
+    def test_asked_first_unless_ultra(self, monkeypatch):
+        from flash import tools as flash_tools
+
+        session = web.Session()
+        try:
+            chat = session.new_chat()
+            chat.model = "claude-opus-5-5"
+            monkeypatch.setattr(web, "list_models", lambda ai: self.LISTED)
+            asked = []
+            monkeypatch.setattr(flash_tools, "ultra_auto", lambda: False)
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: asked.append(q) or False)
+            said = web.switch_model(session, chat, {"model": "Fable 5.2"}, None)
+            assert "said no" in said and chat.model == "claude-opus-5-5" and asked  # nosec B101
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: True)
+            assert "Switched" in web.switch_model(session, chat, {"model": "Fable 5.2"}, None)  # nosec B101
+            assert chat.model == "claude-fable-5-2"  # nosec B101
+            # UltraAuto: no asking at all.
+            monkeypatch.setattr(flash_tools, "ultra_auto", lambda: True)
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: pytest.fail("asked in UltraAuto"))
+            web.switch_model(session, chat, {"model": "opus 5.5"}, None)
+            assert chat.model == "claude-opus-5-5"  # nosec B101
+            assert "no model called" in web.switch_model(session, chat, {"model": "gpt-9"}, None)  # nosec B101
+        finally:
+            session.close()

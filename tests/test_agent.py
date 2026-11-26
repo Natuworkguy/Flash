@@ -4,6 +4,7 @@ import io
 import threading
 import time
 
+import ollama
 from rich.console import Console
 
 from flash import agent, theme, tools
@@ -65,7 +66,7 @@ def _reply(content="", *calls):
 def _wire(monkeypatch, responses, *, model="test-model", delay=0.0,
           autonomous=False):
     fake_client = FakeClient(responses, delay=delay)
-    monkeypatch.setattr(agent.ollama, "Client", fake_client)
+    monkeypatch.setattr(ollama, "Client", fake_client)
     monkeypatch.setattr(agent, "get_model_system_prompt", lambda h, m: "")
     monkeypatch.setattr(agent, "chat_options", dict)
     monkeypatch.setattr(tools, "MODEL_NAME", model)
@@ -99,7 +100,20 @@ def test_confirmed_tools_are_withheld_outside_autonomous_mode(monkeypatch):
 
 def test_autonomous_mode_gets_every_subagent_tool(monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(tools.mail, "configured", lambda: True)
+    # Reading iMessages too: on a Mac, allowed.
+    monkeypatch.setenv(tools.computer.SETTING, "1")
+    monkeypatch.delenv(tools.computer.OFF_SETTING, raising=False)
+    monkeypatch.setattr(tools.computer, "system", lambda: "mac")
     assert agent.allowed_tool_names() == tools.SUBAGENT_TOOL_NAMES  # nosec
+
+
+def test_email_tools_wait_for_email_to_be_set_up(monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(tools.mail, "configured", lambda: False)
+    names = agent.allowed_tool_names()
+    assert "check_inbox" not in names  # nosec B101
+    assert "read" in names  # nosec B101
 
 
 def test_only_allowed_schemas_are_sent(monkeypatch):

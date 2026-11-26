@@ -275,12 +275,12 @@ def test_make_3d_model_leaves_a_file_that_is_not_a_model(
 ):
     _no_vision(monkeypatch)
     precious = tmp_path / "notes.glb"
-    precious.write_text("my notes")
+    precious.write_text("my notes", encoding="utf-8")
 
     result = make_3d_model(str(precious), [{"shape": "box"}])
 
     assert "left alone" in result
-    assert precious.read_text() == "my notes"
+    assert precious.read_text(encoding="utf-8") == "my notes"
 
 
 def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
@@ -304,7 +304,7 @@ def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
     assert "picture of it" in result
     assert take_pending_images() == [b"png bytes"]
     # The page draws the model with the web UI's own viewer.
-    page = (tmp_path / "model-1.html").read_text()
+    page = (tmp_path / "model-1.html").read_text(encoding="utf-8")
     assert "FlashModelView.show" in page and "window.FlashThree" in page
     assert pages == [(tmp_path / "model-1.html").resolve().as_uri()]
 
@@ -312,7 +312,7 @@ def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
 def test_send_3d_model_checks_what_it_is_given(tmp_path, monkeypatch):
     _no_vision(monkeypatch)
     fake = tmp_path / "fake.glb"
-    fake.write_text("not a model")
+    fake.write_text("not a model", encoding="utf-8")
     wrong = tmp_path / "model.fbx"
     wrong.write_bytes(b"x")
     stl = tmp_path / "part.stl"
@@ -330,3 +330,187 @@ def test_the_model_tools_are_offered():
     assert {"make_3d_model", "send_3d_model"} <= names
     assert tools.FUNCTIONS["make_3d_model"] is make_3d_model
     assert tools.FUNCTIONS["send_3d_model"] is send_3d_model
+
+
+# --- Motion ---------------------------------------------------------------
+
+
+def _document(parts):
+    return _read_glb(model3d.to_glb(model3d.build_parts(parts)))
+
+
+def test_a_still_model_has_no_animations_and_one_node_a_part():
+    document = _document([{"shape": "box"}, {"shape": "sphere"}])
+
+    assert "animations" not in document  # nosec B101
+    assert document["scenes"][0]["nodes"] == [0, 1]  # nosec B101
+
+
+def test_a_moving_part_hangs_from_its_pivot():
+    document = _document([{
+        "shape": "box", "size": [0.1, 2, 1], "position": [1, 1, 0],
+        "rotation": [0, 30, 0],
+        "animate": {"swing": {"axis": "y", "degrees": 80},
+                    "pivot": [0, 0, -0.5]},
+    }])
+    shape, holder = document["nodes"]
+
+    assert document["scenes"][0]["nodes"] == [1]  # nosec B101
+    assert holder["children"] == [0]  # nosec B101
+    assert holder["translation"] == [1, 1, -0.5]  # nosec B101
+    # At rest, the shape is where it was put: the pivot's offset undone.
+    assert shape["translation"] == [0, 0, 0.5]  # nosec B101
+    assert "rotation" in shape  # nosec B101
+    (animation,) = document["animations"]
+    assert [c["target"] for c in animation["channels"]] == [  # nosec B101
+        {"node": 1, "path": "rotation"},
+    ]
+
+
+def test_spin_turns_a_quarter_in_a_quarter_of_its_time():
+    motion = model3d.Motion({"spin": {"axis": "y", "seconds": 4}})
+    _, turn, _ = motion.at(1)
+
+    assert turn == pytest.approx(  # nosec B101
+        (0, math.sin(math.pi / 4), 0, math.cos(math.pi / 4))
+    )
+    # A whole turn later it is back where it began (a quaternion and its
+    # negative are the same turn).
+    same = sum(a * b for a, b in zip(motion.at(4)[1], motion.at(0)[1]))
+    assert abs(same) == pytest.approx(1)  # nosec B101
+
+
+def test_steady_motions_fit_the_loop_a_whole_number_of_times():
+    motion = model3d.Motion({"spin": {"seconds": 4}, "bob": {"seconds": 3}})
+
+    assert motion.duration == 4  # nosec B101
+    # Bobbing once in 4 s, not 1.33 times, so it loops without a jump.
+    assert motion.at(0)[0] == pytest.approx(motion.at(4)[0])  # nosec B101
+
+
+def test_keyframes_move_and_ease_from_rest():
+    motion = model3d.Motion({
+        "keyframes": [
+            {"time": 0, "move": [0, 0, 0]},
+            {"time": 2, "move": [1, 0, 0], "scale": 2},
+            {"time": 4, "move": [0, 0, 0], "scale": 1},
+        ],
+        "ease": "linear",
+    })
+
+    assert motion.duration == 4  # nosec B101
+    assert motion.at(1)[0] == pytest.approx((0.5, 0, 0))  # nosec B101
+    # Scale is only given from 2 s on: before that it holds the first.
+    assert motion.at(1)[2] == pytest.approx((2, 2, 2))  # nosec B101
+    assert motion.at(3)[2] == pytest.approx((1.5, 1.5, 1.5))  # nosec B101
+    assert (motion.moves, motion.turns, motion.scales) == (  # nosec B101
+        True, False, True,
+    )
+
+
+def test_delay_sets_parts_out_of_step():
+    left = model3d.Motion({"swing": True})
+    right = model3d.Motion({"swing": True, "delay": 1})
+
+    assert right.at(1.5)[1] == pytest.approx(left.at(0.5)[1])  # nosec B101
+
+
+def test_samples_cover_the_loop_and_every_keyframe():
+    motion = model3d.Motion({"keyframes": [
+        {"time": 0, "turn": [0, 0, 0]}, {"time": 1.01, "turn": [0, 90, 0]},
+        {"time": 2, "turn": [0, 0, 0]},
+    ]})
+    times = motion.times(4)
+
+    assert times[0] == 0 and times[-1] == 2  # nosec B101
+    assert 1.01 in times  # nosec B101
+
+
+def test_the_glb_animation_reads_back():
+    document = _document([{
+        "shape": "sphere", "position": [0, 1, 0],
+        "animate": {"bob": True, "pulse": True},
+    }])
+    (animation,) = document["animations"]
+    paths = [c["target"]["path"] for c in animation["channels"]]
+    clock = document["accessors"][animation["samplers"][0]["input"]]
+
+    assert paths == ["translation", "scale"]  # nosec B101
+    assert clock["min"] == [0] and clock["max"] == [2]  # nosec B101
+
+
+@pytest.mark.parametrize("animate, problem", [
+    ("spin", "must be an object"),
+    ({"ease": "linear"}, "needs one of"),
+    ({"wobble": True}, "has no wobble"),
+    ({"spin": {"axis": "w"}}, "axis must be"),
+    ({"spin": {"seconds": 0}}, "more than 0"),
+    ({"keyframes": [{"time": 0, "move": [0, 0, 0]}]}, "at least two"),
+    ({"keyframes": [{"time": 0}, {"time": 1, "move": 1}]}, "needs a move"),
+    ({"spin": {"seconds": 90}}, "at most 60"),
+    ({"spin": True, "ease": "bouncy"}, "ease must be"),
+])
+def test_bad_motion_says_what_is_wrong(animate, problem):
+    with pytest.raises(model3d.ModelError, match=problem):
+        model3d.build_parts([{"shape": "box", "animate": animate}])
+
+
+def test_the_result_names_what_moves():
+    built = model3d.build_parts([
+        {"shape": "box", "name": "base"},
+        {"shape": "cylinder", "name": "blade", "animate": {"spin": 2}},
+    ])
+
+    assert "1 part moves: blade (spin, looping every 2 s)" in (  # nosec B101
+        model3d.describe(built)
+    )
+
+
+def test_parts_can_say_what_they_are_and_move_when_clicked():
+    built = model3d.build_parts([
+        {"shape": "box", "name": "door", "size": [0.6, 1, 0.03],
+         "position": [0, 0.5, 0], "info": "  The front   door. ",
+         "on_click": {"turn": [0, 90, 0], "pivot": [0.3, 0.5, 0]}},
+        {"shape": "box", "name": "drawer", "size": [0.5, 0.2, 0.4],
+         "position": [0, 1.2, 0], "on_click": {"move": [0, 0, 0.3],
+                                               "seconds": 9}},
+        {"shape": "box", "name": "plain", "size": 0.2},
+    ])
+    assert built[0].info == "The front door."
+    assert built[0].click.extras() == {
+        "move": [0.0, 0.0, 0.0], "turn": [0.0, 90.0, 0.0],
+        "pivot": [0.3, 0.5, 0.0], "seconds": 0.6}
+    # Its own centre when no pivot is given, and five seconds at most.
+    assert built[1].click.pivot == (0.0, 1.2, 0.0)
+    assert built[1].click.seconds == 5.0
+
+    nodes = {n["name"]: n for n in _read_glb(model3d.to_glb(built))["nodes"]}
+    assert nodes["door"]["extras"]["flash"] == {
+        "name": "door", "info": "The front door.",
+        "click": built[0].click.extras()}
+    assert "info" not in nodes["drawer"]["extras"]["flash"]
+    assert "extras" not in nodes["plain"]
+
+
+@pytest.mark.parametrize("spec, message", [
+    ({"on_click": "open"}, "on_click must be an object"),
+    ({"on_click": {"spin": 1}}, "on_click has no spin"),
+    ({"on_click": {"seconds": 1}}, "needs a move or a turn"),
+    ({"on_click": {"move": [0, 1, 0]}, "animate": {"spin": {}}},
+     "not both"),
+    ({"info": "x" * 301}, "at most 300"),
+])
+def test_bad_interactions_are_refused(spec, message):
+    with pytest.raises(model3d.ModelError, match=message):
+        model3d.build_parts([{"shape": "box", "size": 1, **spec}])
+
+
+def test_the_result_says_what_clicks(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "_model_preview", lambda path: "")
+    monkeypatch.setattr(tools, "_open_with_spinner", lambda path: "")
+    said = make_3d_model(str(tmp_path / "box.glb"), [
+        {"shape": "box", "name": "lid", "size": 1, "info": "A lid.",
+         "on_click": {"move": [0, 0.5, 0]}},
+    ])
+    assert "In the viewer: Clicking lid moves it" in said
+    assert "1 part say what they are" in said

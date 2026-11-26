@@ -1,16 +1,22 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application.current import get_app, get_app_or_none
+from prompt_toolkit.application.current import (
+    get_app,
+    get_app_or_none,
+    set_app,
+)
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
@@ -23,18 +29,26 @@ from prompt_toolkit.formatted_text import (
 )
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.processors import (
+    Processor,
+    Transformation,
+    explode_text_fragments,
+)
 from prompt_toolkit.layout.screen import Screen
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 
-from . import background, extensions
+from . import background, extensions, sparks_completion
 from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH, FLASH_DIR
+from .theme import ACCENT as _ACCENT
 from .theme import (
     BAR_EMPTY,
+    CHEVRON,
     CURSOR,
     DIFF_ADD,
     DIM_HEX,
@@ -42,41 +56,98 @@ from .theme import (
     RESET_ANSI,
     SPARKLE,
     ansi,
+    mouse_on,
     ptk_sweep_reveal,
 )
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
-    ("/model", "pick from the models here, or /model <name> to switch"),
-    ("/auto", "toggle autonomous command mode (/auto on|off)"),
-    ("/voice", "talk to Flash and hear its replies (/voice on|off)"),
+    ("/model", "pick from the models here, /model <name> to switch, "
+               "/model pin or unpin [name] to keep one at the top"),
+    ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/compare", "two models answer blind, you pick the better: /compare a "
+                 "vs b: question; /compare board for the tally"),
+    ("/fleet", "several chats take the same task at once, each in its own "
+               "worktree; compare them and merge the best: /fleet 3: task"),
+    ("/calendar", "what is on (or /calendar 30 for a month); feed add NAME "
+                  "URL; google to connect Google Calendar"),
+    ("/fallbacks", "models to try when one fails: /fallbacks a > b > c "
+                   "(* for any model; clear a)"),
+    ("/secret", "keys and passwords Flash uses by name, never seeing them "
+                "(list, set NAME, rm NAME)"),
+    ("/good", "the last reply was good: Flash learns what worked "
+              "(/good <why>)"),
+    ("/bad", "the last reply was bad: Flash learns what to do "
+             "differently (/bad <why>)"),
+    ("/debate", "two sides argue a question out, then a summary "
+                "(/debate a vs b; rounds 4; question picks models and how "
+                "long; /debate more [steer] keeps it going)"),
+    ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
+    ("/briefing", "what came in while you were away, a card at a time"),
+    ("/doctor", "check that everything Flash needs works, and how to fix "
+                "what does not (/doctor fix runs the fixes)"),
+    ("/resume", "pick up an earlier conversation (or /resume <words>)"),
+    ("/fork", "try another way from here, or /fork <n> turns back"),
+    ("/forks", "this conversation's forks as a tree; /forks rm <id>"),
+    ("/think", "let Flash turn on thinking when a message needs it "
+               "(auto on|off)"),
+    ("/loader", "pick the animation that turns while Flash works"),
+    ("/instructions", "how every reply should be (<text> or clear)"),
+    ("/auto", "ask first or autonomous (/auto on|off), or UltraAuto (ultra)"),
+    ("/systemone", "a small model that reviews autonomous commands (on|off)"),
+    ("/sandbox", "run Flash's commands in the OS sandbox: /sandbox "
+                 "on|off, /sandbox auto on|off"),
+    ("/computer", "let Flash pause music, open apps, send iMessages "
+                  "(on|off [what]); use on|off: Computer Use, beta"),
+    ("/mcp", "connect MCP servers' tools (add, remove, on, off, tools)"),
+    ("/voice", "talk to Flash and hear it (on|off, listen, speak, models)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),
     ("/unset", "remove an env var (/unset NAME)"),
     ("/refresh", "reload config from the env file"),
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
-    ("/skills", "procedures Flash has learned (/skills show|remove <name>)"),
+    ("/import-memories", "save the facts in a file to memory "
+     "(/import-memories <file>)"),
+    ("/skills", "procedures Flash has learned (/skills show|remove|code <name>, /skills add <code>)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
+    ("/tasks", "background tasks: list, /tasks <id> for one's output, /tasks stop <id>"),
+    ("/sparks", "agents that keep working on a goal (new, chat <name>)"),
+    ("/call", "a voice call with a spark: /call <name>; /call take to "
+              "take over a call from another Flash; /call incoming "
+              "on|off for whether sparks may call you"),
+    ("/answer", "pick up a spark's call that is ringing"),
+    ("/decline", "decline a spark's call that is ringing"),
+    ("/email", "your email (connect, test, inbox, progress, disconnect)"),
     ("/hook", "let Flash see what you run in VS Code's terminal"),
     ("/clear", "clear saved context"),
     ("/undo", "take back the file changes from the last turn"),
     ("/compact", "summarize the conversation to free up room"),
+    ("/review", "review your uncommitted changes for bugs (or /review "
+                "main, /review a..b)"),
+    ("/smarthome", "your lights, plugs, thermostat and more, through Home "
+                   "Assistant (connect <address>, off, <words> to narrow)"),
     ("/context", "show how much of the window is in use"),
+    ("/stats", "what Flash has done for you so far"),
+    ("/activity", "each model's calls, speed and failures this week"),
+    ("/preset", "save a model, fallbacks and prompt as @name"),
+    ("/notify", "how often the agent may notify you (/notify 4 per 15m)"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
-    ("/web", "open Flash in your browser (/web lan for your phone)"),
-    ("/extension", "list, install, or remove extensions (/extension help)"),
+    ("/web", "open Flash in your browser (lan for your phone, port N, "
+             "tunnel for anywhere: /web lan; port 1234)"),
+    ("/extension", "list, install, remove, or set up extensions"),
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),
     ("/help", "show this help (alias: /?)"),
-    ("/bye", "exit Flash (alias: /exit)"),
+    ("/bye", "exit Flash"),
+    ("/exit", "exit Flash"),
 ]
 
 # Every name an extension may not take: the commands above and their
 # aliases.
 RESERVED_COMMANDS = frozenset(
-    [cmd for cmd, _desc in COMMANDS] + ["/?", "/exit", "/extensions"]
+    [cmd for cmd, _desc in COMMANDS] + ["/?", "/extensions"]
 )
 
 
@@ -138,6 +209,43 @@ def _mention_before(text: str) -> Optional[str]:
     return text[at + 1:]
 
 
+def _mention_sparks(
+    mention: str, files: list[Completion],
+) -> list[Completion]:
+    """The sparks an @ mention could mean, below the files, each named in
+    its own colour, with a rule between the two when there are both.
+
+    A path (a slash, a quote) is never a spark, so those offer none.
+    """
+
+    if "/" in mention or '"' in mention or "'" in mention:
+        return []
+    typed = mention.lower()
+    found = [
+        Completion(
+            f"@{key} ",
+            start_position=-len(mention) - 1,
+            display=[(f"fg:{colour}", name)],
+            display_meta=title or f"@{key}",
+        )
+        for key, name, title, colour in sparks_completion.mentionable()
+        if key.startswith(typed) or name.lower().startswith(typed)
+    ]
+    if not found or not files:
+        return found
+
+    # Picking the rule types nothing; it is as wide as the column.
+    wide = max(
+        fragment_list_width(to_formatted_text(c.display))
+        for c in files + found
+    )
+    rule = Completion(
+        "", start_position=0,
+        display=[(f"fg:{DIM_HEX}", "─" * max(wide, 8))],
+    )
+    return [rule, *found]
+
+
 def _parse_path_arg(
     remainder: str,
 ) -> Optional[tuple[str, bool]]:
@@ -168,9 +276,117 @@ def _parse_path_arg(
     return "".join(literal_chars), quote is not None
 
 
+VOICE_ACTIONS = (
+    ("on", "turn voice mode on"),
+    ("off", "turn voice mode off"),
+    ("models", "what it can listen and speak with"),
+    ("pull", "download a model and switch to it"),
+    ("remove", "delete a downloaded model"),
+    ("style", "how its voice speaks"),
+)
+
+
+def _voice_completions(rest: str):
+    """What /voice takes: its actions, then a model's name after pull or
+    remove, or a style after style."""
+
+    from . import voice  # deferred: only wanted once /voice is typed
+
+    action, spaced, after = rest.partition(" ")
+    if not spaced:
+        for name, meta in VOICE_ACTIONS:
+            if name.startswith(action.lower()):
+                yield Completion(name, start_position=-len(action),
+                                 display_meta=meta)
+        return
+    action = action.lower()
+    if action in ("pull", "remove"):
+        query = after.strip().lower()
+        for kind in voice.KINDS:
+            for choice in voice.offered(kind):
+                if query in choice.name.lower():
+                    yield Completion(
+                        choice.name, start_position=-len(after),
+                        display_meta=f"{kind}: {choice.label}",
+                    )
+    elif action == "style":
+        for name, style in voice.STYLES.items():
+            if name.startswith(after.strip().lower()):
+                yield Completion(name, start_position=-len(after),
+                                 display_meta=style.label.split(": ", 1)[-1])
+
+
+HOST_ACTIONS = (
+    ("list", "every saved host, and whether it answers"),
+    ("add", "save a host, with its API key if it asks for one"),
+    ("remove", "forget a saved host"),
+)
+
+
+def _host_completions(rest: str):
+    """What /host takes: an action or a saved host's name, then a saved
+    host's name after remove."""
+
+    from . import workspace  # deferred: only wanted once /host is typed
+
+    action, spaced, after = rest.partition(" ")
+    if not spaced or action.lower() not in ("add", "remove", "rm"):
+        query = rest.lower()
+        for name, meta in HOST_ACTIONS:
+            if name.startswith(query):
+                yield Completion(name, start_position=-len(rest),
+                                 display_meta=meta)
+        for host in workspace.hosts():
+            if host["name"].lower().startswith(query):
+                yield Completion(host["name"], start_position=-len(rest),
+                                 display_meta=host["url"])
+        return
+    if action.lower() in ("remove", "rm"):
+        for host in workspace.hosts():
+            if host["saved"] and \
+                    host["name"].lower().startswith(after.lower()):
+                yield Completion(host["name"], start_position=-len(after),
+                                 display_meta=host["url"])
+
+
+# The models there are, for /debate and /model to offer: asked for on a
+# thread of their own, never while a key waits, and kept a while.
+_models_known: dict = {"names": [], "at": 0.0, "asking": False}
+MODELS_KEPT_SECONDS = 30.0
+
+
+def _known_models() -> list[str]:
+    import threading
+    import time
+
+    now = time.monotonic()
+    if not _models_known["asking"] and \
+            now - _models_known["at"] > MODELS_KEPT_SECONDS:
+        _models_known["asking"] = True
+
+        def ask() -> None:
+            try:
+                from . import ai, providers
+
+                listed = providers.client(ai.Config.host).list()
+                _models_known["names"] = sorted(
+                    str(getattr(m, "model", "") or "")
+                    for m in getattr(listed, "models", None) or []
+                    if getattr(m, "model", ""))
+            except Exception:  # noqa: BLE001, S110  # nosec B110
+                pass  # none to offer, this time
+            finally:
+                _models_known["at"] = time.monotonic()
+                _models_known["asking"] = False
+
+        threading.Thread(target=ask, daemon=True).start()
+    return list(_models_known["names"])
+
+
 class SlashCommandCompleter(Completer):
-    """Suggests / commands as the line is typed, and image file paths as
-    the argument to /image (auto-quoting suggestions that contain spaces)."""
+    """Suggests / commands as the line is typed, image file paths as the
+    argument to /image (auto-quoting suggestions that contain spaces),
+    and what /sparks and its actions take."""
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -205,6 +421,60 @@ class SlashCommandCompleter(Completer):
                 )
             return
 
+        if text.startswith("/voice "):
+            yield from _voice_completions(text[len("/voice "):])
+            return
+
+        if text.startswith("/debate "):
+            from . import debate  # deferred: wanted once /debate is typed
+
+            for said, cut, meta in debate.suggest(text[len("/debate "):],
+                                                  _known_models()):
+                yield Completion(said, start_position=-cut,
+                                 display=said.strip(), display_meta=meta)
+            return
+
+        if text.startswith("/model ") and " " not in text[len("/model "):]:
+            typed = text[len("/model "):]
+            for name in _known_models():
+                if typed.lower() in name.lower():
+                    yield Completion(name, start_position=-len(typed))
+            for word in ("pin", "unpin"):
+                if typed and word.startswith(typed.lower()):
+                    yield Completion(word, start_position=-len(typed),
+                                     display_meta="keep a model at the top")
+            if "auto".startswith(typed.lower()):
+                yield Completion("auto", start_position=-len(typed),
+                                 display_meta="System One picks one for "
+                                 "each message")
+            return
+
+        if text.startswith("/host "):
+            yield from _host_completions(text[len("/host "):])
+            return
+
+        if text.startswith("/loader "):
+            from . import loaders  # deferred: wanted once /loader is typed
+
+            typed = text[len("/loader "):].lower()
+            for loader in loaders.all_loaders():
+                if loader.id.startswith(typed):
+                    yield Completion(loader.id, start_position=-len(typed),
+                                     display_meta=loader.about)
+            if "morph".startswith(typed):
+                yield Completion("morph", start_position=-len(typed),
+                                 display_meta="turn into another every "
+                                 f"{loaders.MORPH_SECONDS:.0f}s (on|off)")
+            return
+
+        # What /sparks and its actions take. Past them, in a lesson or a
+        # message, the emoji and @ mentions below have the line.
+        if text.startswith("/sparks "):
+            offered = list(sparks_completion.complete(text[len("/sparks "):]))
+            if offered:
+                yield from offered
+                return
+
         # Emoji names, as :smile. Checked after the path branches so a
         # colon inside a path does not swallow the completion.
         words = text.split()
@@ -232,6 +502,7 @@ class SlashCommandCompleter(Completer):
             sub_document = Document(
                 literal_path, cursor_position=len(literal_path)
             )
+            files = []
             for completion in _mention_completer(
                 literal_path
             ).get_completions(sub_document, complete_event):
@@ -240,17 +511,19 @@ class SlashCommandCompleter(Completer):
                 # A path with a space in it has to be quoted whole, so
                 # the mention is replaced rather than appended to.
                 if " " in whole and not in_quote:
-                    yield Completion(
+                    files.append(Completion(
                         f'"{whole}"',
                         start_position=-len(mention),
                         display=completion.display,
-                    )
+                    ))
                 else:
-                    yield Completion(
+                    files.append(Completion(
                         completion.text,
                         start_position=0,
                         display=completion.display,
-                    )
+                    ))
+            yield from files
+            yield from _mention_sparks(mention, files)
             return
 
         if not text.startswith("/") or " " in text:
@@ -297,6 +570,67 @@ def _sweep_edge(progress: float, label_len: int) -> float:
     return -_SWEEP_BAND + progress * span
 
 
+def _suggestions_now() -> list[str]:
+    """What the empty box suggests: an extension's own text, or its
+    suggestions ahead of Flash's."""
+
+    from . import ext_ui  # deferred: it reads the installed extensions
+
+    own = ext_ui.placeholder()
+    return [own] if own else ext_ui.suggestions() + _SUGGESTIONS
+
+
+def _ext_keys(keys: KeyBindings) -> None:
+    """Each extension button with a key, in the terminal's box: a prompt
+    or a command fills the box with what is typed, a program runs and
+    says what it says."""
+
+    from prompt_toolkit.application import run_in_terminal
+
+    from . import ext_ui  # deferred: it reads the installed extensions
+
+    for ext, button in ext_ui.terminal_buttons():
+        mod, _, letter = button.key.partition("-")
+        combo = (f"c-{letter}",) if mod == "c" else ("escape", letter)
+
+        def pressed(event, ext=ext, button=button) -> None:
+            buffer = event.current_buffer
+            typed = buffer.text
+            if button.prompt or button.command:
+                buffer.text = ext_ui.expand(button, typed) if button.prompt \
+                    else f"/{button.command} {typed}".rstrip()
+                buffer.cursor_position = len(buffer.text)
+                return
+
+            def run() -> dict:
+                from rich.markdown import Markdown
+                from rich.panel import Panel
+
+                from .theme import console
+
+                said = ext_ui.press(ext, button, typed)
+                if said.get("say"):
+                    console.print(Panel(
+                        Markdown(said["say"]), title=button.label,
+                        title_align="left", border_style=DIM_HEX,
+                        padding=(0, 1),
+                    ))
+                return said
+
+            async def go() -> None:
+                said = await run_in_terminal(run, in_executor=True)
+                text = said.get("send") or said.get("insert")
+                if text:
+                    buffer.text = text
+                    buffer.cursor_position = len(text)
+                if said.get("send"):
+                    buffer.validate_and_handle()
+
+            event.app.create_background_task(go())
+
+        keys.add(*combo)(pressed)
+
+
 def _suggestion_placeholder() -> StyleAndTextTuples:
     """Current animation frame: one suggestion's letters materializing in a
     coral sweep, holding, then erased by another sweep, cycling through
@@ -309,12 +643,17 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     if get_app().is_done:
         return []
 
-    total = _CYCLE * len(_SUGGESTIONS)
+    # One Ctrl+C on an empty line: a second one leaves.
+    if time.monotonic() < _exit_armed_until:
+        return [(f"fg:{DIM_HEX}", EXIT_HINT)]
+
+    shown = _suggestions_now()
+    total = _CYCLE * len(shown)
     pos = time.monotonic() % total
     idx = int(pos // _CYCLE)
     t = pos - idx * _CYCLE
 
-    label = f"{SPARKLE} {_SUGGESTIONS[idx]}"
+    label = f"{SPARKLE} {shown[idx]}"
 
     if t < _REVEAL:
         edge = _sweep_edge(t / _REVEAL, len(label))
@@ -361,10 +700,8 @@ HEALTH_HEX = {
 def input_rule() -> str:
     """The horizontal rule that frames the input area.
 
-    A rule above the prompt and another below it, which is how the
-    current crop of agent TUIs mark out where you type: Hermes names
-    them input_rule_top and input_rule_bot, Pi calls the result a
-    rounded editor. Plain rules rather than a box with sides, because
+    A rule above the prompt and another below it mark out where you
+    type. Plain rules rather than a box with sides, because
     the completion dropdown renders between the two and a box would
     have to leave its walls off those rows.
 
@@ -424,6 +761,131 @@ MAX_MENU_ROWS = 12
 # by then scroll the messages up, so it gets a short scrolling list
 # rather than the whole thing.
 MIN_MENU_ROWS = 4
+
+
+# --- The status line under the mouse --------------------------------------
+#
+# The model's name in it takes a click (the picker) and lights up while
+# the pointer is over it. Taking clicks means the terminal sends the
+# prompt every mouse event, the wheel and drags too, which would leave
+# no way to scroll back or select text. So the first scroll, or a press
+# anywhere but the name, hands the mouse back to the terminal, and
+# typing takes it again.
+
+HOVER_SECONDS = 0.22
+
+
+class _Pointer:
+    hover_since = 0.0
+    aside = False
+
+
+_pointer = _Pointer()
+
+
+def mouse_wanted() -> bool:
+    """Whether the prompt takes mouse events now."""
+
+    return mouse_on() and not _pointer.aside
+
+
+def _step_aside() -> None:
+    if not _pointer.aside:
+        _pointer.aside = True
+        _pointer.hover_since = 0.0
+        app = get_app_or_none()
+        if app is not None:
+            app.invalidate()
+
+
+def take_mouse_back(_buffer=None) -> None:
+    """Typing: the prompt takes the mouse again."""
+
+    if _pointer.aside:
+        _pointer.aside = False
+        app = get_app_or_none()
+        if app is not None:
+            app.invalidate()
+
+
+def _on_model(event) -> object:
+    kind = event.event_type
+    if kind == MouseEventType.MOUSE_MOVE:
+        if not _pointer.hover_since:
+            _pointer.hover_since = time.monotonic()
+    elif kind == MouseEventType.MOUSE_UP:
+        app = get_app()
+        _pointer.hover_since = 0.0
+        _stand_down(app, MODEL_PICK)
+    elif kind in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
+        _step_aside()
+    return None
+
+
+def _elsewhere(event) -> object:
+    kind = event.event_type
+    if kind == MouseEventType.MOUSE_MOVE:
+        _pointer.hover_since = 0.0
+        return None
+    if kind in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN,
+                MouseEventType.MOUSE_DOWN):
+        _step_aside()
+        return None
+    return NotImplemented
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    one = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    two = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}"
+                         for x, y in zip(one, two))
+
+
+def clickable_status(fragments: StyleAndTextTuples,
+                     status: str) -> StyleAndTextTuples:
+    """FRAGMENTS, the prompt above the input, with the model's name in
+    the status line (STATUS's first part) taking clicks and lighting up
+    under the pointer, and every other part handing the mouse back on a
+    scroll or a press."""
+
+    model = (status or "").split("   ")[0].strip()
+    hovered = bool(_pointer.hover_since)
+    grown = min(1.0, (time.monotonic() - _pointer.hover_since)
+                / HOVER_SECONDS) if hovered else 0.0
+    # Eased, so it settles rather than stops.
+    grown = 1 - (1 - grown) ** 3
+    # One fragment a character, as ANSI gives them: run them together.
+    merged: list = []
+    for style, text, *rest in fragments:
+        if merged and not rest and len(merged[-1]) == 2 \
+                and merged[-1][0] == style:
+            merged[-1] = (style, merged[-1][1] + text)
+        else:
+            merged.append((style, text, *rest))
+    out: StyleAndTextTuples = []
+    found = False
+    for style, text, *rest in merged:
+        if found or not model or model not in text or HEALTH_DOT in text:
+            out.append((style, text, rest[0] if rest else _elsewhere))
+            continue
+        found = True
+        at = text.index(model)
+        before, after = text[:at], text[at + len(model):]
+        if before:
+            out.append((style, before, _elsewhere))
+        if hovered:
+            colour = _mix(DIM_HEX, _ACCENT, grown)
+            out.append((f"{style} fg:{colour} underline"
+                        + (" bold" if grown > 0.6 else ""), model, _on_model))
+            if after.startswith("  "):
+                # Where a space was: a mark that it opens something.
+                out.append((f"fg:{colour}", " \u25be", _on_model))
+                after = after[2:]
+        else:
+            out.append((style, model, _on_model))
+        if after:
+            out.append((style, after, _elsewhere))
+    return out
 
 
 def menu_headroom() -> int:
@@ -526,6 +988,8 @@ TOGGLE_AUTO = "\x00auto"
 # cut short. The output is ordinary scrollback above the prompt, which
 # the prompt cannot draw into, so it stands down for the caller to.
 EXPAND = "\x00expand"
+# The model's name in the status line was clicked: open the picker.
+MODEL_PICK = "\x00model"
 
 # Whatever was half typed when that happened, handed back on the next
 # call so a resize does not cost someone their sentence.
@@ -561,6 +1025,46 @@ class SessionHistory(FileHistory):
             super().store_string(string)
         except OSError:
             pass
+
+
+SHELL_MARK = "!"
+
+
+def is_shell_line(text: str) -> bool:
+    """Whether TEXT is a shell command typed after a !."""
+
+    return text.startswith(SHELL_MARK)
+
+
+def shell_prompt(prompt_ansi: str) -> str:
+    """PROMPT_ANSI with its chevron turned into a ! in the same colour:
+    the prompt while a shell command is typed."""
+
+    head, chevron, tail = prompt_ansi.rpartition(CHEVRON)
+    return head + SHELL_MARK + tail if chevron else prompt_ansi
+
+
+SHELL_HINT = "Press Backspace to go back to prompt mode"
+
+
+class HideShellMark(Processor):
+    """Keeps the ! that starts a shell command out of sight: the prompt
+    wears it instead. It stays in the text, so history brings a command
+    back as one, and backspacing it away leaves shell mode."""
+
+    def apply_transformation(self, ti):
+        if ti.lineno != 0 or not is_shell_line(ti.document.text):
+            return Transformation(ti.fragments)
+        fragments = explode_text_fragments(ti.fragments)[1:]
+        # Nothing typed after the ! yet: say how to get out of it, where
+        # the placeholder would be.
+        if ti.document.text == SHELL_MARK:
+            fragments = [*fragments, (f"fg:{DIM_HEX}", SHELL_HINT)]
+        return Transformation(
+            fragments,
+            source_to_display=lambda i: max(0, i - 1),
+            display_to_source=lambda i: i + 1,
+        )
 
 
 def _stand_down(app, result: str) -> None:
@@ -610,7 +1114,52 @@ def key_bindings() -> KeyBindings:
     def _expand(event) -> None:
         _stand_down(event.app, EXPAND)
 
+    # Ctrl+C clears what is typed. On an empty line it asks for a second
+    # press, and that one leaves, as Ctrl+D does. Nothing is printed
+    # either way, so the screen above never moves.
+    @keys.add("c-c")
+    def _interrupt(event) -> None:
+        global _exit_armed_until
+
+        buffer = event.app.current_buffer
+        if buffer.text:
+            buffer.reset()
+            _exit_armed_until = 0.0
+            return
+        now = time.monotonic()
+        if now < _exit_armed_until:
+            _exit_armed_until = 0.0
+            event.app.exit(exception=EOFError)
+            return
+        _exit_armed_until = now + EXIT_PRESS_SECONDS
+        event.app.invalidate()
+
+    _ext_keys(keys)
     return keys
+
+
+# How long a first Ctrl+C on an empty line waits for the second.
+EXIT_PRESS_SECONDS = 1.5
+EXIT_HINT = "Press Ctrl+C again to exit, or type /bye"
+_exit_armed_until = 0.0
+
+
+def arm_exit(until: float) -> None:
+    """A Ctrl+C pressed before the prompt was up counts as the first: the
+    prompt shows the hint until UNTIL, and a press before then leaves."""
+
+    global _exit_armed_until
+
+    _exit_armed_until = max(_exit_armed_until, until)
+
+
+def carry(text: str) -> None:
+    """Put TEXT in the next prompt's box, after anything already there."""
+
+    global _carried
+
+    if text:
+        _carried = f"{_carried}\n{text}" if _carried else text
 
 
 def _take_carried() -> str:
@@ -786,6 +1335,103 @@ def _snug(session: PromptSession) -> None:
     app._on_resize = app.invalidate
 
 
+def _frame_message(
+    prompt_ansi: str,
+    status,
+    health,
+    backdrop: Optional[list[str]] = None,
+    extra: Optional[Callable[[], str]] = None,
+) -> Callable[[], ANSI]:
+    """The prompt's message: the frame and everything above it, rebuilt
+    on every redraw. STATUS and HEALTH may be callables, asked each time,
+    for a frame that stays up while they change; EXTRA gives rows drawn
+    just above the status line, each ending in a newline."""
+
+    def now(value):
+        return value() if callable(value) else value
+
+    def rows_above_status() -> str:
+        return extra() if extra is not None else ""
+
+    def message() -> ANSI:
+        """The prompt, rebuilt on every redraw.
+
+        Built once, it was measured for the terminal it was built in,
+        so a resize left both rules at the old width and the status
+        line padded to a margin that had moved. A line started with !
+        is a shell command, and the prompt says so.
+        """
+
+        app = get_app_or_none()
+        typed = app.current_buffer.text if app is not None else ""
+        shown = shell_prompt(prompt_ansi) if is_shell_line(typed) \
+            else prompt_ansi
+        bar = status_prefix(now(status), now(health))
+        drawn = ANSI(above() + rows_above_status() + bar + shown)
+        if not mouse_wanted():
+            return drawn
+        return clickable_status(to_formatted_text(drawn), now(status) or "")
+
+    def above() -> str:
+        """Everything between the last message and the status line.
+
+        The rows of the picture the caller held back, then blank rows
+        down to wherever the frame has to start for it to sit on the
+        foot of the screen. Messages run from the top, so until they
+        fill the screen there is a gap between them and the frame, and
+        the prompt owns it.
+
+        The menu opens up over those rows. They are blank or the
+        prompt's own to redraw, so it covers nothing it cannot give
+        back and nothing has to move to make room for it. Only once
+        the conversation fills the screen, with no gap left, does the
+        prompt grow for the menu, by as little as it can.
+        """
+
+        held = backdrop or []
+        rows = "".join(row + RESET_ANSI + "\n" for row in held)
+        app = get_app_or_none()
+
+        if app is None:
+            return rows
+
+        renderer = app.renderer
+        below = (
+            renderer.rows_below
+            if isinstance(renderer, SnugRenderer) else 0
+        )
+        head = (
+            rows_above_status() + status_prefix(now(status), now(health))
+            + prompt_ansi
+        ).count("\n")
+        gap = max(0, below - len(held) - head - input_rows(app) - 1)
+
+        # The menu can cover every row above the cursor.
+        cover = len(held) + gap + head
+        wanted = menu_headroom()
+
+        if wanted > cover:
+            gap += max(0, min(wanted, MIN_MENU_ROWS) - cover)
+
+        return rows + "\n" * gap
+
+    def input_rows(app) -> int:
+        """Rows the line being typed takes up, wrapping included."""
+
+        columns = max(1, app.output.get_size().columns)
+        indent = fragment_list_width(
+            to_formatted_text(ANSI(prompt_ansi.split("\n")[-1]))
+        )
+
+        return sum(
+            # One more column for the cursor sitting past the end.
+            max(1, -(-(indent + get_cwidth(line) + 1) // columns))
+            for line in app.current_buffer.document.lines
+        )
+
+    return message
+
+
 def read_line(
     prompt_ansi: str,
     wake: Optional[Callable[[], bool]] = None,
@@ -818,8 +1464,14 @@ def read_line(
             style=_RULE_STYLE,
             history=SessionHistory(str(HISTORY_PATH)),
             key_bindings=key_bindings(),
+            input_processors=[HideShellMark()],
+            mouse_support=Condition(mouse_wanted),
         )
+        _session.default_buffer.on_text_changed += take_mouse_back
         _snug(_session)
+    # A new prompt takes the mouse again, with nothing lit.
+    _pointer.aside = False
+    _pointer.hover_since = 0.0
 
     def watch_for_wake() -> None:
         if wake is None:
@@ -859,78 +1511,449 @@ def read_line(
     def pre_run() -> None:
         watch_for_wake()
         watch_for_resize()
+        _flush_held(get_app())
 
-    def message() -> ANSI:
-        """The prompt, rebuilt on every redraw.
-
-        Built once, it was measured for the terminal it was built in,
-        so a resize left both rules at the old width and the status
-        line padded to a margin that had moved.
-        """
-
-        return ANSI(above() + status_prefix(status, health) + prompt_ansi)
-
-    def above() -> str:
-        """Everything between the last message and the status line.
-
-        The rows of the picture the caller held back, then blank rows
-        down to wherever the frame has to start for it to sit on the
-        foot of the screen. Messages run from the top, so until they
-        fill the screen there is a gap between them and the frame, and
-        the prompt owns it.
-
-        The menu opens up over those rows. They are blank or the
-        prompt's own to redraw, so it covers nothing it cannot give
-        back and nothing has to move to make room for it. Only once
-        the conversation fills the screen, with no gap left, does the
-        prompt grow for the menu, by as little as it can.
-        """
-
-        held = backdrop or []
-        rows = "".join(row + RESET_ANSI + "\n" for row in held)
-        app = get_app_or_none()
-
-        if app is None:
-            return rows
-
-        renderer = app.renderer
-        below = (
-            renderer.rows_below
-            if isinstance(renderer, SnugRenderer) else 0
-        )
-        head = (status_prefix(status, health) + prompt_ansi).count("\n")
-        gap = max(0, below - len(held) - head - input_rows(app) - 1)
-
-        # The menu can cover every row above the cursor.
-        cover = len(held) + gap + head
-        wanted = menu_headroom()
-
-        if wanted > cover:
-            gap += max(0, min(wanted, MIN_MENU_ROWS) - cover)
-
-        return rows + "\n" * gap
-
-    def input_rows(app) -> int:
-        """Rows the line being typed takes up, wrapping included."""
-
-        columns = max(1, app.output.get_size().columns)
-        indent = fragment_list_width(
-            to_formatted_text(ANSI(prompt_ansi.split("\n")[-1]))
-        )
-
-        return sum(
-            # One more column for the cursor sitting past the end.
-            max(1, -(-(indent + get_cwidth(line) + 1) // columns))
-            for line in app.current_buffer.document.lines
-        )
+    message = _frame_message(prompt_ansi, status, health, backdrop)
 
     # Nothing reserved under the input. Those rows are drawn whether or
     # not a menu is open, so they show up as dead space below the
     # prompt and lift the frame off the foot of the screen.
-    return _session.prompt(
-        message,
-        default=_take_carried(),
-        pre_run=pre_run,
-        reserve_space_for_menu=0,
-        bottom_toolbar=closing_rule,
-    )
+    global _starting
+    _starting = True
+    try:
+        return _session.prompt(
+            message,
+            default=_take_carried(),
+            pre_run=pre_run,
+            reserve_space_for_menu=0,
+            bottom_toolbar=closing_rule,
+        )
+    finally:
+        _starting = False
+        # Anything still held prints now, under the finished prompt.
+        _flush_held(None)
+
+
+# A prompt on its way up but not running yet: what print_above is given
+# then waits for it, rather than landing on top of the half-drawn frame.
+_starting = False
+_held: list[Callable[[], None]] = []
+_held_lock = threading.Lock()
+
+
+def hold_until_prompt() -> None:
+    """From now until the first prompt is up, what print_above is given
+    waits for it: said while the opening screen is still being painted,
+    it would land in the middle of the picture. Anything still waiting
+    when Flash exits is said then."""
+
+    global _starting
+    with _held_lock:
+        _starting = True
+    import atexit
+
+    atexit.register(_flush_held, None)
+
+
+def _flush_held(app) -> None:
+    """Print what was held, above APP's prompt if given, else at once."""
+
+    with _held_lock:
+        held = list(_held)
+        _held.clear()
+    if not held:
+        return
+
+    def show_all() -> None:
+        for show in held:
+            show()
+
+    if app is None:
+        show_all()
+        return
+
+    def run() -> None:
+        from prompt_toolkit.application import run_in_terminal
+
+        if not app.is_running:
+            show_all()
+            return
+        with set_app(app):
+            run_in_terminal(show_all)
+
+    app.loop.call_soon(run)
+
+
+def print_above(show: Callable[[], None]) -> None:
+    """Run SHOW, which prints, from any thread: above the prompt if one
+    is up, which then draws itself again underneath, else at once."""
+
+    app = _session.app if _session is not None else None
+    loop = getattr(app, "loop", None) if app is not None else None
+    if app is None or loop is None or not app.is_running:
+        with _held_lock:
+            if _starting:
+                _held.append(show)
+                return
+        show()
+        return
+
+    def run() -> None:
+        from prompt_toolkit.application import run_in_terminal
+
+        if not app.is_running:
+            show()
+            return
+        with set_app(app):
+            run_in_terminal(show)
+
+    try:
+        loop.call_soon_threadsafe(run)
+    except RuntimeError:  # the loop closed as the prompt ended
+        show()
+
+
+def print_at_prompt(show: Callable[[], None]) -> None:
+    """Run SHOW above the prompt: now if one is up, else when the next one
+    comes, never in the middle of a turn's output (a note from a thread
+    in the background: it can wait for the prompt)."""
+
+    app = _session.app if _session is not None else None
+    if app is not None and getattr(app, "loop", None) is not None and app.is_running:
+        print_above(show)
+        return
+    with _held_lock:
+        _held.append(show)
+
+
+# The dock ---------------------------------------------------------------
+#
+# While a turn runs, the input box and the status bar stay at the foot of
+# the screen and take typing, as they do between turns. Enter steers: the
+# message goes to the model before its next step, as the web UI's does,
+# or, if the turn ends first, runs as the next turn. Tab queues one to run
+# as a turn of its own once this one is done. Ctrl+C stops the turn.
+#
+# The box is a prompt run on a thread of its own, the turn keeping the
+# main thread it has always had. Everything the turn prints goes through
+# prompt_toolkit's stdout proxy, which writes it above the box and draws
+# the box again underneath. A y/n question, or a Live redrawing its rows
+# in place, needs the terminal to itself, and pauses the dock while it
+# runs (theme.screen_to_itself).
+
+STEER = "steer"
+QUEUE = "queue"
+# A side question: answered on the side at once, never handed to the
+# turn or run after it.
+BTW = "btw"
+
+# What the dock's prompt returns when it was told to step aside.
+_ASIDE = "\x00aside"
+
+DOCK_REFRESH_SECONDS = 0.1
+
+DOCK_PLACEHOLDER = "Steer Flash, or tab to queue · ctrl+c to stop"
+
+
+def _interrupt_main() -> None:
+    """Ctrl+C in the dock: stop the turn, as Ctrl+C at a bare terminal
+    does. A real signal to the main thread, where one can be sent, so a
+    wait on the model is cut short and not only noticed after it."""
+
+    import _thread
+    import signal
+    import threading
+
+    if hasattr(signal, "pthread_kill"):
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+    else:
+        _thread.interrupt_main()
+
+
+def route(result) -> Optional[tuple[str, str]]:
+    """What the dock's prompt returned, as (mode, text) to send, or None
+    for nothing to send. Enter steers and Tab queues; a command, or a
+    shell line, is not something to tell the model mid-step, and runs
+    on its own once the turn is done."""
+
+    if result is None or result == _ASIDE:
+        return None
+    mode, text = result if isinstance(result, tuple) else (STEER, result)
+    if not text.strip():
+        return None
+    from .btw import question_of  # deferred: wanted once a line is sent
+
+    if question_of(text) is not None:
+        return BTW, text
+    if text.lstrip().startswith("/") or is_shell_line(text):
+        mode = QUEUE
+    return mode, text
+
+
+class Dock:
+    """The input box, kept at the foot of the screen while a turn runs.
+
+    PROMPT_ANSI is the prompt as read_line draws it; STATUS and HEALTH are
+    asked on every redraw. What the turn wants drawn just above the
+    status line, its loader, goes in with show().
+    """
+
+    def __init__(
+        self,
+        prompt_ansi: str,
+        status: Callable[[], Optional[str]],
+        health: Callable[[], str],
+        on_key: Optional[Callable[[str], None]] = None,
+        on_btw: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        import threading
+
+        self.prompt_ansi = prompt_ansi
+        self.status = status
+        self.health = health
+        self.on_key = on_key
+        self.on_btw = on_btw
+        self.sent: list[tuple[str, str]] = []
+        self._loader = ""
+        self._cv = threading.Condition()
+        self._held = 0
+        self._quit = False
+        self._in_prompt = False
+        self._app = None
+        self._thread: Optional[threading.Thread] = None
+        self._proxy = None
+        self._stdout = None
+        self._session: Optional[PromptSession] = None
+
+    # What the turn shows and takes ---------------------------------------
+
+    def show(self, loader: str) -> None:
+        """Draw LOADER, rows of ANSI each ending in a newline, above the
+        status line; "" for none."""
+
+        self._loader = loader
+
+    def take(self, mode: str) -> list[str]:
+        """The messages sent with MODE, taken off the dock."""
+
+        with self._cv:
+            taken = [text for m, text in self.sent if m == mode]
+            self.sent = [(m, text) for m, text in self.sent if m != mode]
+        return taken
+
+    def _rows(self) -> str:
+        """The loader, then what is waiting to go in, a row each."""
+
+        rows = self._loader
+        with self._cv:
+            waiting = list(self.sent)
+        width = max(20, shutil.get_terminal_size().columns - 16)
+        for mode, text in waiting:
+            line = " ".join(text.split())
+            if len(line) > width:
+                line = line[:width - 1] + "…"
+            said = "steering" if mode == STEER else "queued"
+            rows += (
+                ansi(DIM_HEX) + f"  ↳ {said}: " + RESET_ANSI + line + "\n"
+            )
+        return rows
+
+    # Up and down ---------------------------------------------------------
+
+    def start(self) -> None:
+        import threading
+
+        from . import theme
+
+        self._patch()
+        theme.set_dock(self)
+        self._thread = threading.Thread(
+            target=self._run, name="flash-dock", daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> list[tuple[str, str]]:
+        """Take the dock down, keeping what was half typed for the next
+        prompt. What was sent and not taken, in order."""
+
+        from . import theme
+
+        with self._cv:
+            self._quit = True
+            self._cv.notify_all()
+        self._wait_aside()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        theme.set_dock(None)
+        self._unpatch()
+        with self._cv:
+            left, self.sent = self.sent, []
+        return left
+
+    def pause(self) -> None:
+        """Step aside: the screen is the caller's until resume()."""
+
+        with self._cv:
+            self._held += 1
+            first = self._held == 1
+        if first:
+            self._wait_aside()
+            self._unpatch()
+
+    def resume(self) -> None:
+        with self._cv:
+            self._held = max(0, self._held - 1)
+            back = self._held == 0 and not self._quit
+        if back:
+            self._patch()
+            with self._cv:
+                self._cv.notify_all()
+
+    def _wait_aside(self) -> None:
+        """Have the prompt stand down, and wait until it has."""
+
+        with self._cv:
+            while self._in_prompt:
+                app = self._app
+                # An app still starting has no loop yet: it is asked once
+                # it has one, on the next pass.
+                loop = getattr(app, "loop", None) if app is not None \
+                    else None
+                if loop is not None and not app.is_done:
+                    with contextlib.suppress(RuntimeError):
+                        loop.call_soon_threadsafe(self._aside, app)
+                self._cv.wait(timeout=0.05)
+
+    @staticmethod
+    def _aside(app) -> None:
+        if not app.is_done:
+            _stand_down(app, _ASIDE)
+
+    def _patch(self) -> None:
+        import sys
+
+        from prompt_toolkit.patch_stdout import StdoutProxy
+
+        if self._proxy is not None:
+            return
+        self._stdout = (sys.stdout, sys.stderr)
+        self._proxy = StdoutProxy(raw=True, sleep_between_writes=0.05)
+        sys.stdout = self._proxy
+        sys.stderr = self._proxy
+
+    def _unpatch(self) -> None:
+        import sys
+
+        if self._proxy is None:
+            return
+        sys.stdout, sys.stderr = self._stdout
+        proxy, self._proxy = self._proxy, None
+        proxy.close()
+
+    # The prompt, on its thread ---------------------------------------------
+
+    def _keys(self) -> KeyBindings:
+        keys = KeyBindings()
+
+        @keys.add("enter", filter=_after_backslash)
+        def _continued(event) -> None:
+            buffer = event.current_buffer
+            buffer.delete_before_cursor(1)
+            buffer.insert_text("\n")
+
+        @keys.add("escape", "enter")
+        def _newline(event) -> None:
+            event.current_buffer.insert_text("\n")
+
+        @keys.add("tab", filter=~has_completions)
+        def _queue(event) -> None:
+            buffer = event.current_buffer
+            if buffer.text.strip():
+                buffer.append_to_history()
+                event.app.exit(result=(QUEUE, buffer.text))
+
+        @keys.add("c-c")
+        def _stop(event) -> None:
+            _interrupt_main()
+
+        @keys.add("s-tab", filter=~has_completions)
+        def _toggle_auto(event) -> None:
+            if self.on_key is not None:
+                self.on_key(TOGGLE_AUTO)
+
+        @keys.add("c-o")
+        def _expand(event) -> None:
+            if self.on_key is not None:
+                self.on_key(EXPAND)
+
+        return keys
+
+    def _prompt(self):
+        if self._session is None:
+            history = _session.history if _session is not None \
+                else SessionHistory(str(HISTORY_PATH))
+            self._session = PromptSession(
+                completer=SlashCommandCompleter(),
+                complete_while_typing=True,
+                erase_when_done=True,
+                style=_RULE_STYLE,
+                history=history,
+                key_bindings=self._keys(),
+                input_processors=[HideShellMark()],
+            )
+            _snug(self._session)
+        message = _frame_message(
+            self.prompt_ansi, self.status, self.health, extra=self._rows,
+        )
+
+        def pre_run() -> None:
+            app = get_app()
+            renderer = app.renderer
+            if isinstance(renderer, SnugRenderer):
+                # A resize mid-turn redraws the box; the conversation
+                # above it is redrawn once the turn is done.
+                renderer.on_resize = None
+            with self._cv:
+                self._app = app
+                if self._held or self._quit:
+                    app.loop.call_soon(self._aside, app)
+
+        return self._session.prompt(
+            message,
+            default=_take_carried(),
+            pre_run=pre_run,
+            placeholder=ANSI(ansi(DIM_HEX) + DOCK_PLACEHOLDER + RESET_ANSI),
+            refresh_interval=DOCK_REFRESH_SECONDS,
+            reserve_space_for_menu=0,
+            bottom_toolbar=closing_rule,
+            handle_sigint=False,
+        )
+
+    def _run(self) -> None:
+        while True:
+            with self._cv:
+                while self._held and not self._quit:
+                    self._cv.wait()
+                if self._quit:
+                    return
+                self._in_prompt = True
+            try:
+                result = self._prompt()
+            except (EOFError, KeyboardInterrupt):
+                result = None
+            except Exception:  # noqa: BLE001
+                # A dock that cannot draw is no reason to lose the turn.
+                result = None
+                with self._cv:
+                    self._quit = True
+            finally:
+                with self._cv:
+                    self._in_prompt = False
+                    self._app = None
+                    self._cv.notify_all()
+            sent = route(result)
+            if sent is not None and sent[0] == BTW and self.on_btw:
+                self.on_btw(sent[1])
+            elif sent is not None:
+                with self._cv:
+                    self.sent.append(sent)

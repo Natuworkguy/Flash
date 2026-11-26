@@ -19,12 +19,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
 
-import ollama
 from rich.console import Group, RenderableType
-from rich.live import Live
 from rich.text import Text
 
-from .dashes import undash
+from . import loop, providers, systemone
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
@@ -38,16 +36,19 @@ from .theme import (
     SPINNER_FRAMES,
     TICK,
     WARN,
+    Live,
     ToolSink,
     capture_tool_output,
     capturing,
     console,
     plural,
 )
+from .tidy import tidy, tidy_args
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 
-MAX_SUBAGENT_ROUNDS = 10
+# 0: the main loop's limit (loop.max_rounds, MAX_TOOL_ROUNDS)
+MAX_SUBAGENT_ROUNDS = 0
 DEFAULT_WAIT_SECONDS = 300.0
 MAX_WAIT_SECONDS = 600.0
 
@@ -75,8 +76,10 @@ contained answer, not a promise to look further.
 """.strip()
 
 ROUND_LIMIT_MESSAGE = (
-    "You have used every tool round you get. Answer the task now from the "
-    "tool results above. Do not call any more tools."
+    "You have used every tool round you get, and the steps you last asked "
+    "for have run: their results are above. Answer the task now from all "
+    "the tool results, with no more tool calls: what is done, what is "
+    "not, and what would finish it."
 )
 
 
@@ -103,6 +106,7 @@ class SubAgent:
     activity: str = "Starting"
     steps: list[Step] = field(default_factory=list)
     delivered: bool = False
+    stop_asked: bool = False
 
     @property
     def elapsed(self) -> float:
@@ -118,12 +122,15 @@ def allowed_tool_names() -> tuple[str, ...]:
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    if flash_tools.NO_COMMAND_CONFIRMATION:
-        return flash_tools.SUBAGENT_TOOL_NAMES
+    # Only tools that can work now: email's once it is set up.
+    available = {t["function"]["name"] for t in flash_tools.available_tools()}
 
     return tuple(
         name for name in flash_tools.SUBAGENT_TOOL_NAMES
-        if name not in flash_tools.CONFIRMED_TOOL_NAMES
+        if name in available and (
+            flash_tools.NO_COMMAND_CONFIRMATION
+            or name not in flash_tools.CONFIRMED_TOOL_NAMES
+        )
     )
 
 
@@ -132,7 +139,8 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
     name = getattr(function, "name", "") or ""
     args = getattr(function, "arguments", None) or {}
 
-    return name, dict(args)
+    # What it asked for, as the user's settings ask for it.
+    return name, tidy_args(dict(args))
 
 
 def _update(entry: SubAgent, **changes) -> None:
@@ -201,10 +209,10 @@ def _run(entry: SubAgent) -> None:
             raise RuntimeError("MODEL is not set")
 
         host = flash_tools.OLLAMA_HOST or OLLAMA_HOST_DEFAULT
-        client = ollama.Client(host=host)
+        client = providers.client(host)
         allowed = allowed_tool_names()
         schemas = [
-            t for t in flash_tools.tools
+            t for t in flash_tools.available_tools()
             if t["function"]["name"] in allowed
         ]
         messages: list[dict] = [
@@ -216,57 +224,49 @@ def _run(entry: SubAgent) -> None:
             },
             {"role": "user", "content": entry.task},
         ]
+        # What System One holds this sub-agent's calls up against.
+        systemone.set_request(entry.task)
 
-        final = ""
-        tool_calls: list = []
-
-        with capture_tool_output(_recorder(entry)):
-            for round_number in range(1, MAX_SUBAGENT_ROUNDS + 1):
-                _update(entry, rounds=round_number, activity="Thinking")
-                response = client.chat(
-                    model=model,
-                    messages=messages,
-                    tools=schemas,
-                    options=chat_options(),
-                )
-                message = getattr(response, "message", None)
-                final = getattr(message, "content", "") or ""
-                tool_calls = list(getattr(message, "tool_calls", None) or [])
-
-                if not tool_calls:
-                    break
-
-                calls = [_tool_call_name_args(call) for call in tool_calls]
-                messages.append({
-                    "role": "assistant",
-                    "content": final,
-                    "tool_calls": [
-                        {"function": {"name": name, "arguments": args}}
-                        for name, args in calls
-                    ],
-                })
-
-                for name, args in calls:
-                    result = _call_tool(entry, name, args, allowed)
-                    messages.append({
-                        "role": "tool",
-                        "content": flash_tools.trim_tool_output(result, name),
-                        "tool_name": name,
-                    })
-
-        if tool_calls:
-            _update(entry, activity="Writing its answer")
-            messages.append({"role": "system", "content": ROUND_LIMIT_MESSAGE})
+        def ask(convo: list, with_tools: bool) -> loop.Reply:
+            if with_tools:
+                _update(entry, rounds=entry.rounds + 1, activity="Thinking")
+            else:
+                _update(entry, activity="Writing its answer")
             response = client.chat(
-                model=model, messages=messages, options=chat_options()
+                model=model, messages=convo,
+                tools=schemas if with_tools else None,
+                options=chat_options(),
             )
             message = getattr(response, "message", None)
-            final = getattr(message, "content", "") or ""
+            return loop.Reply(
+                content=getattr(message, "content", "") or "",
+                calls=[_tool_call_name_args(c) for c in
+                       getattr(message, "tool_calls", None) or []],
+            )
+
+        # The same loop as the main one's: an empty reply is asked for
+        # again, changed code is checked, and at the round limit the
+        # steps asked for still run before the answer.
+        # Its commands are its own, for Stop to end.
+        with capture_tool_output(_recorder(entry)), \
+                flash_tools.running_as(f"agent:{entry.id}"):
+            done = loop.run(
+                messages, ask=ask,
+                call=lambda name, args: _call_tool(entry, name, args, allowed),
+                rounds=MAX_SUBAGENT_ROUNDS or -1,
+                last_word=lambda _ran: ROUND_LIMIT_MESSAGE,
+                stopping=lambda: entry.stop_asked,
+            )
+        if done.reply.stopped:
+            _update(entry, status=FAILED, result="Stopped by the user.",
+                    finished=time.time())
+            return
+        final = done.reply.content
 
         _update(
             entry,
             status=DONE,
-            result=undash(final).strip()
+            result=tidy(final).strip()
             or "(sub-agent finished with no output)",
             finished=time.time(),
         )
@@ -289,6 +289,31 @@ def start(task: str) -> str:
     threading.Thread(target=_run, args=(entry,), daemon=True).start()
 
     return entry.id
+
+
+def stop(agent_id: str) -> bool:
+    """Stop a running sub-agent: the command it runs ends now, and it
+    stops at its next step. Whether it was running."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    with _lock:
+        entry = _agents.get(agent_id)
+        if entry is None or entry.status != RUNNING:
+            return False
+        entry.stop_asked = True
+    flash_tools.stop_commands(f"agent:{agent_id}")
+    return True
+
+
+def run_now(task: str) -> tuple[bool, str]:
+    """Run a sub-agent on TASK here, to the end, without listing it with
+    the others: for a look Flash takes for itself, like a wait's check.
+    Whether it finished, and its answer or what went wrong."""
+
+    entry = SubAgent(id=uuid.uuid4().hex[:6], task=task)
+    _run(entry)
+    return entry.status == DONE, entry.result
 
 
 def _snapshot(entry: SubAgent) -> SubAgent:

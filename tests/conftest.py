@@ -6,14 +6,36 @@ import pytest
 
 from flash import (
     ai,
+    briefing,
+    calls,
+    connectors,
+    design,
     extensions,
+    filesearch,
+    heyflash,
+    instructions,
     learning,
+    mail,
+    meeting,
     memory,
+    notify,
+    paths,
+    progress_mail,
     repl_input,
+    screenglow,
+    sessions,
+    showcase,
+    siri,
     skills,
+    skilltrials,
+    sparkcalls,
+    sparks,
+    systemone,
     terminal,
     tools,
+    usermodel,
     voice,
+    waits,
     workspace,
 )
 
@@ -27,6 +49,87 @@ def outside_vscode(monkeypatch):
     """
 
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
+
+
+_SHELL_SETTINGS = ("MODEL_TITLES", "ULTRA_AUTO", "ULTRA_AUTO_ALLOWED",
+                   "SPARK_DEFAULT_MODEL")
+
+
+@pytest.fixture(autouse=True)
+def no_developer_settings(monkeypatch):
+    """Tests never see the developer's own Flash settings.
+
+    flash/ai.py loads the real ~/.flash.env into os.environ at import,
+    before any fixture runs, and the shell may export Flash settings too.
+    Either turns on features (chat titles, ultra auto) tests do not expect.
+    """
+
+    from dotenv import dotenv_values  # pylint: disable=import-outside-toplevel
+
+    names = set(_SHELL_SETTINGS) | set(dotenv_values(ai.ENV_PATH))
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    # Model titles are on for everyone else, but here each one would take
+    # a scripted reply meant for the chat; their own tests turn them on.
+    monkeypatch.setenv("MODEL_TITLES", "0")
+    # Computer Use plays its plain, instant way in tests; the human way is tested on its own.
+    monkeypatch.setenv("COMPUTER_USE_HUMAN", "0")
+    # Config read those settings at import; read them again without them.
+    ai.Config.refresh()
+
+
+_OPENERS = {"open", "xdg-open", "start", "explorer"}
+
+
+@pytest.fixture(autouse=True)
+def nothing_opens_on_screen(monkeypatch):
+    """No test opens a file, app, or browser window on the developer's
+    screen, even one that forgets to mock its viewer. Tests that check
+    an opener patch it themselves, which still wins over this."""
+
+    import subprocess  # pylint: disable=import-outside-toplevel
+    import webbrowser  # pylint: disable=import-outside-toplevel
+
+    for name in ("open", "open_new", "open_new_tab"):
+        monkeypatch.setattr(webbrowser, name, lambda *a, **k: True)
+    monkeypatch.setattr(os, "startfile", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(tools, "_open_in_viewer", lambda path: "")
+
+    real_popen = subprocess.Popen
+
+    class NoOpeners(real_popen):  # pylint: disable=too-few-public-methods
+        """Popen that refuses `open` and its kin."""
+
+        def __init__(self, args, *rest, **kwargs):
+            first = args if isinstance(args, str) else (list(args) or [""])[0]
+            if os.path.basename(str(first).split()[0] if first else "") \
+                    in _OPENERS:
+                raise AssertionError(
+                    f"a test tried to open something on screen: {args!r}")
+            super().__init__(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", NoOpeners)
+
+
+@pytest.fixture(autouse=True)
+def no_siri_helper(monkeypatch):
+    """No test starts the Siri voice helper on the developer's Mac: there
+    are no Siri voices unless a test says which."""
+
+    monkeypatch.setattr(siri, "voices", lambda refresh=False: [])
+
+
+@pytest.fixture(autouse=True)
+def no_folder_memory(monkeypatch):
+    """The terminal's loop turns a folder's project memory on, and sets
+    the project its thread is in: neither outlasts the test that ran it."""
+
+    from flash import memory
+
+    monkeypatch.setattr(memory, "FOLDER_MEMORY", False)
+    memory._in_project.id = ""
+    yield
+    memory._in_project.id = ""
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +147,40 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # Every turn's tool list reads the installed extensions, so without
     # this the suite would pick up whatever the developer has installed.
     monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
+    # The briefing's dot looks for new cards on a thread of its own, and
+    # says so with an event: not in tests, which ask has_new themselves.
+    monkeypatch.setattr(briefing, "new_waiting", lambda *a, **kw: False)
+    # The vault in the temp home, its key in a file, never a keychain.
+    from flash import vault
+
+    monkeypatch.setattr(vault, "FLASH_DIR", home / ".flash")
+    # What to tell the user about, and quiet hours.
+    from flash import checkins
+
+    monkeypatch.setattr(checkins, "FLASH_DIR", home / ".flash")
+    # the user's icon style
+    from flash import icons
+
+    monkeypatch.setattr(icons, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(vault, "_load_key", lambda: (
+        vault._key_file().read_bytes() if vault._key_file().exists()
+        else None))
+    monkeypatch.setattr(vault, "_store_key", lambda key: (
+        vault._write_private(vault._key_file(), key) or "a file"))
+    vault._cache.clear()
+    # No test puts a real glow around the screen.
+    monkeypatch.setattr(screenglow, "_launch", lambda *a: None)
+    # Nor wakes this machine's screen.
+    from flash import computeruse
+
+    monkeypatch.setattr(computeruse, "wake", lambda force=False: False)
+    # The terminal's kept conversations, and the one it is on.
+    monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(ai, "_session", None)
+    # The system prompt lists the saved design systems.
+    monkeypatch.setattr(
+        design, "SYSTEMS_DIR", home / ".flash" / "design-systems"
+    )
     extensions.reload()
     monkeypatch.setattr(
         repl_input, "HISTORY_PATH", home / ".flash" / "history"
@@ -52,8 +189,47 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # both have to come from the temp home too.
     monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    # Each skill's runs, trials and old versions.
+    monkeypatch.setattr(skilltrials, "FLASH_DIR", home / ".flash")
+    # A spark's call rings in no real Flash: the listeners are kept per
+    # test, and no thread is left beating once the temp home is gone.
+    monkeypatch.setattr(sparkcalls, "_handlers", [])
+    monkeypatch.setattr(sparkcalls, "_rung", {})
+    monkeypatch.setattr(sparkcalls, "_started", False)
+    monkeypatch.setattr(sparkcalls, "_start_threads", lambda: None)
+    monkeypatch.setattr(sparkcalls, "ring_desktop",
+                        lambda *a, **k: None)
+    # Sparks, and what this session has already pointed out about them.
+    monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    # How many notifications the agent has sent lately.
+    monkeypatch.setattr(notify, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(notify, "ENV_PATH", str(home / ".flash.env"))
+    # Settings saved through paths at the moment they are saved
+    # (usermodel, sandbox) go to the temp home's file too.
+    monkeypatch.setattr(paths, "ENV_PATH", str(home / ".flash.env"))
+    monkeypatch.setenv(notify.LIMIT_SETTING, "")
+    monkeypatch.setenv(notify.WINDOW_SETTING, "")
+    # The tally of replies, and what tips have been shown.
+    monkeypatch.setattr(showcase, "FLASH_DIR", home / ".flash")
+    monkeypatch.delenv("SHOW_TIPS", raising=False)
+    # The user's email settings, and the password in them.
+    monkeypatch.setattr(mail, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    # Each model call's health, log, cache and traces.
+    from flash import routing
+
+    monkeypatch.setattr(routing, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(routing, "_health", None)
+    monkeypatch.setattr(routing, "_small", {})
+    monkeypatch.setattr(usermodel, "FLASH_DIR", home / ".flash")
+    # Search indexes of folders.
+    monkeypatch.setattr(filesearch, "FLASH_DIR", home / ".flash")
+    # Progress emails: off, and their log in the temp home.
+    monkeypatch.setattr(progress_mail, "FLASH_DIR", home / ".flash")
+    for name in [n for n in os.environ if n.startswith("PROGRESS_EMAIL")]:
+        monkeypatch.delenv(name)
     # Voice settings and models too: the developer's own picks, loaded
     # from ~/.flash.env when ai was imported, would otherwise decide
     # which model a test expects. And a setting a test saves lands in
@@ -62,12 +238,87 @@ def isolated_home(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name)
     monkeypatch.setattr(voice, "MODELS_DIR", home / ".flash" / "models")
     monkeypatch.setattr(ai, "ENV_PATH", str(home / ".flash.env"))
+    # A shift reads autonomous mode from the env file: the temp one.
+    monkeypatch.setattr(sparks, "ENV_PATH", str(home / ".flash.env"))
+    # System One too, off and on its default model unless a test says.
+    monkeypatch.setattr(systemone, "ENV_PATH", str(home / ".flash.env"))
+    # "Hey Flash" with no page open (VOICE_WAKE_ALWAYS, cleared above).
+    monkeypatch.setattr(heyflash, "ENV_PATH", str(home / ".flash.env"))
+    # The call monitor, set from Settings.
+    monkeypatch.setattr(calls, "ENV_PATH", str(home / ".flash.env"))
+    # Custom instructions, none unless a test writes some.
+    monkeypatch.setattr(instructions, "FLASH_DIR", home / ".flash")
+    for name in ("SYSTEM_ONE", "SYSTEM_ONE_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    # Browsers are remembered across restarts only where a test says so.
+    monkeypatch.delenv("WEB_REMEMBER_BROWSERS", raising=False)
+    # Deleted chats' usage is kept unless a test switches it off.
+    monkeypatch.delenv("WEB_KEEP_DELETED_USAGE", raising=False)
+    # Acting on the computer: off, as it is until the user turns it on.
+    monkeypatch.delenv("COMPUTER_ACTIONS", raising=False)
+    # Meetings' transcripts, in the temp home.
+    monkeypatch.setattr(meeting, "FLASH_DIR", home / ".flash")
+    # Waits, likewise, read afresh.
+    monkeypatch.setattr(waits, "FLASH_DIR", home / ".flash")
+    waits.forget_cache()
+    # MCP servers: none but a test's own, and none left running after.
+    monkeypatch.setattr(connectors, "FLASH_DIR", home / ".flash")
+    connectors.stop_all()
+    connectors._begun.clear()
+    connectors._starting.clear()
+    # A key in the developer's shell would ride on every test's requests.
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    systemone.forget_checks()
     learning.refresh()
     learning.reset()
     yield home
+    connectors.stop_all()
     extensions.reload()
     learning.refresh()
     learning.reset()
+
+
+@pytest.fixture(autouse=True)
+def fresh_shift_rounds(monkeypatch):
+    """Rounds a test sets for a shift go with it: setting them writes the
+    process's environment too."""
+
+    monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
+    monkeypatch.delenv("SPARK_SHIFT_UNLIMITED", raising=False)
+    # Set, not deleted, so whatever a test sets is taken back after it.
+    monkeypatch.setenv("SPARK_DEFAULT_MODEL", "")
+
+
+@pytest.fixture(autouse=True)
+def no_spark_keeper(monkeypatch):
+    """No test starts the thread that runs sparks' shifts.
+
+    ai.main() and the web server start it, and once running it would
+    outlive the test and work on sparks a later test makes. A test runs
+    a shift itself, with sparks.shift.
+    """
+
+    monkeypatch.setattr(sparks, "start", lambda: None)
+    # Nor does a web session an earlier test made hear its sparks change.
+    monkeypatch.setattr(sparks, "_listeners", [])
+    yield
+    # A test that ran the keeper lets its lock go with it.
+    sparks._give_floor()
+
+
+@pytest.fixture(autouse=True)
+def no_login_service(monkeypatch):
+    """No test registers a real service or starts a real keeper.
+
+    Every system command keepalive runs goes through _ok, and the one
+    process it starts itself through _spawn: both do nothing here. A
+    test that wants to see what they were asked to do patches them.
+    """
+
+    from flash import keepalive
+
+    monkeypatch.setattr(keepalive, "_ok", lambda args: False)
+    monkeypatch.setattr(keepalive, "_spawn", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -91,10 +342,13 @@ def no_developer_config(monkeypatch):
     """
 
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr(tools, "ULTRA_AUTO", False)
 
     # The same leak reaches every other setting in that file, so the
     # ones that change what a test does are cleared too.
-    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND"):
+    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND", "ULTRA_AUTO",
+                 "ULTRA_AUTO_ALLOWED", "COMPUTER_USE",
+                 "COMPUTER_USE_MOUSE_STOPS"):
         monkeypatch.delenv(name, raising=False)
 
     # No test starts a background learning review against a real model
@@ -105,3 +359,30 @@ def no_developer_config(monkeypatch):
     from flash.ai import Config
 
     monkeypatch.setattr(Config, "background", "")
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_listeners(monkeypatch):
+    """Every "Hey Flash" listener a test starts is stopped with it.
+
+    One left running, by a test that failed before it stopped its own or
+    that stopped it without waiting, would go on hearing the next test's
+    wake word, and answer it in a conversation of its own.
+    """
+
+    started = []
+    start = heyflash.Listener.start
+
+    def kept(self):
+        started.append(self)
+        start(self)
+
+    monkeypatch.setattr(heyflash.Listener, "start", kept)
+    yield
+    for found in started:
+        found._stop.set()
+        found._changed.set()
+    for found in started:
+        for thread in (found._thread, found._beats):
+            if thread is not None:
+                thread.join(timeout=5)

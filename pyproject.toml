@@ -22,9 +22,16 @@ file = ["requirements.txt"]
 [tool.setuptools.dynamic.optional-dependencies]
 dev = { file = ["requirements-dev.txt"] }
 voice = { file = ["requirements-voice.txt"] }
+# Kokoro voices, which speak more naturally: pip install "flash[kokoro]".
+kokoro = { file = ["requirements-kokoro.txt"] }
+# Phonon voices, the most natural and quickest: pip install "flash[phonon]".
+phonon = { file = ["requirements-phonon.txt"] }
+# Moonshine listening, which hears more accurately than Vosk:
+# pip install "flash[moonshine]".
+moonshine = { file = ["requirements-moonshine.txt"] }
 
 [project.scripts]
-flash = "flash.ai:main"
+flash = "flash.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -33,16 +40,36 @@ include = ["flash*"]
 [tool.setuptools.package-data]
 flash = [
     "system_prompt.txt",
+    "visuals_prompt.txt",
+    "design_prompt.txt",
     "thinking_states.json",
     "suggestions.json",
+    "apple_listen.swift",
+    "calltap.swift",
+    "siri_voice.swift",
+    "window.swift",
     "backgrounds/*.scene",
+    "games/*.html",
+    "games/*.js",
+    "knowledge/*.md",
     "web/*.html",
+    "web/*.js",
     "web/*.woff2",
     "web/*.svg",
+    "web/*.ico",
+    "web/*.icns",
+    "web/*.png",
     "web/katex/*.js",
     "web/katex/*.txt",
     "web/three/*.js",
     "web/three/*.txt",
+    "web/mermaid/*.js",
+    "web/mermaid/*.txt",
+    "web/3dmol/*.js",
+    "web/3dmol/*.txt",
+    "web/leaflet/*.js",
+    "web/leaflet/*.css",
+    "web/leaflet/*.txt",
     "web/*.txt",
 ]
 

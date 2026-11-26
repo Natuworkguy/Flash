@@ -1,0 +1,427 @@
+# pylint: disable=C0114,C0115,C0116
+
+import pytest
+
+from flash import computer, computeruse, tools
+
+
+@pytest.fixture(autouse=True)
+def use_on(monkeypatch, tmp_path):
+    monkeypatch.setattr("flash.notify.ENV_PATH", tmp_path / ".env")
+    monkeypatch.setenv(computeruse.SETTING, "1")
+    monkeypatch.setenv(computer.SETTING, "1")
+    monkeypatch.delenv(computeruse.MOUSE_SETTING, raising=False)
+    monkeypatch.setattr(computeruse, "system", lambda: "linux")
+    monkeypatch.setattr(computeruse, "missing", lambda: "")
+    monkeypatch.setattr(computeruse, "_watch", lambda: None)
+    monkeypatch.setattr(computeruse, "SETTLE", 0)
+    monkeypatch.setattr(tools, "model_sees_images", lambda *a: True)
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(tools, "ULTRA_AUTO", False)
+    tools._pending_images.clear()
+    computeruse.end()
+    yield
+    computeruse.end()
+    computeruse._shot.clear()
+
+
+@pytest.fixture
+def screen(monkeypatch):
+    """A 2560x1440 screen, shot at 1280x720, and what was sent to it."""
+
+    sent = []
+
+    def shoot():
+        computeruse._shot.update(scale=2.0, size=(1280, 720))
+        return b"png", (1280, 720)
+
+    monkeypatch.setattr(computeruse, "screenshot", shoot)
+    monkeypatch.setattr(computeruse, "_send",
+                        lambda kind, command: sent.append(command) or {})
+    monkeypatch.setattr(computeruse, "pointer", lambda: (0.0, 0.0))
+    return sent
+
+
+def test_it_asks_even_in_autonomous_mode_and_once_a_reply(
+        monkeypatch, screen):
+    asked = []
+    answers = [False, True]
+    monkeypatch.setattr(tools, "_user_allows",
+                        lambda q, **_: asked.append(q) or answers.pop(0))
+
+    said = tools.computer_use_tool("screenshot")
+    assert "said no" in said and screen == []  # nosec B101
+    assert "Ctrl+Alt+Esc" in asked[0]  # nosec B101
+
+    said = tools.computer_use_tool("screenshot")
+    assert "The screen now, 1280x720" in said  # nosec B101
+    assert tools._pending_images == [b"png"]  # nosec B101
+    tools.computer_use_tool("click", x=100, y=50)
+    # One yes for the reply, and the screenshot's points made the
+    # screen's own.
+    assert len(asked) == 2  # nosec B101
+    assert screen == [{"do": "click", "x": 200.0, "y": 100.0,  # nosec
+                       "button": "left", "count": 1}]
+
+    # The reply ends: the next one asks again.
+    computeruse.end("terminal")
+    answers.append(False)
+    assert "said no" in tools.computer_use_tool("screenshot")  # nosec B101
+    assert len(asked) == 3  # nosec B101
+
+
+def test_ultra_auto_does_not_ask(monkeypatch, screen):
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    monkeypatch.setattr(tools, "_user_allows",
+                        lambda q, **_: pytest.fail("asked in UltraAuto"))
+
+    assert "The screen now" in tools.computer_use_tool("screenshot")  # nosec
+
+
+def test_moving_the_mouse_takes_it_back(monkeypatch, screen):
+    stopped = []
+    computeruse.take("c1", lambda: stopped.append(True))
+    computeruse.do("screenshot", {}, "c1")
+    computeruse.do("move", {"x": 10, "y": 10}, "c1")
+    assert computeruse._holder["pointer"] == (20.0, 20.0)  # nosec B101
+
+    monkeypatch.setattr(computeruse, "pointer", lambda: (400.0, 300.0))
+    with pytest.raises(computeruse.TakenBack, match="moved the mouse"):
+        computeruse.do("click", {"x": 10, "y": 10}, "c1")
+    assert stopped == [True] and not computeruse.holds("c1")  # nosec B101
+    assert len(screen) == 1  # nosec B101  (the click never happened)
+
+
+def test_the_mouse_can_be_left_out_of_it(monkeypatch, screen):
+    computeruse.set_mouse_stops(False)
+    assert not computeruse.mouse_stops()  # nosec B101
+    assert "mouse" not in computeruse.how_to_stop()  # nosec B101
+    computeruse.take("c1", lambda: None)
+    computeruse.do("screenshot", {}, "c1")
+    computeruse.do("move", {"x": 10, "y": 10}, "c1")
+    monkeypatch.setattr(computeruse, "pointer", lambda: (400.0, 300.0))
+    computeruse.do("click", {"x": 10, "y": 10}, "c1")
+    assert computeruse.holds("c1")  # nosec B101
+
+    computeruse.set_mouse_stops(True)
+    assert "move the mouse" in computeruse.how_to_stop()  # nosec B101
+
+
+def test_the_stop_keys_stop_the_reply_that_has_it(screen):
+    stopped = []
+    computeruse.take("c1", lambda: stopped.append("c1"))
+
+    computeruse.taken_back()
+
+    assert stopped == ["c1"] and not computeruse.holds("c1")  # nosec B101
+
+
+def test_one_chat_at_a_time(monkeypatch, screen):
+    computeruse.take("other", lambda: None)
+    monkeypatch.setattr(tools, "_user_allows",
+                        lambda q, **_: pytest.fail("asked while busy"))
+
+    with tools.computer_user("c1", lambda: None):
+        said = tools.computer_use_tool("screenshot")
+    assert "another chat" in said  # nosec B101
+
+
+def test_points_off_the_screenshot_and_before_one_are_refused(screen):
+    computeruse.take("c1")
+    with pytest.raises(computeruse.UseError, match="screenshot first"):
+        computeruse.do("click", {"x": 1, "y": 1}, "c1")
+    computeruse.do("screenshot", {}, "c1")
+    with pytest.raises(computeruse.UseError, match="off the screenshot"):
+        computeruse.do("click", {"x": 5000, "y": 1}, "c1")
+
+
+def test_keys_are_read_and_the_stop_keys_never_pressed():
+    assert computeruse.parse_keys("Cmd+Shift+4") == (  # nosec B101
+        ["cmd", "shift"], "4")
+    assert computeruse.parse_keys("enter") == ([], "return")  # nosec B101
+    assert computeruse.parse_keys("option+left") == (  # nosec B101
+        ["alt"], "left")
+    with pytest.raises(computeruse.UseError, match="stop keys"):
+        computeruse.parse_keys("ctrl+alt+esc")
+    with pytest.raises(computeruse.UseError, match="not a key"):
+        computeruse.parse_keys("ctrl+banana")
+    with pytest.raises(computeruse.UseError, match="not a modifier"):
+        computeruse.parse_keys("hyper+a")
+
+
+def test_linux_goes_through_xdotool(monkeypatch):
+    ran = []
+    monkeypatch.setattr(computeruse, "_run",
+                        lambda argv, env=None: ran.append(argv) or "")
+
+    computeruse._linux({"do": "click", "x": 20.4, "y": 10, "button": "right",
+                        "count": 1})
+    computeruse._linux({"do": "key", "mods": ["cmd", "shift"], "key": "f5"})
+    computeruse._linux({"do": "type", "text": "--help"})
+
+    assert ran == [  # nosec B101
+        ["xdotool", "mousemove", "20", "10", "click", "--repeat", "1", "3"],
+        ["xdotool", "key", "--", "super+shift+F5"],
+        ["xdotool", "type", "--delay", "8", "--", "--help"],
+    ]
+
+
+def test_offered_only_while_on(monkeypatch):
+    names = {t["function"]["name"] for t in tools.available_tools()}
+    assert "computer_use" in names  # nosec B101
+    assert "computer_use" not in tools.SPARK_TOOL_NAMES  # nosec B101
+
+    monkeypatch.setenv(computeruse.SETTING, "0")
+    names = {t["function"]["name"] for t in tools.available_tools()}
+    assert "computer_use" not in names  # nosec B101
+    said = tools.computer_use_tool("screenshot")
+    assert said.startswith("Error: Computer Use is off")  # nosec B101
+
+
+def test_the_web_turns_it_on_and_says_the_stop_keys(monkeypatch):
+    from flash import web
+
+    monkeypatch.setattr(computeruse, "set_enabled", lambda on: monkeypatch
+                        .setenv(computeruse.SETTING, "1" if on else "0"))
+
+    class Hub:
+        def publish(self, event):
+            pass
+
+    class Session:
+        hub = Hub()
+
+    said = web.command(Session(), {"name": "computer-use-setting",
+                                   "arg": "off"})
+    assert said["computer_use"] is False  # nosec B101
+    assert said["computer_use_keys"] == "Ctrl+Alt+Esc"  # nosec B101
+
+
+def test_it_needs_flash_to_act_on_this_computer(monkeypatch):
+    monkeypatch.setenv(computer.SETTING, "0")
+    assert computeruse.switched_on()  # nosec B101
+    assert not computeruse.enabled()  # nosec B101
+    names = {t["function"]["name"] for t in tools.available_tools()}
+    assert "computer_use" not in names  # nosec B101
+    with pytest.raises(ValueError, match="act on this computer"):
+        computeruse.set_enabled(True)
+    computeruse.set_enabled(False)
+
+    monkeypatch.setenv(computer.SETTING, "1")
+    computeruse.set_enabled(True)
+    assert computeruse.enabled()  # nosec B101
+
+
+def test_the_web_sets_the_mouse_and_turning_off_acting_ends_it(
+        monkeypatch):
+    from flash import web
+
+    class Hub:
+        def publish(self, event):
+            pass
+
+    class Session:
+        hub = Hub()
+
+    said = web.command(Session(), {"name": "computer-use-mouse",
+                                   "arg": "off"})
+    assert said["computer_use_mouse"] is False  # nosec B101
+
+    ended = []
+    monkeypatch.setattr(computeruse, "end", lambda *a: ended.append(1))
+    monkeypatch.setattr("flash.ai.set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    said = web.command(Session(), {"name": "computer-setting",
+                                   "arg": "off"})
+    assert said["computer"] is False  # nosec B101
+    assert said["computer_use"] is False and ended  # nosec B101
+
+
+def test_the_user_sees_what_the_model_saw():
+    from flash import web
+
+    shown = []
+
+    class Session:
+        def emit(self, chat, event):
+            shown.append(event)
+
+    png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    web._show_seen(Session(), None, [png, b"not an image", "@@"])
+
+    [event] = shown
+    assert event["type"] == "seen"  # nosec B101
+    [image] = event["images"]
+    assert image["kind"] == "image" and image["name"].endswith(".png")  # nosec
+    assert "seen" in web.KEPT  # nosec B101
+
+
+# The real one: the conftest stands in for it in every test.
+WAKE_REAL = computeruse.wake
+
+
+def test_the_screen_is_woken_only_after_a_while(monkeypatch):
+    ran = []
+    monkeypatch.setattr(computeruse, "system", lambda: "mac")
+    monkeypatch.setattr(computeruse.subprocess, "Popen",
+                        lambda argv, **kw: ran.append(argv))
+    monkeypatch.setattr(computeruse.time, "sleep", lambda s: None)
+    monkeypatch.setattr(computeruse, "_woken", {"at": 0.0})
+    monkeypatch.setattr(computeruse.time, "monotonic", lambda: 1000.0)
+
+    assert WAKE_REAL() is True
+    assert ran == [["caffeinate", "-u", "-t", "3"]]
+    assert WAKE_REAL() is False
+    assert WAKE_REAL(force=True) is True
+
+
+def test_a_no_can_say_why(monkeypatch):
+    from flash import theme, web
+
+    session = web.Session()
+    session.hub = web.Hub()
+    chat = session.new_chat()
+    ask = session.answerer(chat)
+    seen = {}
+
+    def answer_soon():
+        import time
+
+        while not session.asks:
+            time.sleep(0.01)
+        session.answer(next(iter(session.asks)), "n", "  I'm  presenting ")
+
+    import threading
+
+    threading.Thread(target=answer_soon).start()
+    monkeypatch.setattr(theme._capture, "answerer", ask, raising=False)
+    seen["answer"] = theme.remote_answer("Let Flash see your screen?")
+    assert seen["answer"] == "n"
+    assert theme.denial_why() == "I'm presenting"
+    assert theme.denial_why() == ""
+
+
+# --- Fast mode ---------------------------------------------------------------
+
+ELEMENTS = [
+    {"name": "Save", "role": "Button", "x": 100, "y": 40, "w": 60, "h": 20},
+    {"name": "File name", "role": "TextField", "x": 300, "y": 200,
+     "w": 200, "h": 30},
+    {"name": "Cancel", "role": "Button", "x": 20, "y": 40, "w": 60, "h": 20},
+]
+
+
+@pytest.fixture
+def fast(monkeypatch, screen):
+    monkeypatch.setenv(computeruse.FAST_SETTING, "1")
+    monkeypatch.setattr(computeruse, "FAST_SETTLE", 0)
+    # The fake pointer never moves: Flash's own clicks are not the user's.
+    monkeypatch.setattr(computeruse, "_check_pointer", lambda owner: None)
+    monkeypatch.setattr(computeruse, "_read_elements",
+                        lambda: [dict(e) for e in ELEMENTS])
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    computeruse._elements.clear()
+    yield screen
+    computeruse._elements.clear()
+
+
+def test_fast_mode_is_off_until_turned_on(monkeypatch, screen):
+    monkeypatch.delenv(computeruse.FAST_SETTING, raising=False)
+    assert not computeruse.fast()  # nosec B101
+    schema = tools.computer_use_tools()[0]["function"]
+    assert "steps" not in schema["parameters"]["properties"]  # nosec B101
+    assert "elements" not in schema["parameters"]["properties"][  # nosec
+        "action"]["enum"]
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    said = tools.computer_use_tool("elements")
+    assert "not an action" in said  # nosec B101
+
+
+def test_fast_mode_offers_elements_and_steps(fast):
+    schema = tools.computer_use_tools()[0]["function"]
+    props = schema["parameters"]["properties"]
+    assert {"element", "to_element", "steps"} <= set(props)  # nosec B101
+    assert "elements" in props["action"]["enum"]  # nosec B101
+    assert "Fast mode is on" in schema["description"]  # nosec B101
+
+
+def test_elements_are_listed_without_a_screenshot(fast):
+    said = tools.computer_use_tool("elements")
+    assert "3 elements" in said and "1. Button 'Save'" in said  # nosec
+    assert tools._pending_images == []  # nosec B101
+
+
+def test_an_element_is_clicked_by_name_or_number(fast):
+    tools.computer_use_tool("elements")
+    tools.computer_use_tool("click", element="save")
+    tools.computer_use_tool("double_click", element="#3")
+    # The middle of each, in the screen's own points.
+    assert fast[0] == {"do": "click", "x": 130.0, "y": 50.0,  # nosec B101
+                       "button": "left", "count": 1}
+    assert fast[1]["x"] == 50.0 and fast[1]["count"] == 2  # nosec B101
+    said = tools.computer_use_tool("click", element="Delete everything")
+    assert "No element called" in said and "'Save'" in said  # nosec B101
+
+
+def test_steps_run_in_order_with_one_screenshot(fast, monkeypatch):
+    shots = []
+    real = computeruse.screenshot
+    monkeypatch.setattr(computeruse, "screenshot",
+                        lambda: shots.append(1) or real())
+    tools.computer_use_tool("elements")
+    said = tools.computer_use_tool("steps", steps=[
+        {"action": "type", "element": "File name", "text": "report"},
+        {"action": "key", "keys": "enter"},
+        {"action": "click", "element": "Save"},
+    ])
+    assert "Did 3 of 3 steps" in said and len(shots) == 1  # nosec B101
+    # Typed into the field: clicked first so it has the cursor.
+    assert [c["do"] for c in fast] == ["click", "type", "key",  # nosec
+                                       "click"]
+    assert fast[0]["x"] == 400.0 and fast[1]["text"] == "report"  # nosec
+
+
+def test_steps_stop_at_the_first_that_fails(fast):
+    tools.computer_use_tool("elements")
+    said = tools.computer_use_tool("steps", steps=json_steps())
+    assert "Did 1 of 3 steps" in said  # nosec B101
+    assert "Step 2 (click) failed" in said  # nosec B101
+    assert len(fast) == 1  # nosec B101
+
+
+def json_steps():
+    import json
+
+    return json.dumps([{"action": "click", "element": "Save"},
+                       {"action": "click", "element": "Nowhere"},
+                       {"action": "click", "element": "Cancel"}])
+
+
+def test_too_many_steps_are_refused(fast):
+    said = tools.computer_use_tool(
+        "steps", steps=[{"action": "key", "keys": "tab"}] * 13)
+    assert "At most 12 steps" in said and fast == []  # nosec B101
+
+
+def test_elements_read_from_the_system_are_cleaned(monkeypatch):
+    monkeypatch.setattr(computeruse, "_run", lambda argv, env=None: (
+        '{"name": "Only one", "role": "Button", "x": 1, "y": 2, "w": 3, '
+        '"h": 4}'))
+    assert computeruse._read_elements() == [{  # nosec B101
+        "name": "Only one", "role": "Button", "x": 1.0, "y": 2.0,
+        "w": 3.0, "h": 4.0}]
+    monkeypatch.setattr(computeruse, "_run", lambda argv, env=None: (
+        '[{"name": "", "x": 1, "y": 1, "w": 5, "h": 5}, '
+        '{"name": "Zero", "x": 1, "y": 1, "w": 0, "h": 5}]'))
+    assert computeruse._read_elements() == []  # nosec B101
+
+
+def test_the_web_and_terminal_switch_fast_mode(monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr("flash.envfile.set_env_var", lambda *a: None)
+    monkeypatch.setenv(computeruse.FAST_SETTING, "0")
+    ai._computer_use_command(["fast", "on"])
+    assert computeruse.fast()  # nosec B101
+    ai._computer_use_command(["fast", "off"])
+    assert not computeruse.fast()  # nosec B101

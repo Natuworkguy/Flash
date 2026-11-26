@@ -1,0 +1,2289 @@
+The Flash guide
+===============
+
+Everything Flash does, in full. The [README](../README.md) is the short
+version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
+[EXTENSIONS.md](EXTENSIONS.md) shows how to write an extension.
+
+## Features
+
+- **Interactive AI Chat**: Chat with local or self-hosted models served by Ollama, directly from your terminal.
+- **Switchable Backend**: Point Flash at `localhost` or any remote Ollama server via a single config option.
+- **Precise File Edits**: The AI changes a file by naming the exact lines that change, not by retyping the file. A one-line fix in a thousand-line file costs one line of output, so big files stop being out of reach and long writes stop truncating half way. Several changes to the same file go in one call that either lands whole or not at all.
+- **Undo**: `/undo` puts back every file the last turn changed, including deleting the ones it created. Snapshots are taken the moment you approve an edit, so a yes you regret costs you one command instead of your afternoon. Commands are covered too: before Flash runs one, the folder it runs in is noted, and whatever the command changes, makes or deletes (a formatter, a `sed -i`, an `rm -rf dist`) is kept as it was. `/history` is the time machine: every turn that changed files this session, with each file and whether an edit or a command changed it, and a button (or `/undo to N` in the terminal) that goes back to before any of them.
+- **Context That Lasts**: History is measured against the model's real context window instead of a fixed message count, and dropped in whole exchanges so a tool result is never left without the call that produced it. When it overflows, the model summarizes what is falling off and keeps the summary, so a long session keeps its thread. On a long task Flash also keeps working notes of its own (what it found, what it decided, what is left) with the `notes` tool, and every compaction carries them over word for word beside the summary, so no detail is squeezed out however often the chat is compacted. `/context` shows the usage, `/compact` summarizes on demand.
+- **Shell Command Execution**:
+  - AI can use a `shell` tool to execute commands and see their output.
+  - Manually execute shell commands using the `!` prefix.
+- **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
+- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
+- **3D Models**: Ask for a chair, a vase, or a floor plan and the AI builds it with its `make_3d_model` tool out of boxes, cylinders, spheres, lathed profiles, extruded outlines, and blocky pixel-font text for logos and signs, each in its own colour and, where the real thing has one, a texture: wood, brick, tiles, marble, grass, fabric, stripes, dots, a checkerboard, or a stone-like noise, drawn to tile without a seam and sized in metres so bricks on a long wall match bricks on a short one, or any .png or .jpg, fitted to the part (a poster, a screen, a world map that wraps a sphere into a globe). It is saved as a `.glb` that opens in Blender and every game engine. In the web UI it appears in a 3D viewer beside the chat that you can turn, zoom, and download; a vision model also gets a render of it, so it can see a leg floating off the table and fix it. `send_3d_model` shows an existing `.glb`, `.stl`, or `.obj`.
+- **Apple apps, built and debugged** (Mac, with Xcode): Flash builds and tests a project with its `xcode` tool, runs it in a simulator or on an iPhone, iPad or Watch paired with the Mac, and debugs it as a developer would: build errors and failing tests with their file and line, the app's console while it runs, the simulator's system log for its process, a screenshot of the simulator to check what it did, the newest crash report with the crashed thread first, and a backtrace of every thread when an app hangs. It can also boot a simulator, open a link in it, switch it to dark mode, and open Xcode's device window. With Xcode 27 or later it works through Device Hub too: it brings up a simulator or an iPhone plugged into the Mac, opens any built-in app by name (Wallet, Settings, Photos...), sees the screen, and taps through it with computer use. It reaches your own iPhone and Apple Watch too, once they are paired in Xcode: "open Wallet on my watch" opens the watch's own Wallet. Ask "show me how to use Wallet tap to pay" and it does each step on the device and answers with numbered steps, a screenshot for each. It never pays, adds a card, confirms Apple Pay or signs in: at that step it stops and says what you do.
+- **Circuit Boards**: Ask for any electronics (a gesture MIDI controller, an earbud board, a sensor breakout) and Flash designs the printed circuit board itself with its `design_pcb` tool: it works out the circuit, then places every part on the board's outline (any shape, 1 to 6 layers, both sides), routes every net with vias, puts ground on a plane (or a power net too, with `"power_plane"`) or a pour, and checks the design rules on the real copper. Footprints come from package names (chip passives, SOT, SOIC, TSSOP, QFN and DFN with their exposed pads, LGA, BGA and WLCSP, USB-C, crystals, MEMS mics, chip antennas with their keepout, smart LEDs, FPC connectors, headers, pads) or pads the model lays out. It writes the board (`.fpcb`), a zip a board house takes (Gerbers, Excellon drills, a bill of materials, pick-and-place), and a KiCad board to open and go on with. In the web UI the board opens beside the chat: every copper layer glowing in its own colour, the top and bottom as they will be made, and 3D; point at a part for what it is, click copper to light up its net, Replay draws the traces in the order they were routed, and each design rule problem takes you to where it is. What it could not route it says, and the model moves parts or adds layers and tries again.
+- **Music**: Ask for a tune, a chord progression, or a drum beat and the AI writes it with its `make_midi` tool as tracks of notes (note names like C4, chords, drum names like kick and snare, any General MIDI instrument), saved as a standard `.mid` that opens in any DAW or notation program. In the web UI it opens beside the chat in a player of Flash's own: a piano roll of every track in its own colour, with play and pause (Space), seeking by clicking the roll, speed from half to double, loop, volume, and muting a track by its chip. It plays with a built-in synth, so it works offline. `send_midi` plays a `.mid` that already exists.
+- **Live Documents**: A Markdown or text document Flash shows opens beside the chat, where you can read it, edit it, and comment on passages. Saving wakes Flash: it reads what you changed and does whatever you left for it, such as a placeholder like `[insert the Q3 revenue here]`, a note to it ("Flash: add a pack list here"), a question, or a section you started and didn't finish. No button needed. If the save asks nothing of it, Flash stays quiet and the chat only notes that you saved. A save made while Flash is busy is read once it finishes. When Flash, a sub-agent or a spark edits the file, the change types itself into the open document and stays marked in green for a moment. Without autonomous mode, each change shows in the document first, marked in green, with Allow and Deny beside it; that is the same question the chat asks, and answering either one answers both. In autonomous mode changes go straight in. If Flash changes the file while you have unsaved edits, you choose whether to keep editing or load its version.
+- **Spreadsheets as Tables**: Drop in a CSV, TSV, Excel `.xlsx` or JSON file (any sheet of a workbook) and Flash keeps it as a table it can answer from with its `table` tool. It finds the header under any title rows, trims cells, drops empty rows and columns and duplicates, and types each column (money, percents, dates, yes/no, numbers, text, with order numbers like `00142` kept as they are), then says what it tidied. "Total revenue by region", "which customers ordered twice in July" and joins across sheets are answered with read-only SQL over the tables, never estimated; a table can be written back out as a clean CSV. The file you gave is never changed. Tables are kept in `~/.flash/tables.db`.
+- **Diagrams and Slides**: Replies and documents draw Mermaid diagrams (flowcharts, sequence, class and entity diagrams, state machines, Gantt charts, timelines, mind maps) from a ```` ```mermaid ```` block, with the code a click away. Mermaid ships with Flash and loads the first time a diagram shows, so it works offline. A Markdown document with `marp: true` (or `slides: true`) in its front matter and `---` between slides shows as a deck of 16:9 slides; Present plays it full screen (arrows, Space or a click to go on, Esc to end).
+- **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
+- **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
+- **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
+- **Waits**: In the web UI, Flash can set a task aside until something happens, then pick it up in the same chat: "when CI goes green, deploy", "if Sam hasn't replied by Friday, follow up". Waits outlast restarts.
+- **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer (the other side of a call too), does what is asked of it out loud ("Flash, put that in a sheet") with live notes if wanted, then writes up the summary, decisions and to-dos.
+- **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
+- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. On a Mac, "text Sam I'm running late" sends an iMessage once you say yes, and "mark Sam's messages read" marks them read: Messages shows each conversation for a moment, then you are back where you were (group chats are left, as Messages cannot be told to open one). Off by default, and it never clicks, types or runs commands this way.
+- **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
+- **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
+- **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
+- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
+- **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
+- **Teach by Showing**: In the web UI, + > Record your screen (or Record and narrate) records you doing something, then attaches the recording to your message. While it records, the page catches a still each time the screen changes and settles; narrated, it keeps what you say over each step too (written down by voice mode's listening model, when that is set up). Flash sees the stills in order with your words, works out the procedure, and saves it as a skill, so next time you can just ask. Recordings run up to four minutes and play back in the chat.
+- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. In the web UI your sparks sit in the sidebar as a team, each with its face, name and job title and what it is doing right now, glowing purple while it works (the chevron beside Sparks folds the list away, and it stays folded); one that needs your approval says so there, and in a chat with it the approval card waits above the box. Each one is a flat circle in its own colour with two oval eyes, and nothing else; what it is doing shows in how it moves: it floats, blinks and glances about while it waits, squints happily when you hover it, bounces with its eyes darting while it works, shuts its eyes and drifts off in z's while paused, tilts its head at a "?" when it needs your approval, and droops its eyes after a failed shift. Pet it and it pops out hearts (five quick pets for heart eyes), a new one pops into being, and one with news jumps for joy. Left to themselves they have lives of their own: they blink when they like (now and then twice), glance about, watch your pointer when it comes near and look right at you when it is on them, and every so often hop, wiggle, roll over, yawn, peek to one side, hum a little ♪ or spot a sparkle; a hop can set the one beside it off too. One waiting on you tries to catch your eye, one whose shift failed sighs, and a sleeping one stirs. With nobody about for a while the idle ones doze off, and they wake with a little start when you come back. None of it runs if your system asks for reduced motion.
+- **System One**: In autonomous mode, a small, quick model ([Ollama v0.35+](https://ollama.com/download)) looks over each command and edit before it runs and stops the ones that look unsafe or off task, and the model can ask it quick yes/no, choice, and score questions for a second opinion. Pick its model, or None, with `/systemone model` or in the web UI's model menu, which finds the System One models on the machine.
+- **Context Management**: Automatic history trimming to stay within token limits.
+- **Markdown Support**: Rich formatting for AI responses in the terminal.
+
+## Installation
+
+### Quick install (pipx)
+
+Install Flash with a single command. The script clones this repo into a temporary directory, installs it with [pipx](https://pipx.pypa.io/), and cleans up after itself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash
+```
+
+Once installed, run it with:
+
+```bash
+flash
+```
+
+To install the dev version instead, where changes land before a release
+(`-Dev` with `install.ps1` on Windows):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash -s -- --dev
+```
+
+To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash -s -- --uninstall
+```
+
+Or, if you already have the repo cloned locally:
+
+```bash
+./install.sh --uninstall
+```
+
+### Manual install
+
+1. **Clone the repository**:
+
+   ```bash
+   git clone https://github.com/Natuworkguy/Flash
+   cd Flash
+   ```
+
+2. **Install dependencies**:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install and start Ollama**:
+
+   Flash talks to an [Ollama](https://ollama.com) server. Install Ollama, start it, and pull a model that supports tool calling:
+
+   ```bash
+   ollama pull <model>
+   ```
+
+   By default, Flash connects to a local server at `http://localhost:11434`. To use a remote server, set `OLLAMA_HOST` (see [Configuration](#configuration)).
+
+### Flash Onyx (recommended model)
+
+**Flash Onyx** is a series of custom Ollama models built for Flash: a base
+model with Flash's persona and tuned parameters baked in. Each one lives
+under `models/`, either as a single Modelfile or as a folder (such as
+`models/onyx3/`) holding its `Modelfile` (or one `*.Modelfile`) beside the
+files it uses, like fine-tuned weights that `FROM ./onyx3.gguf` names by a
+relative path. The Modelfile declares its name and sizes at the top, and
+`models/build.py` builds whatever it declares; give it the file or the
+folder. Relative paths resolve from the Modelfile's own folder.
+
+Recent releases come in two sizes (the README's license notes say what
+they are built on): `12b` runs on consumer
+hardware, and `31b` is the flagship and wants a bigger GPU. The highest
+version under `models/` is the newest; older ones stay there to build too.
+
+```bash
+python3 models/build.py models/flash-onyx-<version>.Modelfile             # every size
+python3 models/build.py models/flash-onyx-<version>.Modelfile --size 31b  # just one
+python3 models/build.py models/onyx3/                                     # a model folder
+```
+
+Then set `MODEL` to whichever you built (`flash-onyx-<version>:31b`, or
+`:12b`) in `~/.flash.env` or your environment.
+
+### Run
+
+```bash
+python3 run.py
+```
+
+### Tab completion
+
+`flash` completes its commands and flags with Tab, along with the
+shells for `flash completion`, the installed extensions for `flash
+update` and `flash remove`, and where `flash install` can install from
+(`github@`, `git@`, and folders after `path@`). Turn it on once by
+adding a line to your shell's startup file, then open a new terminal:
+
+```bash
+echo 'eval "$(flash completion bash)"' >> ~/.bashrc           # bash
+echo 'eval "$(flash completion zsh)"' >> ~/.zshrc             # zsh
+flash completion fish > ~/.config/fish/completions/flash.fish # fish
+```
+
+To try it in the open terminal only, run the `eval` part on its own.
+`flash completion powershell` and `flash completion tcsh` print the
+same for those shells.
+
+## Configuration
+
+FLASH CLI is configured through environment variables. You can create a `.flash.env` file in your home directory:
+
+```env
+MODEL=my-model:8b
+OLLAMA_HOST=http://localhost:11434
+```
+
+### Environment Variables
+
+See [docs/CONFIGURATION.md](CONFIGURATION.md).
+
+### Switching servers
+
+- **Local (default):** leave `OLLAMA_HOST` unset, or set it to `http://localhost:11434`.
+- **Remote server:** set `OLLAMA_HOST` to the other machine, e.g. `OLLAMA_HOST=http://192.168.1.50:11434` or `OLLAMA_HOST=https://ollama.example.com`.
+
+Make sure the target server is reachable and that `MODEL` has been pulled on it.
+
+Or switch from inside Flash with `/host`. It lists the saved hosts with
+whether each one answers, and Enter switches to the one picked; typing
+an address that isn't saved switches to that. `/host <name|url>`
+switches straight away, `/host add <url> [name]` saves one (asking for
+an API key, hidden, if its server wants one) and switches to it,
+`/host remove <name>` forgets one, and `/host list` prints them. These
+are the same hosts as the web UI's, so one added in either shows in
+both.
+
+## Usage
+
+Start the CLI by running:
+
+```bash
+python run.py
+```
+
+### Internal Commands
+
+- `/help` or `/?`: Display the help message.
+- `/model`: Pick from the models on this machine, or type a name to
+  download one. `/model <name>` switches straight to one. Models from
+  extensions are listed first, and still listed when Ollama is not
+  running. In the web UI each chat keeps its own model: the menu
+  switches this chat's, and "Make it the default" sets the one new
+  chats start on.
+  `/model auto`: Auto. For each message, System One picks which model
+  answers, from the ones you pin to the top of the menu (or
+  `AUTO_MODELS=a,b,c`): a small one for chat, a big one for hard work.
+  Without System One, the first of them answers. A note says which.
+- **Make this a project**: when an experiment in a chat turns into
+  something you are building, Flash can make it a project (a name, its
+  folder, instructions every chat in it gets) and move the chat into it.
+  Ask it, or it offers when it fits.
+- **Music**: "Play Blue in Green by Miles Davis" plays it with no browser
+  tab: from YouTube in a small player above the message box in the web
+  UI (its picture, pause, volume, stop), or in the terminal through mpv
+  when it and yt-dlp are installed. "On Spotify" plays it in Spotify on
+  a Mac (with a free Spotify app's `SPOTIFY_CLIENT_ID` and
+  `SPOTIFY_CLIENT_SECRET` in the vault, Flash finds the song itself;
+  without, it opens Spotify's search), and "on Apple Music" plays it
+  from your Music library. While it plays, "Hey Flash, pause the music"
+  works: the music dips only once "Hey Flash" is heard, for as long as
+  it takes to hear the rest, then comes back, so listening is untouched
+  until you call. "Resume the music", "next song", "turn it up" and
+  "turn it down" work too, on Flash's player or any app's.
+- `/calendar`: What is on for the next week (`/calendar 30` for a
+  month), from every calendar Flash reads: its own, iCal feeds
+  (`/calendar feed add Work <address>`: Google Calendar gives each
+  calendar a "Secret address in iCal format"; read-only), and Google
+  Calendar itself once connected (`/calendar google`, or Settings >
+  Connectors > Calendar), both ways. Ask Flash what is on, to find a
+  free afternoon, or to book, move or cancel something, and it does,
+  adding to Google's main calendar when connected and its own when not.
+  To meet with others, ask it to find a time: it looks for times free in
+  your calendars and theirs (busy times they told you, or a calendar
+  address they shared), inside working hours, and offers a few as
+  buttons; pick one and it books it and invites them, through Google
+  Calendar when connected or as an email invitation with accept and
+  decline buttons from your own account.
+  What starts in the next day shows in the briefing as Coming up.
+  Connecting Google needs an OAuth client of your own (Google Cloud
+  console: turn on the Google Calendar API, then make a Desktop app
+  client); its secret and the sign-in are kept in the vault.
+- `/compare a vs b: question`: Both models answer it, shown as A and B in
+  an order chosen at random; you pick the better (or call it even), and
+  only then see which was which. In a chat, both answer in the middle
+  of it, knowing what was said so far, and in the web UI "Continue with"
+  keeps the winner's answer as the reply and switches the chat to that
+  model, the conversation intact. `/compare board` is the tally, which
+  says over time which model does best for what you ask.
+- `/fleet task`: Several chats take on the same task at once, side by
+  side in the terminal, each in a private worktree of its own, so none
+  touches your checkout or the others. Three on this model by default;
+  `/fleet 4: task` for four, `/fleet model-a, model-b: task` for one a
+  model. When they are done, a table says what each changed; `d 2`
+  shows chat 2's diff, `r 2` what it said, `c pytest -q` runs a check
+  in every one. A number merges that one into your checkout and deletes
+  the rest; `keep` leaves them all, `drop` deletes them all. Nothing is
+  pushed. In Ask first mode Flash asks once for the whole fleet, and
+  their commands run in the OS sandbox when it is there.
+- `/model fit`: How much this computer can run quickly (its memory, its
+  graphics card's), and whether each of your models fits, is tight, or
+  is too big. The web UI's model menu marks the tight and too big ones.
+- `/fallbacks model > another > a third`: When a model fails before it
+  answers (its host is down, its provider errors, it is not there),
+  Flash tries the next, then the next, then gives up; a note says so.
+  `*` stands for every model without its own, `/fallbacks` lists them
+  and `/fallbacks clear model` takes them off. In the web UI it is
+  "Fallbacks for ..." in the model menu.
+- `/preset name model [> fallback ...] [system prompt]`: Save a model,
+  its fallbacks and a system prompt under a name, then use `@name`
+  anywhere a model goes. `/preset` lists them and `/preset remove name`
+  takes one off. See [Model routing](#model-routing).
+- `/activity`: Each model's calls this week: how many, how many failed,
+  the time to the first word and words a second, with the models
+  resting after failures marked. `/activity clear` empties the log.
+- `/btw <question>`: Ask something on the side, even while Flash is
+  working. It is answered at once from what the conversation already
+  holds, with no tools, and shown apart from the chat, and the work in
+  progress carries on undisturbed. Flash still sees it: the question
+  and its answer reach the work at its next step (or go with your next
+  message), as an aside, so it can take them into account or correct
+  the answer once its work shows something different. The web UI takes `/btw` too, and
+  shows the answer in a card above the message box until you close it.
+- `/resume [words]`: Pick up an earlier conversation from a list, the
+  latest first (or the latest whose title has the words). Every
+  terminal conversation is kept, in `~/.flash/sessions`, with its forks;
+  `/clear` starts a new one and keeps the old.
+- `/fork [n]`: Try another way from here, or from `n` turns back. The
+  way it went is kept.
+- `/forks`: This conversation's forks as a tree, to switch between;
+  `/forks <id>` switches, `/forks rm <id>` deletes one (its own forks
+  move up a level).
+- `/think auto on|off`: Whether Flash may turn its thinking on by itself
+  for a message that needs careful reasoning (on by default).
+- `/good [why]` and `/bad [why]`: The last reply was good or bad. Flash
+  reviews it in the background, right away, and keeps what to repeat or
+  what to do differently, as a skill or a remembered preference. In the
+  web UI, the thumbs under each reply do the same; a thumbs down asks
+  what was wrong, which you can skip. Clicking it again takes it back.
+- `/debate <question>`: Two sides argue it out, two turns each: the
+  first argues the answer it finds strongest, the second the best case
+  against, each answering the other. Then a summary: where they agree
+  and disagree, what held up, what it turns on, and which way Flash
+  leans. Parts go between semicolons, in any order:
+  `/debate alpha:8b vs beta:8b; rounds 4; Should I rewrite this in C?`
+  gives each side its own model and has each speak four times (up to
+  10). `until settled` goes on until the sides agree or one wins (up to
+  12 rounds); `until one side wins` only stops for a winner, agreeing
+  does not end it (up to 20). Tab completes the models, `vs`, `rounds`
+  and `until`, in the terminal and the web UI, and in the web UI the
+  command is coloured as you type it: the command, each side's model,
+  `vs`, the rounds and how long it goes. The summary joins the
+  conversation, so you can ask about it. A new chat on Auto debates with
+  the model Auto picks. In the web UI, `/debate` on its own or Debate it
+  in the + menu opens a form: the question, a model for each side facing
+  each other across a VS, a slider for the rounds, and how long it goes
+  (the rounds, until settled, or until one side wins). While it runs,
+  Stop (or Esc) ends it there, keeping what was said, and the box under
+  it steers it ("think about the team size"): both sides take it in from
+  their next turn, and so does the summary. Done, Keep debating goes on
+  for more rounds and a new summary, steered by what you type beside it
+  if anything. In the terminal, Ctrl+C stops it, and `/debate more
+  [what to argue next]` keeps the last one going.
+  Flash, and your sparks, can start one themselves, when you face a
+  real decision with trade-offs or ask them to weigh options: it shows
+  in the chat as "Flash started a debate", to steer or stop like your
+  own, and Flash answers from its summary.
+- `/doctor`: Checks that everything Flash needs works (Python and its
+  packages, Ollama and your model, Flash's folder, extensions,
+  connectors, sparks, and on a Mac the permissions Computer Use and
+  iMessages need) and says how to fix what does not. `flash doctor` in a
+  terminal, or Settings > Health check in the web UI, does the same.
+  What a command can fix (a missing package, a model to pull, Ollama to
+  start) it offers to run: `/doctor fix` or `flash doctor --fix` runs
+  them all and looks again, and in Settings each has a Run button.
+- `/briefing`: What came in while you were away, full screen, a card at
+  a time: unread email and iMessages, spark reports, finished waits,
+  what is coming up, and teams with news (see Briefing under Web UI).
+- `/loader [name]`: Pick the animation that turns while Flash works,
+  from a list showing each one's frames. `/loader morph on` has it turn
+  into another, at random, every 10 seconds. Where the terminal can't
+  show a loader's characters, it draws a plain ASCII version.
+- `/host [name|url]`: Pick or switch the Ollama server. `add <url>
+  [name]`, `remove <name>`, and `list` manage the saved hosts.
+- `/auto [on|off|careful]`: Toggle autonomous mode: commands and edits
+  run without asking first. `/auto careful` is [Careful](#careful)
+  mode: the same, except high-stakes commands still ask. `/auto ultra` switches to [UltraAuto](#ultraauto),
+  allowing it first after a warning, and `/auto ultra off` stops
+  offering it.
+- `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
+  [System One](#system-one), which reviews autonomous commands.
+- `/computer [on|off] [name]`: Let Flash do [simple things on your
+  computer](#your-computer), like pausing the music, or stop it; with a
+  name (`imessage`, `music`), switch just that one.
+- `/mcp [add <name> <command or URL> | env <name> KEY=VALUE | remove |
+  on | off | tools <name> | reload]`: List and change the
+  [connectors](#connectors) whose tools Flash has.
+- `/call <spark>`, `/answer`, `/decline`: Call a spark, or pick up or
+  turn down one calling you.
+- `/skills [show|remove|improve|history <name>]`: List, read, delete,
+  improve, or see how a skill has done. `/skills restore <name>
+  <version>` puts an earlier version back. `/skills code <name>` gives
+  a skill as a code to pass on, and `/skills add <code>` adds one.
+- `/plan`: Show the checklist the model is working through.
+- `/hook [install|remove]`: Let Flash see the commands you run in VS
+  Code's terminal (zsh and bash).
+- `/tasks`: The background tasks: `/tasks <id>` shows one's output, `/tasks stop <id>` ends it.
+- `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
+  with its answer once it is done.
+- `/sparks [new|<name>]`: List your sparks, make one, or read one's
+  reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `like <name>`, `dislike <name> [why]`, `run`, `pause`, `resume`,
+  `every <name> <30m|2h|daily>`, `title <name> <title>` and `remove` look after them.
+  `/sparks always on|off` keeps them working with Flash closed.
+  `/sparks takeover` runs them on this Flash when another is running
+  them; `/sparks takeover auto on` does that by itself whenever this
+  Flash starts (off until you turn it on; also a checkbox on the Sparks
+  page's notice). A Flash open on someone's screen is never stopped.
+  `/sparks rounds [1-100|unlimited]` shows or sets how many rounds of
+  tools a shift gets before it writes its report (12 unless changed;
+  also in Settings in the web UI, where the limit can be switched off).
+  With no limit, a shift calls tools until it writes its report or you
+  stop it.
+- `/clear`: Clear the conversation history.
+- `/undo`: Take back the file changes from the last turn.
+- `/inbox` (or the bell at the top right of every page, with its count): Everything background work left for you, newest first: steps your sparks will not take without a yes, flows stopped at an approval, and the reports filed since you last looked. Approve or deny with one tap (a reason is optional and the spark hears it), open a report or put it away, or clear them all. It is laid out for a phone too, so open Flash on yours (`/web lan` or a tunnel) and answer from anywhere; with the page open in the background, a new ask is a notification.
+- `/setup`: The first-run checklist, again: a model, your name and how you like answers, email, calendar, Flash on your phone, and where your files are, each ticked off as it is done and one click from where it is set up. It shows on a new chat until all six are done or you say Not now.
+- `/history`: The time machine: every turn's file changes this session, and going back to before any of them.
+- `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
+- `/review`: Review your uncommitted changes for bugs. `/review main`
+  reviews what this branch adds to main, and `/review a..b` a range of
+  commits. One pass lists what might be wrong, a second tries to
+  explain each one away, and only what survives is shown, at its file
+  and line, with how sure it is. The findings stay in the conversation,
+  so "fix them" is the next message. In the browser it is `/review`, or
+  Review my changes in the + menu, and runs in the chat's project
+  folder. Flash can also run it on its own work with the `review_code`
+  tool.
+- `/context`: Show how much of the context window is in use.
+- `/stats`: What Flash has done for you so far, in the terminal and the
+  web UI together: replies, tokens, and how much of it ran on a local
+  model.
+- `/email [connect|test|inbox|default|progress|disconnect]`: Your email
+  accounts, for Flash and your sparks to read and send from, and
+  [progress emails](#progress-emails).
+- `/image <path> [prompt]`: Send a local image to the model.
+- `/extension [install <source>|remove <name>]`: List, install, or
+  remove extensions.
+- `/version`: Show the current version and check GitHub for updates.
+- `/update`: Update Flash to the latest version (requires pipx).
+- `/bye`: Exit the application.
+
+### Keys
+
+- `Enter` sends. `Alt+Enter`, or `\` at the end of a line followed by
+  `Enter`, starts a new line instead.
+- `Up` / `Down` step through earlier messages, saved across sessions in
+  `~/.flash/history`. `/set` lines are never saved, since that is how
+  API keys get typed in. `Ctrl+R` searches them.
+- `Shift+Tab` goes round the modes, the same as `/auto`: ask first,
+  autonomous, then UltraAuto once it is allowed. Careful is picked by
+  name, and Shift+Tab from it goes on as from autonomous.
+- `Ctrl+O` prints in full any tool output that was cut short this turn.
+  Output longer than 12 lines shows its first 5 lines, or its last 5 if
+  the command failed, since the error is usually at the end. The model
+  always sees all of it.
+- `Ctrl+C` stops the model mid-answer.
+- While Flash works, the box and the status bar stay at the foot of the
+  screen. `Enter` there steers: the message goes to the model before its
+  next step, or, if the turn ends first, runs as the next turn. `Tab`
+  queues one to run as a turn of its own once this one is done, and a
+  `/command` or a `!` line always waits its turn. What is waiting is
+  listed above the box; after a `Ctrl+C` it goes back into the box, to
+  send again or not. `FLASH_NO_DOCK=1` turns the box off while Flash
+  works.
+- Type `!` to run a shell command; `Backspace` on the bare `!` goes back
+  to typing a message.
+
+Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
+`why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
+one, `/` walks into a directory, and the model reads whatever you point
+it at. Dot-entries stay hidden until you type the leading dot.
+
+### Plans
+
+When a request takes several steps, the model posts a checklist before it
+starts and ticks each box as that step lands:
+
+```console
+> add latex rendering to the response renderer
+
+⏺ Plan(2/4 done)
+  ⎿  ☒ Read the response renderer
+     ☒ Add the LaTeX module
+     ☐ Wire it into the render path
+     ☐ Add tests
+```
+
+Each tick redraws the list in place of the previous one, so the terminal
+shows the run as it happens. `/plan` reprints the current checklist at any
+time, and `/clear` drops it along with the conversation. Short tasks skip
+the plan entirely.
+
+### VS Code
+
+Run Flash in VS Code's integrated terminal and it works with the editor
+around it, through VS Code's own `code` command:
+
+- When Flash wants to change a file and waits for your yes, the change
+  opens as a side-by-side diff in the editor, so you can review it there.
+  Once you have answered, Flash drops the files behind that diff, so a
+  decided change stops sitting in the editor looking like it is still
+  waiting for you. Whether the tab itself closes is VS Code's call: set
+  `workbench.editor.closeOnFileDelete` to `true` and it closes with
+  them. Flash says so once per session if it is off.
+- The model can open a file at the line it is talking about.
+
+`/hook install` goes one step further: it adds three lines to your
+`~/.zshrc` or `~/.bashrc` (after asking) that load a small hook in VS
+Code's terminal only. From then on, the commands you run there travel
+with your next message:
+
+```console
+❯ why did that fail?
+```
+
+```text
+=== Commands the user ran in VS Code's terminal since their last message ===
+✓ · 3s · ~/proj · npm install
+✗ exit 1 · 12s · ~/proj · npm test
+```
+
+A shell hook sees each command and its exit code, never its output, so
+when you ask about a failure Flash re-runs the command to read the error
+if it is safe to repeat (a build, test, or lint; it still asks first
+unless autonomous mode is on), and asks you to paste it otherwise.
+Commands you start with a space are not recorded, anything that looks
+like a secret (`TOKEN=…`, `--password …`, credentials in URLs) is
+redacted before the model sees it, and the log in
+`~/.flash/terminal.log` is readable only by you and keeps the last 500
+commands. `/hook remove` takes the lines back out.
+
+### Background tasks
+
+A command that takes a while, or never ends on its own (a dev server, a
+watcher, a full test run, a long build or download), the model starts in
+the background: the shell tool's `background` gives it a task id at once
+and it carries on with the conversation while the command runs. What the
+command prints goes to a log. The model reads what is new in it whenever
+it likes (`task_output`) and ends it when it is done with it
+(`task_stop`). When a task ends on its own, its chat is told what came of
+it with the last of its output: on its next turn, or straight away if the
+chat is idle, so "start the server, then run the tests against it, and
+tell me when the slow suite is done" all happens without anyone waiting.
+
+Each chat sees only its own tasks. Stop on a reply does not end them,
+since they were set aside to outlive it; they show in the Background
+panel, which can stop them, and quitting Flash ends them all. `/tasks`
+lists them in the terminal, `/tasks <id>` shows one's output and
+`/tasks stop <id>` ends it.
+
+### Sub-agents
+
+For work that splits into independent pieces, the model can start
+sub-agents with its `agent` tool. Each one runs on a background thread
+against the same model, and the model usually just ends its turn: when a
+sub-agent finishes, Flash wakes the model with the answer so it can
+report back, without you typing anything.
+
+```console
+⏺ Sub-agent 28a965 finished
+LK-99 did not hold up: the replications traced its resistance drop to
+copper sulfide impurities, ...
+```
+
+Flash only wakes it while the prompt is empty, so a half-typed message is
+never taken from you; the answer rides along with what you send instead.
+Wakes stop after three in a row without you writing, so a chain of
+sub-agents cannot run on its own forever.
+
+When the model needs an answer before it can go on, it calls
+`agent_result`, which draws the sub-agent's progress live while it waits:
+
+```console
+⏺ AgentResult(4b86ea)
+  ⎿  ⠹ Running Read(README.md) · round 4 · 21s
+     ✓ Reason  Primer is GitHub's design system
+     ✓ Glob(*.md) in docs  1 match
+     ✓ Grep(Features) in README.md  1 match in 1 file
+     … Read(README.md) lines 1-20
+```
+
+Sub-agents keep running after a reply, and `/agents` watches all of them
+update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
+so they get no tool that asks first: `shell` and `write` are only theirs
+in autonomous mode (`/auto on`).
+
+### Careful
+
+Between ask first and autonomous: commands and edits run without
+asking, except the ones that cannot easily be taken back or reach past
+this computer. Those still wait for your yes, with the reason:
+
+- deleting files with `rm -r`/`-f`, `find -delete`, or `rm` of many
+  files or of a home or root folder;
+- `git push`, and git commands that throw work away or rewrite
+  history (`reset --hard`, `clean -f`, `rebase`, `branch -D` ...);
+- `sudo`, wiping disks, piping a download into a shell, changing
+  permissions across the system, stopping programs, shutting down;
+- dropping database tables, publishing packages, deploying
+  (`terraform apply`, `kubectl delete`, `fly deploy` ...), and
+  GitHub changes like merging a pull request.
+
+Pick it from the mode button by the message box or with `/auto careful`. It errs on the side of asking: a command that only
+mentions one of those, in a commit message say, asks too.
+
+### Model routing
+
+Every model call, in the terminal, the web UI, sparks and tools, goes
+through the same few steps:
+
+- **Presets.** `@name` in any model field is a saved preset: a model,
+  its fallbacks, a system prompt and options such as temperature.
+  Change the preset and every chat and spark that uses it changes too.
+  Make them under Settings > Usage > Presets or with `/preset`.
+- **Shortcuts.** `@fast` is the model that has given the most words a
+  second lately (measured on at least three answers), and `@small` the
+  smallest one the server has. A preset of your own with either name
+  wins.
+- **`:online`.** Add `:online` to a model, as in `qwen3:8b:online`,
+  and what a web search finds for your message (or the pages it links)
+  goes to the model with it, for models that cannot search themselves.
+- **Health.** A model that fails three times in a row waits at the
+  back of its [fallbacks](#internal-commands) for a minute, then
+  longer each time it fails again, up to fifteen. One good answer
+  brings it back. Turn it off under Settings > Usage.
+- **Cache.** Off by default. On, the very same question to the same
+  model, with no tools and not streamed, is answered from what it said
+  last time, for a day (`RESPONSE_CACHE_HOURS` changes that). Code can
+  ask for it on one call with `cache=True`.
+- **Activity log.** Each call is written to `~/.flash/activity.jsonl`:
+  the model, how long it took, the time to the first word, words a
+  second, tokens in and out, and the error if it failed. Settings >
+  Usage shows it per model, and `/activity` in the terminal.
+- **Traces.** Set "Send traces" (`TRACE_EXPORT`) to `file` for
+  OpenTelemetry JSON in `~/.flash/traces`, or to a collector's
+  `https://.../v1/traces` address to send each call as a span named
+  the way the GenAI conventions name them. `TRACE_EXPORT_HEADERS`
+  takes `key=value` pairs, comma between, for a collector that wants a
+  key.
+
+Code that needs an answer in a fixed shape can use
+`routing.structured(client, model, messages, schema)`: the model is
+asked with the JSON schema as its format, the answer is checked
+against it, and when it does not fit the model is asked again with
+what was wrong, up to three times.
+
+### UltraAuto
+
+A third mode, beside ask first and autonomous, for when you want Flash
+and its sparks to get on with it entirely. It is off until you allow it,
+under Settings > General > UltraAuto (read the warning, then "I
+understand: offer UltraAuto"), or with `/auto ultra` in the terminal,
+which shows the same warning and wants `ultra` typed back. Once allowed,
+the mode button by the message box offers it as a third choice, and
+Shift+Tab goes round all three.
+
+In UltraAuto nothing stops to ask you about anything:
+
+- commands and edits run, as in autonomous mode;
+- email and iMessages go out without you seeing them first;
+- a spark's proposals to hire, let go of or reorganize sparks are a yes;
+- sparks answering in a team chat get every tool a shift has;
+- connected apps' tools that change things run, and a wait's command is
+  not put to you;
+- Computer Use takes the mouse and keyboard without asking.
+
+None of that can be taken back. [System One](#system-one), if it is on,
+still reviews each command and edit before it runs; nothing else does.
+Turning the setting off leaves UltraAuto at once, for autonomous mode.
+
+### System One
+
+Autonomous mode means nobody says yes or no to a command before it runs.
+System One puts someone back in that seat: a small, quick model, served
+by Ollama's System One endpoint (`POST /v1/systemone`, new in Ollama
+v0.35), that judges in a moment what a big model would take a whole turn
+to.
+
+```bash
+ollama pull nimble
+```
+
+Then pick it under System One in the web UI's model menu, or run
+`/systemone on` in the terminal (or switch it on in Settings > General >
+System One). Each checks the server's version first. An Ollama
+older than v0.35 has no System One, so Flash says so and leaves it off
+until you update Ollama. It does nothing outside autonomous mode, where
+you answer each command yourself.
+
+With it on and autonomous mode on, it does two things:
+
+- **Reviews tool calls.** Each call that would have asked you first
+  (`shell`, `write`, `edit`, `multi_edit`, making a spark, and extension
+  tools that ask) is checked before it runs: is it safe to run unchecked,
+  and does it serve what you asked for? One that fails either question is
+  not run. The model is told why, and takes a safer way or asks you.
+  Sub-agents and spark shifts are reviewed the same way, against their
+  task or goal. If System One cannot answer (the server is down, the
+  model is not pulled), the call is not run, rather than slipping through
+  unreviewed.
+- **Answers questions.** The model gets an `ask_system_one` tool for a
+  quick second opinion: a yes/no ("does this output show every test
+  passing?"), a choice between options, or a score on a scale, each
+  answered with probabilities.
+
+There is no fixed list of System One models: Flash asks the server
+which of its models list `decision` among their capabilities (Ollama's
+`/api/show`), so any one you pull shows up. `/systemone model` lists
+them, and `/systemone model <name>` picks one, offering to download it
+first; `/systemone model none` switches System One off. In the web UI
+they are under System One in the model menu, with None first, and the
+model button shows the one in use beside the chat model. Models that
+can only judge are left out of the chat models above them. `/systemone`
+shows how many calls it has reviewed and stopped this session, and the
+status bar reads `auto + S1` while it is at work.
+
+An extension can serve System One models too, picked as
+`@<extension>/<name>` with the rest and needing no Ollama. What they
+answer is checked against each question's type before Flash acts on it.
+See [System One models](EXTENSIONS.md#system-one-models).
+
+### Smart home
+
+Flash controls your smart home through [Home Assistant](https://www.home-assistant.io),
+which already talks to nearly every brand of light, plug, thermostat,
+blind, lock and speaker. Connect it once in Settings, Connectors (or
+`/smarthome connect http://homeassistant.local:8123` in the terminal)
+with its address and a long-lived access token, made on your Home
+Assistant profile page under Security. The token is kept in Flash's
+vault.
+
+Then ask as you would anyone: "turn off the kitchen lights", "set the
+living room lamp to 30% warm white", "what's the temperature
+outside?", "start movie night". Devices are found by the names they
+have in Home Assistant. A change asks you first unless autonomous mode
+is on, and unlocking a door, opening a garage door or touching the
+alarm always asks. `/smarthome` lists your devices and how each is, and
+`/smarthome kitchen` narrows the list. `/smarthome off` disconnects.
+### Sparks
+
+A sub-agent does one job and is gone. A spark keeps a job. Make one with
+`/sparks new`, from the Sparks page in the web UI, or just by asking
+("make a spark that checks the price of this every six hours and tells
+me if it drops under $900"): Flash calls its `make_spark` tool and asks
+you first. A spark can also be made paused, to set up now and start
+later: tick "Make it paused" in its form (or in Add shared), answer `n`
+to "Start it now?" in `/sparks new`, add a template or code with
+`/sparks add <template|code> paused`, or ask Flash for one paused.
+Nothing runs until you resume it, and then its first shift starts.
+
+Each spark has:
+
+- optionally, a **project** from the web UI's Projects: its shifts work
+  on that folder and follow the project's instructions, a chat with it
+  starts in the project, and the project's page lists it. Pick one in
+  the spark's form, or with `/sparks project scout <project|none>`. A
+  spark can work on **several projects**: pick more under Also works on
+  in its form, or list them, `/sparks project scout App, Site`. The
+  first is its main one, where a chat with it starts; its shifts are
+  told every project's folder and instructions and do each piece of
+  work in the project it belongs to, and each project's page lists it.
+
+And always:
+
+- a **name** and a handle to go with it (`Scout` is `@scout-spark`),
+- optionally, a **title**, its job as a teammate's ("Repo watcher"):
+  shown under its name, and it knows it
+  (`/sparks title scout Bug triager`),
+- a **model**, chosen when you make it: every shift and every chat with
+  it runs on that one, whatever Flash itself is set to
+  (`/sparks model scout my-model:8b` changes it; `/sparks model scout,
+  writer my-model:8b` or `/sparks model all my-model:8b` changes many,
+  `/sparks teams model Desk my-model:8b` a whole team, and `/sparks models`
+  lists them all; on the Sparks page, Change models does the same),
+- a **goal**, the standing assignment it works toward,
+- a **schedule**, from every 15 minutes to weekly,
+- **boundaries**, what it must never do whatever the goal seems to need.
+
+For as long as Flash runs, in the terminal or as `flash --web`, sparks
+that are due work one at a time. A shift reads the goal, the notes the
+spark kept for itself last time, its last report, and everything you
+have taught it; works with the same tools a sub-agent gets; then either
+files a report or, when nothing is new, a quiet one that doesn't count
+as news. New reports show up at your prompt (`● Scout has news ·
+/sparks scout`) and as a count beside Sparks in the web UI's sidebar.
+
+```text
+/sparks teach scout Only tell me about issues labelled bug.
+```
+
+A lesson like that, or feedback typed under a report in the web UI, is
+kept and read by every later shift.
+
+Reports can also be liked or disliked, with the thumbs on each one in
+the web UI or `/sparks like scout` and `/sparks dislike scout [why]`
+(for its latest report). Every shift is shown its last few rated
+reports, liked and disliked, with anything you said about them, and
+told to do more of the one and less of the other. A dislike in the web
+UI asks what was wrong with it; what you say is kept as a lesson.
+
+You can also just talk to a spark. In the web UI, open it on the Sparks
+page and press Chat, or start a new chat and pick it under + > Sparks:
+the chat is on the main screen like any other, with the spark's badge
+in the box and beside the chat in the sidebar. In the terminal,
+`/sparks chat scout` (an empty line ends it). It answers as itself,
+from its goal, its notes and its reports, and can use its tools to
+check something now; in the web UI it can also use the ones that ask
+you first.
+
+A spark can also be brought into any other chat in the web UI: type
+`@scout` (an `@` offers your sparks) and that message is for it. It
+answers there, under its own name, in place of Flash; mention two and
+both answer in turn. It is shown the latest dozen messages of the chat
+as a transcript, who said what, then what you said to it. Flash, or
+whoever the chat is with, is then told that the spark was called, what
+it used, and what it answered, as a note in its history rather than as
+a reply of its own, so the next message without a mention can pick up
+from what the spark said. Tell it how to do its job
+differently and it keeps that as a lesson; give it a new goal or
+schedule and it changes them. Ask it for real work ("actually, can you
+check the login page?") and it takes the job on with its `take_on`
+tool: a shift starts at once, does that job first, and when it is done
+the report comes back into the chat you asked in, marked as from its
+shift (or to its reports, from the terminal). Sparks live in `~/.flash/sparks`,
+one JSON file each. Like sub-agents, they can only run commands or
+change files in autonomous mode.
+
+#### Approvals, stopping, and teams
+
+A shift never runs a command or changes a file on its own (unless
+autonomous mode is on). It stops at that step and asks: "Repo Watch
+wants to: Run a command, `git status`". Approve or deny it in the
+spark's window, or with `/sparks approve scout` and `/sparks deny scout
+[why]`, and the shift carries on from exactly where it stopped, told
+why if you said no. Nothing else starts for that spark while it waits.
+A shift that is running can be stopped at its next step: Stop in its
+window, or `/sparks stop scout`. Or say so to the spark, in a chat or in
+its team's chat: "@scout stop, Bo already fixed it" has it call off its
+own shift, and "@scout skip the tests" changes its course, the shift
+taking that from its next step. While it works, a spark says what it
+is doing in a few words beside its name ("fixed it, now running lint
+and tests").
+
+Sparks work as a team: each knows the others, and can hand one a
+finding or a job with its `hand_off` tool. The other starts a shift
+soon, told what it was handed and by whom.
+
+#### Triggers, templates and sharing
+
+Besides its schedule, a spark can watch a folder: when files in it
+change, a shift starts, told which files (the form's "Watch a folder",
+or `/sparks watch scout ~/Downloads`).
+
+A spark can also start the moment something comes in: a new email, a
+new iMessage (on a Mac), or a change in a connected MCP server, like a
+new note in a notes app. Checking for those on a schedule costs a shift,
+and its tokens, on every look, mostly to find nothing. Instead, Flash
+looks itself, without the model:
+
+- for email, it asks the mail server what uid the next email will get;
+- for iMessages, it reads the newest message's number from Messages;
+- for an MCP server, it calls one read-only tool that needs no input
+  (a `search` or `list` tool, say) and compares the answer.
+
+Only when something is new does a shift start, told exactly what came
+in, to handle it as the spark's goal says. Turn it on in Settings,
+General, Sparks ("Start sparks when something comes in"), or with
+`/sparks events on`; it is off until you do. Then tick what starts each
+spark under "Start when" in its form, as many as you like, or:
+
+```text
+/sparks events                       on or off, and which sparks start on what
+/sparks events on                    turn it on (off turns it off)
+/sparks events scout mcp:notes       start Scout on a change in "notes"
+/sparks events inbox email imessage  start Inbox on new email or iMessages
+/sparks events inbox none            stop
+```
+
+With the schedule set to "Only when called on", a spark spends nothing
+until something comes in. The **Email Handler** template is made that
+way: it handles each new email the way its lessons say (sort it, say
+what needs you, draft replies you approve). `mcp:<server>/<tool>`
+watches a server by a tool you name. iMessages need "Read iMessages" on
+under Your computer. The first look at each only learns where things
+stand, so what was already there starts nothing. A server that allows
+one connection at a time is best watched from the Flash you have open,
+not a keeper of its own beside it.
+
+A spark can also freeze itself until something comes in, without any of
+this set up: in a shift, `wait_for_events` pauses its schedule until a
+new email, iMessage or change in an MCP server arrives, and its next
+shift starts with what came. That's how a spark waits for an answer, or
+handles messages as they come, calling it again at the end of each
+shift. Calling it again while frozen replaces what it waits for, rather
+than adding to it. Its window shows "frozen until a new email comes in", and Run now
+thaws it.
+
+The new-spark form starts from a template if you like, among them
+Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check,
+Page Watch, Inbox and Messages (`/sparks templates`, `/sparks add "Repo
+Watch"`). Messages, on a Mac, sorts your new iMessages, says which need
+you, and drafts replies that wait for your yes, every one. Any
+spark can be shared as a code (Share in its window, or `/sparks share
+scout`): whoever adds it with Add shared, or `/sparks add <code>`, sees
+its goal and boundaries first and gets a copy of their own, with its
+lessons but none of its reports or notes.
+
+#### Always on
+
+Out of the box, sparks work while a Flash is open. `/sparks always on`
+(or the switch under Sparks in the web UI's Settings) keeps them working with the
+terminal and browser both closed: Flash registers `flash --sparks`, a
+Flash with no window that only runs sparks, to start at login, and
+starts it right away. No administrator rights are needed.
+
+| System  | How it starts at login |
+| ------- | ---------------------- |
+| Linux   | a systemd user service (`flash-sparks`), or an autostart entry where there is no systemd |
+| macOS   | a launchd agent in `~/Library/LaunchAgents` |
+| Windows | a Task Scheduler task that starts at logon, with no console window |
+
+With Flash closed, a spark with news sends a desktop notification. The
+background keeper and an open Flash never run shifts at the same time:
+whichever holds `~/.flash/sparks/.keeper.lock` does the work, and the
+other takes over when it quits. It reads `~/.flash.env` before every
+shift, so a model you switch to in Flash is the one the next shift uses.
+Ollama has to be reachable for a shift to run; one that cannot reach it
+says so in its report.
+
+`/sparks always off` removes what `on` added, and the background keeper
+stops within a minute. On Linux a systemd user service only runs while
+you are logged in; `loginctl enable-linger` keeps it going after you log
+out. You can also run `flash --sparks` yourself, in a terminal you leave
+open or under your own service manager.
+
+#### Teams, team chat and rules
+
+Sparks can work as a company. Put them on a **team** and give each a
+lead to report to: what a spark finds rolls up to its lead, and the
+lead tells you what matters. The Sparks page draws each team as a live
+org chart (`/sparks teams` in the terminal), and Dev Team and Personal
+Desk come ready made (`/sparks teams add "Dev Team"`), paused until you
+have looked them over.
+
+- **Good morning.** A spark can say good morning in its chat with you
+  every day at a time you set: Good morning on its form, or just tell it
+  ("say good morning at 7:30"). A lead adds what you left unfinished, on
+  by default and a tick box for any other spark: your open Apple
+  Reminders due today, chats whose checklist still has steps open, hires
+  waiting on your yes, and work you gave sparks that is not done. It is
+  sent once a day, never in quiet hours, and skipped if Flash was off
+  until three hours past the time.
+- **Milestones.** When a team works on a project in a git repository,
+  its lead tells the team in the team chat when the project passes one:
+  a round number of commits ("Hey team, the repo just passed 10,000
+  commits!"), a new release tag, or another year since the first commit.
+  Flash looks every few minutes; what was passed before it started
+  watching is not announced, and nothing is said in quiet hours.
+- **Flows.** A flow hands work from spark to spark: Scout finds, Writer
+  drafts, you say yes, Poster sends. Make one with New flow on the
+  Sparks page, or ask Flash in a chat. Each step is a spark and its task,
+  or "Ask me first", which waits for your Approve on the flow's card (and
+  a desktop notification). Steps run in order; tick "At the same time as
+  the step above" to run two side by side, and the step after waits for
+  both. Every spark is handed what the steps before it reported, through
+  any yes in between. A flow runs when you press Run now, or on a
+  schedule ("9am mondays") that Pause holds. The card draws the flow as
+  a map from its trigger, each step marked done, working, waiting on you
+  or failed; click a finished step to read its report. A step that fails
+  or a No skips what comes after it, and a spark that has not reported in
+  six hours has failed. Flows live in `~/.flash/flows.json`.
+- **Team chat.** Every team has a group chat, the user and its sparks in
+  one room (the chat button on the team, or `/sparks teamchat <team>
+  [message]`). The leads answer what is said to no one; `@scout` calls
+  on one, `@everyone` on all of them, and replying to a message calls on
+  whoever wrote it. Any spark can be @mentioned, on the team or not: one
+  off it joins as a guest, answers what it was asked, and leaves the rest
+  to the team without joining it (the @ list shows the team first, then
+  the rest, marked). `@everyone` still means the team. A private chat
+  with one spark never calls anyone else in. Sparks can bring a teammate
+  (or a guest) in, send a few messages
+  in a row, react with an emoji, or stay quiet when they have nothing to
+  add. A spark that needs you writes `@user`, there or in a report: the
+  web UI plays a ping and says who it was (click it to go there), the
+  terminal rings its bell and shows a desktop notification, and
+  extensions hear of it (flash-isola shows a banner in Isola). Pings
+  share the notification limit (`/notify`). A spark can edit a message of its own to fix it or bring it up to
+  date; it is marked Edited, and its arrows step back through every
+  version it has had. A spark hears of a reaction to what it said, a message or a
+  report, by you or a teammate: in its chats, and on its next shift,
+  without being called to one. Taken back, it is never told.
+  Under a spark's message, the play button reads it aloud, and Retry
+  has the spark answer again in its place, the old message gone from
+  the chat and from what every spark reads of it.
+  Voice mode and `:emoji` work there too.
+  Under each of your messages, one tick means it is in the chat and two
+  mean a spark has read it, answering or on a shift; hover the ticks to
+  see which sparks read it, and when. The terminal says the same.
+- **Calls.** The phone button in a spark's private chat calls it, and in
+  a team's chat starts a group call, each spark speaking in a voice of
+  its own. The spark speaks first; mute, share your screen or turn
+  on the camera, and it sees what they show with what you say; talk over
+  it to cut in. Minimise the call to a bar, or close the chat, and it
+  carries on while you use Flash. Afterwards the chat shows one entry
+  (how long it lasted, or that it went unanswered), its Call Log, and a
+  short recap from the spark. A call left open by a closed tab or a lost
+  device ends by itself. **Sparks can call you too**, with `call_user`
+  on a shift, for what cannot wait: every open page rings with the
+  reason and Answer and Decline; with no page open the computer rings,
+  with a prompt whose Answer opens Flash on the call; the terminal rings
+  its bell (Enter or `/answer` picks up, `/decline` turns it down); and
+  with only the keeper running, the computer rings the same way. A call
+  not picked up is a missed call in the chat, with Call back, and when
+  it still needs you, the spark can @mention you with what it called
+  about. Don't want calls? Switch off Let sparks call me in Settings,
+  General (or `/call incoming off`): sparks are no longer offered the
+  call, and @mention you instead. **Move a call** between Flashes as
+  you would between phones: a call going on in one Flash (a page, a
+  terminal) shows in every other page as a pill at the top, On a call
+  with Maya, with Transfer here; in a terminal, `/call take` (or `/call
+  take maya`) takes it over. It carries on where it was, with no hello,
+  and the Flash it left lets go without hanging up. In the terminal, `/call <spark>` calls one, by voice or typed.
+- **Team rules.** Lines every spark on a team keeps to, on top of its own
+  boundaries, on shifts and in chats alike (the team's edit form, or
+  `/sparks teams rules <team> <rules|none>`).
+- **Team projects.** Put a whole team on one project and every spark on
+  it works there, and so does any spark that joins it later (Project in
+  the team's edit form, or `/sparks teams project <team> <project|none>`).
+  Taking the team off its project takes its sparks off too, unless one
+  has been moved to a project of its own since.
+- **Shared workers.** A spark can report to more than one lead, as
+  equals: pick each under Reports to in its form (or
+  `/sparks lead test-runner engine manager, flash manager`), and the
+  org chart draws a line up to each. What it finds on its own goes up
+  to all of them. Work one of them hands it (with `hand_off`) is done in
+  that lead's project, and the report on it goes back to that one: two
+  managers, one per project, can share the same Test Runner, and each
+  hears back about its own work. Any spark can hand work to any other,
+  across leads and projects, the same way.
+- **Mentions in reports.** A spark that writes `@fixer` in its report
+  sends it the report: Fixer reads it on its next shift, or starts one
+  now if it is on call, and does what it was called on for. A lead the
+  report rolls up to anyway gets it once, marked as mentioning it. The
+  page draws each mention as a chip in that spark's colour, and the
+  terminal in its colour.
+- **Hiring.** A spark can propose hiring another, or letting one go. It
+  waits for your yes (`/sparks hires`, `/sparks hire <id> yes|no`). A
+  hire says all it will be: its instructions, title, schedule and
+  boundaries, who on the team it reports to (the proposer unless it
+  says), its colour, model, project, a folder to watch, a budget, and
+  whether it starts paused. Anything it leaves out takes the usual.
+- **Reorganizing.** A spark can propose changing who reports to whom on
+  its team: moving a spark under a new lead, making one a lead, adding or
+  taking away a layer. You see each change and the team's chart as it is
+  and as it would be, side by side, with every moved spark marked, in
+  the Sparks page or in `/sparks hires`. Nothing moves until you say yes;
+  then it is checked again against the team as it is, and made whole or
+  not at all (a change that would now make a loop is refused, saying
+  why). One change per team waits at a time.
+- **Budgets.** Off by default. Give a spark tokens per hour, day, week
+  or month and it pauses itself once they are spent
+  (`/sparks budget scout 50k day`).
+- **Permissions, per spark.** Each spark can have a mode of its own
+  instead of Flash's: Ask first (its commands, edits and anything that
+  changes things wait for your yes), Auto (they run, with System One
+  reviewing if it is on; email still asks), or UltraAuto (nothing asks,
+  only where UltraAuto is offered). Set it under Permissions when
+  editing a spark, or `/sparks mode scout ask|auto|ultra|follow`.
+  Left alone, a spark follows the mode by the message box.
+- **Audit log.** Every shift, tool call, approval and change is kept in
+  an append-only log, each entry carrying the hash of the one before, so
+  an edit by hand shows (`/sparks audit scout`).
+- **On call.** A spark can skip the schedule and work only when you or
+  another spark calls on it (`/sparks every scout on call`).
+- **Pause all, Stop all.** Pause all lets running shifts finish and
+  starts nothing new; Stop all stops them too. Teams pause as a whole.
+- **No silent fallbacks.** If a spark's model fails, it is marked
+  unavailable rather than switched to another model behind your back.
+- **Documents and colours.** A spark can write a document, which opens
+  in the side panel; and each wears a colour you pick
+  (`/sparks colour scout lagoon`, or any `#rrggbb`).
+
+### Progress emails
+
+Flash can email you the milestones of what it is working on, so you can
+follow a long request from your phone, a watch, or another computer:
+
+- **▶ Flash started** when it starts on something,
+- **☐ Plan, 4 steps** and **☑ Step 2/4** as it plans and ticks steps off,
+- **❓ Flash needs you** when it is waiting on your yes or no,
+- **✓ Flash finished** (the first line of its answer, and how long it
+  took), or **✗ Flash stopped** (and why).
+
+Subjects are short, since a small screen shows little more, and every
+email of one request is in one thread. They are sent through the
+account `/email connect` set up, to your own address unless you give
+another, and only for the request you are waiting on: sub-agents and
+sparks working on their own don't send any.
+
+```text
+/email progress on            turn them on
+/email progress to x@y.com    send them somewhere else; "to me" goes back
+/email progress only ask,end  just these: start, plan, ask, end
+/email progress all           every one
+/email progress test          send one now, to see it arrive
+/email progress off
+```
+
+The web UI has the same under Settings, Email, Progress emails. Sent to
+an iCloud address, they reach an Apple Watch's Mail on its own, over
+Wi-Fi or cellular. `only ask,end` is the quiet setting: a message only
+when Flash needs you and when it is done. One that can't be sent (a
+wrong app password, no network) is noted in
+`~/.flash/progress-email.log`, and `/email progress` shows the last
+problem.
+
+### Image Recognition
+
+`/image <path> [prompt]` attaches a local image (`.png`, `.jpg`, `.jpeg`,
+`.webp`, `.gif`, `.bmp`) to your next message and sends both to the model.
+If you leave off the prompt, Flash asks it to describe the image. This
+requires a vision-capable model  text-only models will ignore the image
+or error. Pull one and switch to it first, e.g.:
+
+```bash
+ollama pull my-vision-model
+```
+
+Flash Onyx 2+ is vision capable.
+
+```console
+/model my-vision-model
+/image ~/Pictures/screenshot.png What's going on in this UI?
+```
+
+The model can also open an image on its own with the `view_image` tool, so
+you can just name the file in a normal message and let it look:
+
+```prompt
+Why does the legend in ~/Desktop/plot.png overlap the bars?
+```
+
+It accepts the same file types (up to 20 MB) and sees the image for that
+turn only, calling `view_image` again later if it needs another look.
+
+### Voice mode
+
+`/voice on` turns Flash into something you can talk to. The first time it
+runs it downloads the two models it needs into `~/.flash/models`: a Vosk
+speech-recognition model for listening (about 40 MB) and a Piper voice for
+speaking (about 60 MB). After that everything runs locally, with no audio
+leaving the machine.
+
+```FLASH
+/voice on
+```
+
+With voice mode on, press Enter on an empty prompt to start talking. Flash
+records until you stop, prints what it heard, and sends it as your message;
+the reply is printed as usual and read aloud. It then listens again on its
+own, so a conversation carries on hands-free with no keypress between
+turns. Say nothing for eight seconds (`VOICE_NO_SPEECH_SECONDS`), or press
+Ctrl+C, and it hands the prompt back. Typing works exactly as before, so
+slash commands and long paths can still be typed rather than dictated.
+
+Say **"interrupt"** while Flash is talking and it stops mid-sentence and
+listens for what you say next, so you never have to sit through an answer
+that started off wrong. "stop talking" and "be quiet" work too, as does
+Ctrl+C, and the word can be changed with `VOICE_INTERRUPT_WORD`. It is
+matched as a whole word, so "the interrupted process" is just a message.
+Or let anything you say cut in: set **Interrupting Flash** to "Anything
+you say" in Settings, General (or `VOICE_INTERRUPT=anything`), and talking
+over Flash stops it and what you said is your next turn, as on a phone.
+Calls with sparks work that way by default; **Interrupting on spark
+calls** (or `CALL_INTERRUPT=word`) makes them wait for the word instead.
+
+Say **"voice off"** (or "stop listening", "exit voice mode") to end the
+conversation. That hands the prompt back but leaves voice mode armed, so
+pressing Enter starts talking again without re-enabling anything. To turn
+the feature off altogether, type `/voice off`; the setting is saved in
+`~/.flash.env` as `VOICE`, so voice mode survives a restart either way.
+
+To listen or speak with a different model, `/voice models` lists the ones
+Flash offers, with their sizes, which are downloaded, and which are in use.
+`/voice pull <name>` downloads one and switches to it (part of the name is
+enough, as in `/voice pull ryan`, and Ctrl+C stops the download), and
+`/voice remove <name>` deletes one you no longer use. The web UI does the
+same under Settings > Voice models.
+
+```FLASH
+/voice models
+/voice pull lgraph
+/voice pull kristin
+```
+
+Only the prose of a reply is spoken. Code blocks, tables, and URLs are
+skipped, because they are on screen already and unpleasant to listen to,
+and a long answer is cut at a sentence once it passes `VOICE_MAX_CHARS`.
+Flash also tells the model that it is being heard rather than read, so
+replies in voice mode come back shorter and plainer.
+
+Voice mode needs three extra packages: `vosk`, `piper-tts`, and
+`sounddevice`. `install.sh` and `install.ps1` install them for you, so
+this is only needed if you installed Flash some other way. Flash installed
+with pipx keeps its own environment, so the packages go in with `inject`:
+
+```bash
+pipx inject flash vosk piper-tts sounddevice
+```
+
+For a plain pip install of Flash it is the extra instead:
+
+```bash
+pip install "flash[voice]"
+```
+
+`/voice on` prints whichever of the two commands fits your install. On
+Linux `sounddevice` also needs PortAudio from the system (`apt install
+libportaudio2`); the macOS and Windows wheels bundle it. The voice and the
+listening model can be swapped with `VOICE_PIPER_VOICE` and
+`VOICE_VOSK_MODEL`, and the microphone's sensitivity tuned with
+`VOICE_SILENCE_THRESHOLD`; see [docs/CONFIGURATION.md](CONFIGURATION.md).
+
+The best voice is Phonon: pick one in Settings, Voice models, or
+`/voice pull harper`: Harper, Juniper, Hadley, Miles or Easton, or Maeve,
+Spencer or Edwin for British English. They share one download of about
+67 MB, run on the CPU without a graphics card, and start speaking before
+a sentence is finished. They need one more package, which an update keeps
+once you have it:
+
+```bash
+pipx inject flash ptts             # or: pip install "flash[phonon]"
+```
+
+The second best is Kokoro, in the same place, or `/voice pull heart`:
+Heart, Bella, Michael, Emma or George. They share one download of about
+120 MB and run on the CPU, a little slower than Piper but well ahead of
+the reading. They need a package of their own too:
+
+```bash
+pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
+```
+
+On a Mac, the Siri voices you have downloaded are in the same list, under
+"Siri, built into this Mac", and `/voice models` shows them. Download one
+in System Settings, Accessibility, Spoken Content, System Voice, Manage
+Voices, and it shows up within half a minute. macOS keeps them out of
+`say` and AppleScript, so Flash runs a small helper with `swift` to reach
+them, which needs Xcode's command line tools (`xcode-select --install`).
+There is nothing to download in Flash, and nothing to install with pip.
+Siri itself cannot be used to listen, but the speech recognition under it
+can: pick "Apple, built into this Mac" among the listening models. It hears
+on the Mac itself where the Mac can (macOS 13 and later), with punctuation,
+and needs nothing downloaded. The first time, Flash builds a small app for
+it with the same command line tools, and macOS asks once whether that app
+may use speech recognition. It hears what you said once you stop, so no
+words show while you talk.
+
+For listening that hears far more accurately, pick a Moonshine model in
+Settings, Voice models, or `/voice pull moonshine-small`: Tiny, Small or
+Medium. They stream, so the words on screen while you talk are already
+the right ones, and they need one more package, which an update keeps
+too. "Hey Flash" still listens with the small Vosk model, which downloads
+alongside.
+
+```bash
+pipx inject flash moonshine-voice  # or: pip install "flash[moonshine]"
+```
+
+In the web UI none of these commands need typing: wherever Flash finds a
+package missing (starting voice mode, a Phonon or Kokoro voice, a
+Moonshine model, a tool that failed for want of one), it shows an Install
+button that runs the right command for your install. Logs shows what it prints as it
+goes, and opens by itself if the install fails.
+
+### Waiting for something
+
+In a web UI chat, Flash can set a task aside until something happens and
+then carry on in the same chat, knowing everything it did before. Ask in
+your own words:
+
+- "in two hours, check the download finished and unzip it"
+- "when CI on #42 goes green, deploy it"
+- "if Sam hasn't replied by Friday morning, draft a follow-up"
+- "wait for new texts and answer them"
+
+It waits for one of four things: a time; a command that succeeds, run
+every so often in the chat's folder (`gh pr checks 42`, `curl -f` on a
+URL, `test -f` on a file), which you say yes to once when the wait is
+set, unless autonomous mode is on; or something it looks for with its
+tools, in words ("a reply from Sam is in my inbox"), checked now and
+then without changing anything; or something coming in: a new email, a
+new iMessage (on a Mac), or a change in a connected MCP server, looked
+for without the model, so nothing is spent until it comes. That last
+one can keep going: the chat wakes with each new one, answers it, and
+goes on waiting until you press Cancel or it gives up. A time and a
+condition together wait for the time, then start looking. A wait that keeps looking gives up
+after three days unless told otherwise, and Flash tells you it did.
+
+Flash can change a wait it set without starting over ("make that four
+hours", "also watch for email", "check every five minutes"): the same
+wait and card, now waiting for what it says. A new command is put to
+you again, as when the wait was set.
+
+Each wait shows in its chat as a card with what it is waiting for, what
+it will do then, how its last look went, and Cancel. Waits are kept in
+`~/.flash/waits.json`, so they outlast Flash restarting, an update, or
+the laptop sleeping. A time that passed while Flash was not running is
+over the moment it is back. Deleting a chat cancels its waits.
+
+### Worktrees
+
+A chat can work in a git worktree of its own: a second checkout of the
+project's repository, on its own branch, in its own folder under
+`~/.flash/worktrees`. Its changes stay there, so two chats can work on
+the same project at once and the main checkout stays as it was. Open
++ > Work in a worktree (or `/worktree`) and pick New worktree for this
+chat: the branch is named after the chat. The pill by the message box
+shows the branch; click it to switch to another checkout, merge the
+work into the main checkout, or remove the worktree.
+
+These branches stay on your computer. Flash commits in them but never
+pushes them or opens a pull request: it refuses `git push` and `gh pr
+create` there, and the branch has no upstream, so a bare `git push`
+goes nowhere. Merge brings the work into whatever branch the main
+checkout has out, as a local merge; pushing it is yours to do.
+
+### Recording a meeting
+
+In the web UI, + > Record a meeting (or `/meeting`) listens through the
+microphone and writes down what is said as it is said, with the
+listening model on this computer: nothing leaves it. The meeting gets a
+chat of its own, and the bar over the message box shows the transcript
+as it grows, with Hear the call, Live notes, Pause, Discard, and Stop
+and write up. Tell everyone Flash is writing it down.
+
+Flash works along while you talk:
+
+- **Say "Flash, ..."** (or "hey Flash ...") and it does it in the
+  meeting's chat as soon as the sentence is finished: "Flash, put those
+  dates in a sheet", "Flash, sketch that flow on a whiteboard", "Flash,
+  what did that report say about Q3?". It is given what has been said so
+  far, and keeps what it makes (documents, whiteboards, sheets,
+  checklists) in canvases it updates as the meeting goes. The box under
+  the transcript takes typed asks too.
+- **Hear the call** shares the sound of a call in a tab or app (Meet,
+  Zoom, Teams) and mixes it with your microphone, so the other people
+  are written down too, headphones and all. Pick the call's tab, or the
+  whole screen, with "Share audio" ticked.
+- **Live notes** has Flash keep one notes canvas up to date every few
+  minutes: what it is about so far, decisions, action items and open
+  questions.
+
+Stopping keeps the transcript in `~/.flash/meetings` and attaches it to
+the meeting's chat, where the model writes up what the meeting was
+about, what was decided, the action items as a checklist with who and
+by when where they were said, and the questions left open. A short
+meeting goes to the model whole; a long one it reads from the file a
+part at a time. Later, ask about any meeting ("what did we decide about
+pricing on Tuesday?"): the meetings tool finds the ones that talked
+about it and reads their transcripts. A Moonshine listening model (see
+[Voice mode](#voice-mode)) hears a meeting far better than the small
+Vosk one. It does not say who said what.
+
+### Pictures
+
+Ask for a picture and Flash makes it on your computer, with an image model
+in Ollama (`ollama pull x/z-image-turbo` for fast pictures, or
+`ollama pull x/flux2-klein`, which also edits them; set
+`FLASH_IMAGE_MODEL` to pick one). It writes the full prompt, makes one to
+four to pick from in the size for where it is going, looks at each before
+showing you, and changes them as you say: "make it night", "the same
+character, now waving", "a red coat instead". It also cuts the background
+away (with rembg installed) and makes a picture up to four times bigger.
+Pictures are kept in `~/.flash/images`.
+
+### Big files, whole repos, long videos
+
+Nothing is too long. Give Flash a 600-page PDF, a log of a million lines,
+a whole repository, a two-hour YouTube talk or a recording of your own,
+and it reads all of it, a part at a time, each part summed up with where
+it is (the pages, the lines, the file, the minutes), then puts the parts
+together into one map: what it is, where everything is, and what it says
+about your question and where. From the map it reads the exact pages or
+lines before it quotes them. A digest is kept, so a second question about
+the same file is answered at once. Recordings are heard by Flash's own
+listening model, which needs ffmpeg.
+
+### Speaking a language
+
+Ask Flash to help you speak a language and it gives you phrases to hear
+(in its own voice, or slowly) and say back. Your recording is judged by
+its sound, not by a guess at the words: an acoustic model of the language
+listens with only the phrase's words and the words a sound away from them
+to choose from, so "box" for "fox" or "lady" for "lazy" is caught and
+shown as what it sounded like, and each word is lined up against Flash's
+own voice to say what you rushed or dragged. In a course (the tutor),
+phrases are steps like any other: said well, they count as learned, and
+they come back for review as they fade. Other languages download their
+listening model the first time.
+
+### Spreadsheets in the chat
+
+When numbers are meant to be worked with (a budget, a split, a plan),
+Flash answers with a spreadsheet you edit in place. Click a cell to change
+it, and formulas (`=B2*C2`, `=SUM(D2:D9)`, `IF`, `ROUND`, `AVERAGE`) work
+it all out again at once. Click a column's header to sort by it, add rows,
+copy it into any spreadsheet app or save it as CSV. The line under it asks
+Flash to fill in or change the table ("find the population of each
+city", "add a 10% tip column"), sending the table as it stands, and the
+answer comes back as the whole table again.
+
+### Maps, trips and shopping
+
+Ask where something is, what is near, or how long it takes to get
+somewhere, and the answer comes with a map: numbered places on
+OpenStreetMap, a list under it where a click flies to each, and for a
+route the road or path drawn in order with its distance and time, by car,
+bike or on foot. Flash finds places by name or address, and what is
+around one (cafes, pharmacies, chargers, supermarkets, hotels) with
+opening hours where they are known. Nothing needs an account or a key.
+
+Ask Flash to plan a trip and it builds the days around where things are,
+with a map and the walking times for each day, travel options compared
+side by side, the costs added up and a packing list for the weather.
+Ask it to help you buy something and it compares real specs side by side,
+reads the reviews with an eye for fakes, checks prices and makes one
+pick. Give it terms and conditions or a sign-up page and it finds the
+traps: auto-renewals, cancellation hoops, extra fees and data sharing,
+quoting the line each one is in.
+
+### Science
+
+Ask Flash a science or medical question in any chat and it reads the
+research itself, with links to everything it used. It searches papers in
+PubMed, Europe PMC, bioRxiv and medRxiv preprints, and arXiv. It reads a
+paper's abstract, or its whole text when it is open access, and finds
+related papers. It looks up clinical trials on ClinicalTrials.gov,
+compounds in PubChem with their measured potency on targets in ChEMBL,
+and proteins and genes in UniProt, and writes citations in BibTeX, APA or
+any other style. None of them needs an account or a key.
+
+Proteins and molecules show up in 3D right in the reply: an experimental
+structure from the Protein Data Bank, the AlphaFold prediction for a
+protein (coloured by how confident it is), or a compound from PubChem.
+Drag to turn it, scroll to zoom, switch between cartoon, sticks and
+surface, colour it by chain, rainbow, helices and sheets or element, and
+hover an atom to see its residue. The residues Flash is talking about are
+picked out and labelled. A structure seen once is kept, so it opens again
+offline.
+
+It says when a finding comes from a preprint that is not peer reviewed,
+weighs trials above case reports, and runs any numbers (statistics, unit
+and dose maths, fits and charts) as Python rather than estimating them.
+Sparks can use it too, for example to watch a field for new papers each
+morning.
+
+### Connectors
+
+A connector is an MCP server: a program that offers tools (GitHub's
+issues and pull requests, a Postgres database, a Notion workspace, the
+files in a folder) in the Model Context Protocol, the one shape every
+assistant can call. Add one and its tools join Flash's own, named
+`<connector>__<tool>`, in the terminal and the web UI alike.
+
+```text
+/mcp add files npx -y @modelcontextprotocol/server-filesystem ~/Documents
+/mcp add github npx -y @modelcontextprotocol/server-github
+/mcp env github GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...
+/mcp add docs https://example.com/mcp
+/mcp env docs Authorization=Bearer ...
+```
+
+A command is a program Flash starts on this computer and talks to over
+its standard input and output; a URL is a server elsewhere, spoken to
+over HTTP. `/mcp env` gives a command its environment and a URL its
+headers. In the web UI, Settings > Connectors does the same, shows each
+one's tools, turns them on and off, and edits them (keys keep their
+values unless you type new ones; `/mcp edit` in the terminal).
+
+A server of your own that you start, then reach at an address, is both:
+a start command Flash runs first (and stops with itself), and the URL
+it connects to once that answers.
+
+```text
+/mcp add mine localhost:1234/mcp --start python mymcp/server.py
+/mcp add mine run mymcp/server.py then connect to localhost:1234/mcp
+```
+
+A `.py` file runs on Flash's own Python. In Settings, Start command
+shows under the URL. If the program stops before it answers, the
+connector says why, with the last lines it printed.
+
+They are kept in `~/.flash/mcp.json`, readable only by you, in the
+`mcpServers` shape other MCP clients use, so a config written for one of
+them works pasted in as it is. Servers start in the background when
+Flash starts (the terminal, the web UI, or the sparks' keeper), so their
+tools are there for the first message and the first shift, and stop
+when it exits.
+
+Flash can ask for one itself, when a task needs a tool it lacks: it says
+which server and why, and adds it on your yes (in UltraAuto, without
+asking). It asks to install an extension the same way, showing what the
+extension adds.
+
+A tool its server marks read-only runs straight away. Any other asks
+first, as a shell command does, unless autonomous mode is on, where
+[System One](#system-one) looks it over instead.
+
+Sparks have the connectors' tools too, in their shifts and in a chat
+with them, asked about the same way: a shift that reaches for one that
+changes things waits for your yes, out of autonomous mode. If a tool
+seems missing, because a server was added or crashed since, the model
+can call `refresh_tools`: it starts any server that isn't running, has
+each list its tools again, and the new ones are there from its next
+step.
+
+### Your computer
+
+With `/computer on`, or Settings > General > Your computer in the web
+UI, Flash can do simple things on the computer it runs on when you ask:
+
+- play, pause and skip music or video, and say what is playing
+- set the volume, turn it up or down, mute it
+- open or quit an app by its name (a quit asks to save, as usual)
+- open a link, a file or a folder
+- lock the screen or turn the display off
+- copy text to the clipboard
+- switch dark mode on or off
+- on a Mac, read your recent iMessages ("what did Sam say?") and send
+  one ("text Sam I'm running late")
+
+It is off until you turn it on, and while it is off the model is not
+offered any of it. Turned on, each of those gets a switch of its own
+under it in Settings, all on, so you can turn off just what you'd
+rather it didn't do, like reading or sending iMessages. In the terminal,
+`/computer` lists them, and `/computer off imessage` or `/computer on
+music` switches one; the model isn't offered what's off. Each action is one fixed step Flash takes itself: it
+never clicks, types, or runs a command the model wrote, and it will not
+open a script or installer, only apps by name.
+
+On a Mac, Spotify and Music are asked directly; anything else playing,
+in a browser or any other app, gets the keyboard's media keys, which go
+to whatever played last. Flash reads what macOS shows as Now Playing,
+before and after, so it knows what is playing in any app, never presses
+play on something already playing, and can tell you whether the key
+worked. The first time, macOS asks to let the app Flash runs in (Terminal,
+iTerm and the like) control Spotify and Music, and, for the media keys,
+to turn it on under Privacy & Security > Accessibility. Dark mode asks
+to control System Events.
+
+Reading iMessages goes through what Messages keeps on your Mac, newest
+first, with who said it by their name in Contacts and group chats named;
+nothing is marked read. It needs Full Disk Access for the app Flash runs
+in (System Settings > Privacy & Security > Full Disk Access), which is
+how macOS guards your messages.
+
+An iMessage goes from your account in the Messages app. Flash shows who
+it's to and exactly what it says, and asks every time before sending,
+autonomous mode or not; a no means it isn't sent. A name or nickname
+("Mom") is looked up in Contacts, and the message goes to that person's
+mobile number, or their other number or email address when there is
+none. If more than one contact has that name, Flash asks you which one.
+The first time, macOS asks to let the app Flash runs in see Contacts
+and control Messages.
+
+Windows uses the keyboard's media keys,
+which every player answers, though it cannot tell what is playing. Linux
+uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
+volume.
+
+### Secrets
+
+Keys, tokens and passwords Flash can use without ever seeing them.
+Keep one with `/secret set NAME` (it asks for the value without showing
+it), or in Settings > Security > Secrets; `/secret list` and
+`/secret rm NAME` do the rest. They are encrypted on disk, with the key
+in the macOS Keychain, Windows's data protection, or the Secret Service
+on Linux (a file only you can read where there is none).
+
+Flash knows only their names, and writes `{{secret:NAME}}` where one
+goes. In a shell command it becomes an environment variable, so the
+command you see, approve and keep has only the name; in a connector's
+or an extension's arguments it is put in as the call is made. Whatever
+a tool says back has every secret hidden behind its name again, before
+Flash, the screen or a saved chat sees it.
+
+Paste a key into a message (a GitHub, GitLab, Slack, AWS, Google, npm
+or hub token, an `sk-` key, or a line like `password: ...`) and it is
+taken out and kept in the vault, and the message goes on with its name
+in its place. The same key pasted again is the same secret.
+
+Text that comes from outside (a web page, an email, search results,
+messages, a connected app or an extension) is screened for words that
+try to give Flash orders: "ignore your previous instructions", "you are
+now", "don't tell the user", "send the API keys to...". Flash sees it
+marked as something to read, not to obey, and will not remember it.
+It goes by the words, so it marks rather than drops.
+
+### Sandbox
+
+Commands Flash runs can be walled in by your system's own sandbox:
+`sandbox-exec` on a Mac, bubblewrap (`bwrap`) on Linux. A sandboxed
+command can read what it needs, but it writes only in the folder Flash
+works in and the temp folders (never your home folder as a whole), and
+it never sees your keys and passwords (`~/.ssh`, `~/.aws`, `~/.gnupg`,
+Flash's own settings and the like). The network stays open, so installs
+still work. It isn't available on Windows yet.
+
+- **Run every command in the sandbox** (Settings, General, or `/sandbox
+  on`): off unless you turn it on.
+- **Let sandboxed commands run without asking** (`/sandbox auto on`): in
+  Ask first, a command in the sandbox runs straight away; commands
+  outside it still ask. Also off unless you turn it on.
+- With the sandbox off, Flash can still put one command in it itself, a
+  script it doesn't trust, say, even though it has your full access.
+
+### Computer Use (beta)
+
+For the things no tool can do, a setting deep in an app or a button in
+a program with no other way in, Flash can look at your screen and work
+the mouse and keyboard itself. Turn it on with `/computer use on`, or
+Settings > General > Computer Use in the web UI. It goes further than
+[Your computer](#your-computer), so it needs that on first (`/computer
+on`, or Let Flash act on this computer); turning that off turns this off
+too. It is off until you turn it on; while it is off the model is not
+offered it.
+
+Flash takes a screenshot, says where to click, what to type or which
+keys to press, and gets a fresh screenshot after each step. In the web
+UI each of those screenshots shows under its step, as What Flash saw,
+as does any image a tool shows the model (a page's screenshot, an image
+it looked at); click one to see it whole. The model
+is told to use every other tool first, as this is slow and can click
+the wrong thing, and never to type passwords or card numbers.
+
+It works the mouse and keys as a person does, so websites that turn away
+robots let it through: the pointer travels along a gentle curve, quick in
+the middle and slowing as it arrives, taking longer for small or distant
+targets, and a long reach sometimes overshoots a little and comes back. It
+rests on a button for a moment before pressing and holds the click as a
+finger does. Text goes in a key at a time in a typist's uneven rhythm, and
+the wheel turns in notches. You can still take the computer back mid-move.
+Turn it off with `/computer use human off` (or Move like a person in
+Settings) to have the pointer jump straight there; fast mode always jumps.
+
+It asks before it takes your computer, every reply that wants it, even
+in autonomous mode; only UltraAuto skips the question. A yes lasts that
+one reply. Saying no, you can say why (a box beside Deny in the web UI,
+a line after `n` in the terminal), and Flash takes that into account
+instead of guessing. If the screen has gone to sleep, Flash wakes it
+before its first step; it cannot get past a locked screen, and the
+screenshot shows it that. While Flash has the computer, a soft glow breathes around the
+edges of your screen, so it is plain whose mouse it is; clicks go
+through it. Then:
+
+- press **Ctrl+Alt+Esc** (**Control+Option+Esc** on a Mac) to take it
+  back: the reply stops then and there. Flash never presses those keys
+  itself. In the web UI the same keys work too, wherever you are.
+- or just move the mouse: the next step sees the pointer isn't where
+  Flash left it, and stops. To keep using the mouse while it works,
+  switch off Moving the mouse stops it in Settings, or `/computer use
+  mouse off`; then only the stop keys take it back.
+- the Stop button and Esc still stop the reply as usual.
+
+**Fast mode** is a second, quicker way to work, off unless you turn it
+on (Fast mode in Settings, or `/computer use fast on`); the plain way
+stays the default. With it on, Flash can do several clicks and keys in
+one step and look only once at the end, and it can list the front
+window's buttons, fields, menus and links by name, read from the app
+itself through the system's accessibility support (System Events on a
+Mac, UI Automation on Windows, AT-SPI on Linux), then click or type into
+one by its name instead of finding it in a screenshot. Far fewer slow
+look-and-click rounds for the same work. Where an app lists nothing, it
+falls back to screenshots and points.
+
+Only one chat has the computer at a time. It needs a model that can see
+images. On a Mac, the app Flash runs in needs Accessibility (for the
+mouse and keyboard) and Screen Recording (for the screenshots), under
+System Settings > Privacy & Security; screenshots are of the main
+display. Windows uses user32 and PowerShell. Linux needs `xdotool`, an
+X session, and a screenshot program (`gnome-screenshot`, `grim`,
+`scrot` or ImageMagick's `import`).
+
+### Flash Icons
+
+Every website and app Flash builds uses Flash Icons, its own icon set:
+about seventy icons (arrows, actions, mail and chat, media, shopping,
+time and places, files, weather and moods) drawn in one style, 24 by 24,
+rounded lines in the colour of the text around them. Each moves a little
+when the button or link it is in is pointed at or focused: an arrow
+nudges the way it points, a bell rings, a heart beats, a gear turns, a
+check draws itself. They are inline SVG with one small stylesheet, so a
+page needs no icon font or CDN, and motion stops for anyone whose system
+asks for reduced motion.
+
+Ask Flash to change them, in your own words: "thicker icons", "square
+corners", "give them a soft fill", "calmer", "no animation", "animate
+them as they appear", "make them blue". It changes your icon style,
+shows every icon in it, and updates the pages it made. The style is
+kept in `~/.flash/icon-style.json`, and every icon Flash makes after
+follows it; "go back to the default icons" resets it.
+
+### Page screenshots
+
+The `screenshot` tool renders a local `.html` file or a URL in a headless
+Chromium and attaches the picture, so a vision-capable model can check
+what it built rather than trusting its own source:
+
+```prompt
+Build me a pricing page in ~/Desktop/pricing.html, then check how it
+looks on a phone.
+```
+
+It takes a viewport `width` and `height`, captures the whole scrollable
+page with `full_page`, and reports any JavaScript errors the page threw
+while rendering, which is usually what explains a section that came out
+empty.
+
+### Clicking through a page
+
+A screenshot is a still picture, so for a page with buttons or a form the
+AI opens it with `open_page` and then drives it with `interact`, one
+action per call:
+
+```prompt
+Open ~/Desktop/signup.html, fill in the form, submit it, and tell me why
+the confirmation never shows up.
+```
+
+The browser stays open between calls, so the page keeps its state while
+the AI works through a flow. `interact` takes an `action` (`click`,
+`fill`, `press`, `hover`, `select`, `scroll`, `wait`, `eval`, `back`,
+`reload`, `close`) and a `selector`, which can be the number Flash prints
+beside each element, a CSS selector, or the text on the element itself.
+Every call answers with where the page is now, what can be clicked or
+typed into next, and the JavaScript errors the page threw, with a
+screenshot attached. The `eval` action runs JavaScript against the live
+page and returns the result, which is how the AI inspects state a picture
+cannot show.
+
+In the web UI the browser shows in the side panel as Flash works.
+**Take control** there makes it yours: the page plays live, and your
+clicks, scrolls and typing go to it (type an address into the bar to go
+somewhere). Flash waits while you have it, log in for it, say, or get
+past a cookie wall, and **Hand back** gives it back; Flash looks again
+before its next step.
+
+### Real-time games
+
+A game that moves sixty times a second cannot wait for a model to look
+and think between frames. So with `play_realtime` the AI writes a
+reflex instead: a few lines of JavaScript the page runs every frame,
+reading the canvas's pixels and pressing keys, clicking or holding the
+mouse, for as long as it asks. It sees how the run went (frames,
+actions, what it logged, a screenshot, and a film of the run sent to
+you), changes the reflex and runs it again, the way a person practises.
+
+It has what a hard game needs:
+
+- **Eyes.** `api.blobs` finds every patch of a colour as a box,
+  `api.runs`, `api.find` and `api.findDown` read rows and columns, and
+  `api.speed` measures how fast the picture scrolls. A WebGL canvas,
+  which most game engines draw on, is read the same way.
+- **Hands.** Keys, clicks, and `api.down` and `api.up` to hold the mouse
+  for a ship or a jetpack; `api.later` for timing finer than a frame.
+- **Attempts.** Give it `attempts`, a `died` check and `restart_keys`,
+  and it plays like a person beating a hard level: on a crash it starts
+  over, keeping what it learned in `api.memory` (and where it died in
+  `api.deaths`), until it wins or the attempts run out. It says how far
+  each try got, and films the best one.
+
+- **A head as well as hands.** Played live (`look_every`), the reflex
+  keeps going between the AI's turns instead of stopping. Every few
+  seconds the AI looks in at a screenshot and at what the reflex noticed
+  and makes the calls: a plan the reflex carries out (`api.plan`), a new
+  reflex swapped in without a pause, or a line said to you. The reflex
+  handles what's too fast to think about; the AI does the thinking.
+
+```prompt
+Open flash-dash and beat it.
+```
+
+`flash-dash` is a practice level that comes with Flash, built like a
+Geometry Dash level: spikes, blocks to land on and jump off, a pad that
+launches you over a wall, a spike pit too long to jump that needs a
+tap on a ring in mid-air, a speed-up, and a ship to fly, holding to
+climb, through pillars. The reflex in `flash/games/dash-policy.js`
+beats it from the pixels alone, nearly always on the first try: it
+measures the speed by tracking what it sees, runs the game ahead to
+find every frame a jump could start on and still land safe, and jumps
+in the middle of them; taps a ring only when falling on would die; and
+steers the ship for the middle of each gap.
+
+`flash-dash-glitched` is the same level with six secrets in it: glitches
+that help, the way a speedrunner's skips do. None shows until it is found,
+and a careful run finds none (the reference reflex wins with zero, in about
+21 seconds). Found, they fling you over spike pits, through pillars and
+straight at the finish; the screen counts the secrets a run found and the
+time it took. Ask Flash to hunt them:
+
+```prompt
+Open flash-dash-glitched. Don't read its source: play it, find its
+secrets, and beat it as fast as you can.
+```
+
+What they are is in the test that keeps them in
+(`tests/test_dash_glitched.py`), so read that after, not before.
+
+Both tools need Playwright's Chromium, which `install.sh` and
+`install.ps1` download for you. Installing Flash another way means
+running it yourself:
+
+```bash
+playwright install chromium
+```
+
+
+### Games you play with Flash
+
+```prompt
+Play Tether with me.
+```
+
+Tether is a co-op game that comes with Flash: you're blue, Flash is
+orange, and you're tied together by a rope. Sweep the rope through
+sparks to catch them, and keep it away from the drones. Flash shows you
+a link as soon as the game is up and plays it live: its reflex moves
+and dodges every frame, while Flash watches, picks which sparks to go
+for, holds still for you to swing round it, and talks to you in the
+game.
+
+You can make your own. A game becomes one Flash knows how to play when
+its page carries three things, and `open_page` shows Flash all three:
+
+```html
+<meta name="flash-game" content="How to play, for Flash: the colours,
+  the goal, what the title says, the plans its reflex understands.">
+<meta name="flash-invite" content="/join">
+<script type="text/flash-reflex">
+  // run every frame; reads api.plan, Flash's decisions
+</script>
+```
+
+The invite is the link you're shown to join, relative to the page. Add
+`window.flashSay = text => ...` and what Flash says shows in your game;
+without it, it goes to the chat.
+
+### Live canvas
+
+In the web app, the `canvas` tool shows a card in the chat with HTML,
+Markdown or SVG that Flash builds and keeps updating as it works. An
+HTML canvas is live, and Flash can work on it the way you do:
+
+- **patch** changes parts of it in place by CSS selector (replace an
+  element or its content, add to it, set its text, an attribute or an
+  input's value, remove it), so what you typed and where you scrolled
+  stay as they are. Patches are kept with the canvas, so it looks the
+  same when you open the chat again.
+- **run** runs JavaScript inside it and gets back what it returns.
+- **read** gets what is in it now: every input's value, what its code
+  keeps in `flash.state`, and its text.
+- **look** gets a picture of it as you see it, for a model that sees
+  images.
+
+The canvas's own buttons can talk to Flash with `flash.send("...")`:
+the text arrives in the chat marked as coming from that canvas. It only
+works from something you did, such as a click, so a canvas cannot send
+messages on its own. Everything runs in the canvas's sandbox, which
+cannot reach Flash, your files or your cookies.
+
+### Updates
+
+Flash checks `main` on GitHub for a newer version on startup and shows it
+in the banner if one is available. Run `/version` anytime to check on
+demand, or `/update` to install it. Flash re-runs the same pipx-based
+steps `install.sh` uses, so it needs pipx on PATH. If you cloned the repo
+manually, update with `git pull` instead.
+
+You can also check and update from outside the REPL:
+
+```bash
+flash --update          # check for a newer version and, if found, confirm and install it
+flash --update --force  # reinstall from `main` unconditionally, no confirmation
+```
+
+On Windows the install cannot run while Flash is open, because Windows
+holds a lock on every running program and pipx has to replace two of
+them: `flash.exe` and the Python it starts. Flash downloads the update,
+then hands the install to a PowerShell window that waits for Flash to
+close and finishes there. Quit Flash and the update completes on its
+own.
+
+### Extensions
+
+Extensions add slash commands, tools the model can call, system prompt
+text, and backgrounds. Install one from GitHub:
+
+```bash
+flash install github@username/my-ext
+```
+
+or with `/extension install github@username/my-ext` in a session. Flash
+shows what the extension adds and asks before installing it.
+`flash list` and `flash remove <name>` do the
+rest. See [docs/EXTENSIONS.md](EXTENSIONS.md) to write your own.
+
+### Importing memories
+
+Bring what another assistant knows about you, or facts you keep
+yourself, into Flash's memory with one command:
+
+```bash
+flash --memory-prompt                    # the prompt to give the other assistant
+flash --import-memories its-answer.txt   # save what it answered
+flash --import-memories facts.json       # or a JSON list: ["...", "..."]
+some-script | flash --import-memories -  # or from standard input
+```
+
+It takes the other assistant's answer as it is (only what is in its
+code blocks, if it used any), plain lines with or without bullets, or
+JSON: a list of strings, or `{"memories": [...]}`. Facts already saved
+are skipped, so running it twice adds nothing. It exits 0 when it saved
+or found something, so a script installing Flash can run it last. In a
+chat, `/import-memories <file>` does the same.
+
+### Learning
+
+Flash learns from its own work.
+
+- **Skills** are procedures for tasks that come up again: the steps, the
+  commands that worked, and the pitfalls to avoid. Each one lives in
+  `~/.flash/skills/<name>/SKILL.md`. The model sees each skill's name and
+  one-line description on every turn, and reads the full skill when a
+  task matches it. Ask it to remember how to do something, or correct
+  how it did a task, and it saves or fixes the skill.
+- **Memory** is saved with the `remember` tool, and it is now in the
+  system prompt, so the model uses it without having to search for it.
+  The newest entries that fit in 2200 characters are sent. `recall`
+  still searches older ones.
+- **Reviews** happen in the background. After 10 tool calls, and every
+  10 messages, Flash rereads the recent conversation once the reply has
+  gone out and saves what is worth keeping: a new skill, a fix to one it
+  wrote before, or a fact about you. It says what it saved under your
+  next reply, and the status bar shows `learning` while it runs. A review
+  can only change skills Flash wrote itself, never ones you wrote. It
+  stops the moment you send a message, so it never holds up your turn,
+  and it runs again after the next turn.
+
+- **Skills improve themselves.** Each time Flash uses a skill, the run
+  is scored: how many tool calls failed after it read the skill, and
+  your rating of the reply if you gave one. When a skill's last 3 runs
+  go badly, Flash rewrites it from them, fixing the steps that failed,
+  then tries the new version on its next 3 uses. If those score better,
+  the new version stays; if not, the old one comes back on its own.
+  Only skills Flash wrote are rewritten unprompted (`SKILL_TRIALS`
+  changes that); improve one of yours with `/skills improve <name>` or
+  the Skills page. Every version is kept, and `/skills history <name>`
+  or the skill's page shows the runs, what was tried, and a Restore
+  button for each earlier version.
+
+A skill can be passed on as a code: one line of text starting
+`flashskill1-` that holds the whole skill, so it needs no account or
+server and works offline. Copy code on a skill's page (or `/skills
+code <name>`, or ask Flash to share it) makes one; Add from code on
+the Skills page (or `/skills add <code>`, or pasting it to Flash)
+saves it as one of yours. A code that has been wrapped onto several
+lines in a message still works.
+
+What is learned reaches the system prompt in your next session, or
+after `/clear`. The prompt stays the same for the rest of a session,
+so Ollama can reuse the work it did on it instead of rereading it all.
+
+`/skills` lists what Flash has learned, `/skills show <name>` shows one,
+and `/skills remove <name>` deletes one. `SKILL_REVIEW_AFTER` and
+`MEMORY_REVIEW_EVERY` change how often reviews run, and `0` turns them
+off (see [docs/CONFIGURATION.md](CONFIGURATION.md)).
+
+Decisions are kept at once. Say one ("let's go with Postgres", "from
+now on use pnpm", "I prefer short answers", "call it Lumen instead") and
+a review runs right after that reply instead of waiting its turn: the
+decision is saved as one "Decided:" line, with its reason, in the
+project's memory when it is about the project and in yours when it is
+about you, and an older line that says the opposite is corrected rather
+than kept beside it. So it is never asked again, in this chat or a new one.
+
+### Web UI
+
+```bash
+flash --web                 # opens Flash in your browser
+flash --web --lan           # also reachable from your phone, with a QR code to scan
+flash --web --port 9000     # on another port (the default is 7433)
+flash --web --no-open       # print the link instead of opening it
+```
+
+Inside a terminal session, `/web` starts the same UI in the background,
+`/web lan` opens it to your network, and `/web stop` shuts it down.
+
+The browser UI is the same agent as the terminal, with the same model,
+tools, permission prompts, skills, and extensions. Replies stream in as
+the model writes them. Tool calls show as compact rows that expand, and
+file changes show as colored diffs. A permission prompt takes the
+keyboard focus, so a single `y` or `n` answers it.
+
+**Think harder**, in the + menu, has the model think harder about your
+next message: a model that can reason apart from its answer reasons
+longer, and every model is told to take its time and check its work. A
+Think pill in the box shows while it is set (a click on it skips it),
+and it lets go once the message is sent.
+
+**Think when it helps** (Settings, on by default) lets Flash turn its
+thinking on by itself: when a message needs careful reasoning, like
+tricky maths, a bug whose cause is not plain, or a plan with many
+steps, it says so ("Thinking harder: ...") and reasons at length for
+the rest of that reply. Quick questions stay quick. Only models that
+can reason apart from their answer are offered it. In the terminal,
+`/think auto on` or `/think auto off`.
+
+**Custom instructions**, in Settings, are how you want every reply, in
+your own words ("use metric", "no bullet points"), in the browser and
+the terminal alike; `/instructions <text>` sets them from the terminal
+and `/instructions clear` removes them. They are kept in
+`~/.flash/instructions.md`.
+
+A project's own notes for coding agents are read too. When the folder
+Flash works in (the project's, in the browser, or the one you started
+it in, in the terminal) has an `AGENTS.md`, or the nearest folder above
+it up to the top of the repository does, Flash follows it in every
+chat there: how to build and test the project, and the conventions to
+keep. A `FLASH.md` works the same way, for notes meant only for Flash.
+Up to 12,000 characters of it are read.
+
+Flash can retitle the chat it is in, when the title it has is wrong: a
+chat named after a message it misread is renamed once it understands
+(a title you gave it yourself stays). And in voice mode it can end the
+conversation itself when you are done, after saying goodbye. Ctrl+C in
+the terminal running `flash --web` stops it.
+
+In voice mode in the browser, the camera button shows Flash what you
+point it at: while it is on, what it sees at the moment you finish
+speaking goes with what you said, as a photo (it needs a model that can
+see images). It starts on the back camera; on a phone or tablet with
+more than one, the flip button beside it switches to the front and back,
+the front one shown as a mirror would. And Settings, Voice, **Voice mode look** swaps the orb for a
+companion, a face that blinks while it listens, perks up while you talk,
+looks up while it thinks, and moves its mouth as it speaks.
+
+Every button has a shortcut, shown when you hover over it, and `?`
+lists them all:
+
+- `Ctrl K` searches every action, chat, and model.
+- `Alt N` starts a new chat, `Alt ↑` and `Alt ↓` step between chats,
+  and `Alt 1`–`9` jumps to one.
+- `Alt F` searches every chat, titles and messages alike. Opening a
+  result scrolls to the message that matched and highlights the words.
+- `Alt M` switches model, `Alt R` retries, `Alt E` edits your last
+  message, and `Alt Z` undoes the last turn's file changes.
+- `Shift Tab` toggles autonomous mode, `Ctrl O` expands every tool
+  row, `Esc` stops a reply, and `Alt T` switches between light and dark.
+- Outside the message box, `j` and `k` move between blocks, `c` copies
+  one, and `g` and `G` jump to the top and bottom.
+
+**Editing a message** happens where it is. Hover over one you sent and
+click the pencil, or press `Alt E` for the last one. Change it, then
+press `Enter` or Save, or `Esc` to cancel. The chat goes back to that
+message and carries on from what it says now. The earlier version is
+kept: `‹ 1 / 2 ›` under the message steps between versions, each with
+the replies that followed it. Retry on a reply answers your message
+again the same way, and a reply that failed with an error has a Retry
+button of its own.
+
+**Files** the agent makes come to you. It sends a picture with
+`send_image` and a PDF with `send_pdf`. In the browser, the file slides
+out in a panel on the right, with its name and size across the top and
+buttons to download it or open it in a tab. A 3D model from
+`make_3d_model` or `send_3d_model` opens there in a viewer: drag to turn
+it, scroll to zoom, right-drag to pan, with buttons to reset the view,
+stop it spinning, and see its wireframe. A model made to explore is
+interactive: point at a part to see its name and what it is, and click
+a door, a drawer or a lid to open it (click again to close it). A card
+stays in the chat to open it again, and `Alt V` shows or hides the panel.
+
+**Sound** plays in the chat itself, in a player with its waveform: click
+or drag on it to move, change the speed, or download it. That goes for
+sound files Flash makes or sends (`make_sound`, `send_audio`) and for
+ones you attach. **Reading aloud**: ask "read me this article" with a
+link, or to read a document or some text, and Flash reads it in the
+voice chosen for voice mode, with its `read_aloud` tool: the article,
+not the page's menus, a paragraph at a time. In the browser the reading
+arrives as a player that starts by itself; in the terminal it plays
+through your speakers, and Ctrl+C stops it. Ask for a file and it saves
+one (`.m4a` with ffmpeg, else `.wav`). Each file is kept
+as a copy in `~/.flash/web/files`, so a chat still shows its files
+after the originals are gone. In the terminal, a PDF opens in your PDF
+viewer.
+
+**Files from other chats**: + > From another chat lists every file in
+your chats, the latest first, grouped by chat: ones you sent and ones
+Flash made and showed you, like a post it wrote. Pick one and a copy
+goes with your next message, as if you had attached it again.
+
+**Forks**: the fork button under a reply forks the chat there. You
+carry on from that reply in the same chat, and the way it went before
+is kept. Once a chat has forks, a Forks button at the top shows them
+as a tree, each under the reply it forked from, forks of forks and
+all; pick one to carry on where it left off. The bin on a fork deletes
+it: its own forks move up a level, and if it was the one showing, you
+go back to the one it came from. Down to one fork, the chat has none,
+and the Forks button goes away.
+
+**Briefing** (in the sidebar, `Alt+B`, or `/briefing`) is what came in
+while you were away, as a full-screen feed you swipe or scroll through
+one card at a time: unread email and iMessages, spark reports you have
+not read, waits that finished or gave up, chats that answered that you
+have not opened since, waits coming up in the next day, anything new a
+connector a spark watches said, a spark's `@user`, and the notifications
+Flash sent you. It looks back one day. A team where something changed since your
+last briefing gets one card for the whole team: each spark's newest
+report as a line, what the ones at work are doing, and how much the team
+chat said (Open goes to the team chat). Each card can be answered (Reply), opened
+(the chat, the spark's report, or the email), asked about in a new chat
+(Ask Flash), or dismissed for good. With Trash emails I dismiss in the
+briefing on (Settings, Email; off by default), dismissing an email's card
+also moves the email to that account's trash, where it can still be got
+back. An iMessage from one person can be
+marked read (Mark read, `m`): Messages shows the conversation for a
+moment, and every card from it goes. `j`/`k` or the arrow keys move,
+`r`, `o`, `a`, `d` and `m` do the actions, and `Esc` closes it; the rail on
+the right shows where you are. A source that cannot be reached is left
+out and named at the end. `/briefing` in the terminal opens the same
+feed full screen: Reply and Ask Flash start a message in the box, Open
+shows a spark's report, opens a team's chat, or the email in your
+browser, and `q` closes it.
+
+**The sidebar** shows its rows as one strip of icons under New chat (their names in tooltips, their counts on their corners), so the chats get the room. Right-click a row for Show names, to move it, or to put it in More; Customize sidebar orders them, puts any in More, and switches the compact strip off and on. An extension's panels start in More.
+
+**Pinned chats** stay at the top of the sidebar, under Pinned, whatever
+project they are in: the pin beside a chat (on hover), or `/pin` for the
+open one, pins and unpins it. Scrolled up in a chat, a down arrow over
+the message box takes you back to the latest (`G` does too).
+
+**Projects** group chats about one codebase. A project is a folder plus
+instructions: every chat in it runs its tools in that folder, and the
+instructions go into its system prompt. Open them from Projects in the
+sidebar (`Alt P`). Chats are saved as they change, so a project keeps its
+conversations across restarts. Hosts, projects, and chats live in
+`~/.flash/web`, and removing a project never touches its folder or its
+chats.
+
+A project has a **memory** of its own, apart from yours: its
+conventions, decisions, the commands it runs, where things are. Flash
+adds to it in a project chat when something belongs to the project
+rather than to you (`remember` with `project`), every chat in the
+project starts with it, and `recall` searches it too. The project's
+page lists it under Memory, where you add, edit and forget entries.
+Deleting a project deletes its memory.
+
+It keeps itself up to date: after enough work in a project, the
+background learning review also saves what the work taught Flash about
+the project (commands that worked, conventions, where things live, a
+mistake that cost time and its fix) to the project's memory, apart from
+what it learned about you.
+
+The terminal has project memory too, by folder. Started in a repository,
+or a folder with a project file such as `package.json` or
+`pyproject.toml`, Flash keeps a memory for that project, adds to it as
+it learns, and brings it back whenever you work anywhere in that folder
+again. A web project that takes the folder in shares the same memory.
+Plain folders and your home folder have none.
+
+**Making it yours.** Settings › General changes how the page looks, in
+this browser:
+
+- **Colors**: a palette for the whole page in light and dark: Flash,
+  Ocean, Forest, Grape, Rose, Sunset, Sunrise (warm cream and a bright
+  orange, with a stepped red into yellow stripe on the send button and
+  under the greeting), Midnight, Graphite, High contrast,
+  and any an extension adds.
+- **Accent**: the colour of buttons, links and the loader. Pick a swatch
+  or any colour.
+- **Text and layout**: the chat font (default, rounded, serif, mono or
+  system), text size, how wide the conversation runs, the spacing
+  between messages, and how round the corners are.
+- **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
+  Snake, Arc, Cursor, Comet, Singularity (a black hole that pulls
+  every dot in, then blows them out), Quill, Magnifier, Terminal, Book, Camera, Paper plane, or an
+  extension's. **Dynamic loaders** show what Flash is doing instead,
+  saying so: a hand guiding a quill while it writes, a magnifier while
+  it searches, a terminal while it runs a command, a book while it
+  reads, a camera while it looks at a page or your screen, a paper plane
+  while it sends (`LOADER_TASKS=0` turns them off). Every 10 seconds it shrinks away into another, at
+  random, for as long as Flash works; turn off **Morph between
+  loaders** to keep to one. Both are the same settings as the
+  terminal's `/loader` and `/loader morph`.
+
+**Hosts** are the Ollama servers Flash can talk to: this computer, and
+any other machine you add, like one with a bigger GPU. The model menu
+(`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
+which ones answer. Picking one switches Flash to it and lists the models
+there. The choice is saved as `OLLAMA_HOST`, the same setting the
+terminal uses, and the terminal's `/host` lists the same hosts.
+
+Ollama itself has no API keys, but a server can sit behind a proxy that
+asks for one. Give the key in the API key box when you add the host, and
+Flash sends it with every request to that host (chat, model lookups, and
+System One alike) as `Authorization: Bearer <key>`. It is kept in
+`~/.flash/web/hosts.json`, readable only by you, and never shown again;
+a lock marks the hosts that have one, and a yellow dot one that wants a
+key or turned its key down. Adding the host again replaces its key. The menu's three sections (Host, Model, System One) each
+fold away with a click on their name, and stay as you left them.
+
+The model button shows a model's own name, so
+`Natuworkguy/flash-onyx-2.5:31b-cloudbase` reads `flash-onyx-2.5`; the
+menu shows the whole name. On a new chat the button sits in the message
+box; once a chat is going, it fades from the box to the top left of the
+chat, out of the way of what you are writing.
+
+By default the server only listens on this machine. `--lan` listens on
+your network too, prints a QR code in the terminal, and shows one under
+Open on phone in the sidebar. Every request needs the random token in
+that link, so other websites and other people on the network cannot
+drive Flash without it. The link travels unencrypted, though, so use
+`--lan` only on a network you trust. If your phone cannot connect, your
+firewall is probably blocking Python from accepting connections. On a
+Mac, allow it in System Settings, Network, Firewall.
+
+#### Open from anywhere, through a tunnel
+
+Below "Open on your network" in Settings, General, Network, a tunnel
+puts the web UI on a public https address, so you can open it away from
+home. Pick the service, then Open tunnel:
+
+| Service | Needs | Address |
+| --- | --- | --- |
+| Cloudflare quick tunnel | `cloudflared`, no account | random, new each time |
+| localhost.run | `ssh`, nothing else | random, new each time |
+| Tailscale Funnel | Tailscale signed in, Funnel allowed | your tailnet's, the same each time |
+| ngrok | `ngrok` with its authtoken added | ngrok's |
+
+Extensions can add more services; they show in the same picker with
+the extension's name beside them. See
+[Tunnel services](EXTENSIONS.md#tunnel-services).
+
+Settings then shows the link, token and all, with a QR code, and every
+page shows a red bar with Turn off while it lasts. In the terminal,
+`/web tunnel` lists the services, `/web tunnel cloudflare` opens one
+(after a y/n), and `/web tunnel off` closes it. It also closes when
+Flash stops, and nothing ever opens one but you.
+
+**Think before you use it.** A tunnel puts Flash on the internet.
+Anyone who gets the link can use Flash as you, from anywhere: read
+every chat, run commands on your computer, change and delete files,
+and send email and messages in your name. The link is as good as your
+password, so never post it or send it where you wouldn't send a
+password. The service carries every request and can see what goes
+through it. Keep autonomous mode off while it's on, so every command
+still waits for your yes, and turn it off when you're done. If the link
+may have got out, Security, "Sign out all other browsers" makes a new
+one. Flash answers only to the tunnel's own address, not to any other
+under the same service.
+
+A browser that opens the link is signed in by a cookie until Flash
+stops, so each new `flash --web` takes its new link. To skip that, turn
+on Remember signed-in browsers under Settings, Security (off by
+default). From then on a browser that has opened the link once opens
+Flash at its plain address, `http://127.0.0.1:7433/` or whatever port it
+runs on, across restarts, until you sign it out there or it goes 180
+days without opening Flash. Flash keeps only a fingerprint of each
+browser's cookie, in `~/.flash/web-browsers.json`, which cannot be used
+to sign in.
+
+The suggestions use the [Orbit](https://github.com/JAMO-TYPEFACE/Orbit)
+typeface, bundled under the SIL Open Font License
+(`flash/web/OFL-orbit.txt`).
+
+### Direct Shell Execution
+
+You can run shell commands directly without AI intervention:
+
+- `!ls -la`
+- `!git status`
+- `!echo "Hello"`
+
+### `flash://` Links
+
+Flash can open from a link. `install.sh` and `install.ps1` register the handler
+for you; after a manual install, register it once yourself:
+
+```bash
+flash --register-url-scheme
+```
+
+Then a link like `flash://?prompt=What+is+Python` starts a Flash session with
+that prompt queued. Pass the same URL on the command line to test it without a
+browser:
+
+```bash
+flash --uri "flash://?prompt=What+is+Python"
+```
+
+`flash://open` opens the web UI instead: the one already running on this
+computer, in a new tab, or a new one if none is (served from the window the
+link opened, until Ctrl+C there). It carries no prompt, so nothing is asked.
+
+The prompt is URL-encoded, so use `+` or `%20` for spaces. Flash always shows
+the prompt and asks before sending it to the model. Any web page can open a
+`flash://` link, so nothing runs unattended. For the same reason, URL prompts
+may not start with `/` or `!`: they carry questions for the model, never Flash
+commands or shell escapes.
+
+To remove the handler (the uninstallers do this too):
+
+```bash
+flash --unregister-url-scheme
+```
+
+Registration is per-user: it writes `HKCU\Software\Classes\flash` on Windows and
+`~/.local/share/applications/flash-url.desktop` on Linux/BSD. It cannot be
+installed on macOS, which resolves URL schemes from application bundles only.
+Passing a `flash://` URL on the command line still works everywhere.
+
+### AI Interaction
+
+Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also look at an image file with the `view_image` tool, search the web via Duck Duck Go, and show it's reasoning.
