@@ -214,6 +214,12 @@ install from GitHub (`/extension install github@you/my-ext`).
 or your environment: [Configuration](docs/CONFIGURATION.md).
 
 
+## Project Stack
+The project is mainly built in **Python** and **HTML**, and has other languages in small proportions for auxiliar functionalities.
+
+It uses **Modelfiles** and **Powershell/Bash** too.
+
+## License
 License
 -------
 
