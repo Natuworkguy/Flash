@@ -1065,10 +1065,12 @@ def device_product(user_agent: str) -> str:
 
 
 def device_kind(product: str) -> str:
-    """"watch", "robot" or "device", from what a paired device says it is,
-    so each extension lists only its own (a robot is no watch)."""
+    """"watch", "robot", "tv" or "device", from what a paired device says it
+    is, so each extension lists only its own (a robot is no watch)."""
 
     said = product.lower()
+    if "googletv" in said or "androidtv" in said:
+        return "tv"
     if "watchos" in said or "watch" in said:
         return "watch"
     if "flashbot" in said or "robot" in said:

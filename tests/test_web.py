@@ -5649,6 +5649,7 @@ def test_a_paired_device_says_what_it_is():
     kinds = {b["device"]: b["product"] for b in access.listing("", set())}
     assert kinds == {"My watch": "watch", "Flash Bot": "robot", "Desk": "robot"}  # nosec B101
     assert web.device_kind("") == "device"  # nosec B101
+    assert web.device_kind("GoogleTV") == "tv"  # nosec B101
 
 
 class TestChatsWorkingWithChats:
