@@ -27,7 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import humanvoice, paths, pings, presets, sparks
+from . import humanvoice, paths, pings, presets, sparks, timesense
 from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -130,9 +130,10 @@ You are shown the latest of the chat, then asked to post your message.
   thought, step or finding in each, sent with send_message, and the
   last one as your answer. A wall of text in one bubble is hard to read
   in a chat.
-- Each message in the chat starts with its number, as #12. React with
-  emoji a lot, as friends in a group chat do: call react with a
-  message's number. Good news gets 🎉 or 🔥, a joke 😂, thanks
+- Each message in the chat starts with the time it was sent and its
+  number, as [14:05] #12, under a line for each day. React with emoji a
+  lot, as friends in a group chat do: call react with a message's
+  number. Good news gets 🎉 or 🔥, a joke 😂, thanks
   ❤️ or 🙏, a plan you agree with 👍, something done ✅, something
   you are looking into 👀; any emoji that fits will do. React to most
   messages worth acknowledging, often instead of a message ("ok",
@@ -202,8 +203,9 @@ You are shown the latest of the chat, then asked to post your message.
 - Break a long answer into several messages, as people text: one
   thought, step or finding in each, sent with send_message, and the
   last one as your answer, rather than one wall of text.
-- Each message starts with its number, as #12. React with emoji a lot,
-  as friends do in a chat: call react with its number. 😂 for a joke,
+- Each message starts with the time it was sent and its number, as
+  [14:05] #12, under a line for each day. React with emoji a lot, as
+  friends do in a chat: call react with its number. 😂 for a joke,
   ❤️ for thanks, 🎉 for good news, 👍 or ✅ to say it is
   done or agreed, 👀 for something you are looking at; any emoji
   that fits. Put one on most of the user's messages that deserve it,
@@ -1268,6 +1270,35 @@ def _call_line(entry: dict) -> str:
     return f"(A voice call with {with_}, {length})"
 
 
+def _timed(entries: list, by_id: dict, now: Optional[float] = None,
+           cut: int = 0) -> list[str]:
+    """ENTRIES as a spark reads them: each with the time it was said and
+    its number, as [14:05] #12, under a line for each day, so it can
+    tell what was said just now from what was said last week. CUT
+    shortens each to that many characters, for a prompt."""
+
+    now = time.time() if now is None else now
+    lines: list[str] = []
+    day = None
+    for entry in entries:
+        line = _line(entry, by_id)
+        if cut and len(line) > cut:
+            line = line[:cut].rstrip() + " [...]"
+        try:
+            at = float(entry.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        if at <= 0:
+            lines.append(f"#{entry.get('id', 0)} {line}")
+            continue
+        if timesense.local(at).date() != day:
+            day = timesense.local(at).date()
+            lines.append(timesense.day_header(at, now))
+        lines.append(
+            f"[{timesense.clock(at)}] #{entry.get('id', 0)} {line}")
+    return lines
+
+
 def _view(team: sparks.Team, spark: sparks.Spark, entries: list,
           thread: int = 0) -> str:
     by_id = {s.id: s for s in sparks.all_sparks()}
@@ -1280,21 +1311,21 @@ def _view(team: sparks.Team, spark: sparks.Spark, entries: list,
         at = next((i for i, e in enumerate(main) if e.get("id") == thread),
                   len(main))
         before = main[max(0, at - THREAD_LEAD_IN):at]
-        lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in before]
-        top = [f"#{thread} {_line(root, by_id)}"] if root else []
-        inside = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in said]
+        lines = _timed(before, by_id)
+        inside = _timed(([{**root, "id": thread}] if root else []) + said,
+                        by_id)
         return (
             f"=== {room}, just before the thread ===\n"
             + ("\n\n".join(lines) or "(nothing)")
             + f"\n\n=== The thread on #{thread} ===\n"
-            + "\n\n".join(top + inside)
+            + "\n\n".join(inside)
             + "\n=== End of the thread ===\n\n"
             f"Post your message in the thread now, as {spark.name}."
         )
     entries = _main(entries)
-    lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in entries]
+    lines = _timed(entries, by_id)
     return (
-        f"=== {room}: its latest {len(lines)} messages ===\n"
+        f"=== {room}: its latest {len(entries)} messages ===\n"
         + "\n\n".join(lines)
         + "\n=== End of the chat ===\n\n"
         f"Post your message in the chat now, as {spark.name}."
@@ -1341,9 +1372,9 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
 
     def send(args: dict) -> str:
         # Posted as it is sent, so its dashes go here, as an answer's do.
-        text = tidy(
+        text = timesense.unstamp(tidy(
             str(args.get("text", ""))
-        ).strip()[:sparks.MESSAGE_CHARS]
+        )).strip()[:sparks.MESSAGE_CHARS]
         if not text or _quiet(text):
             return "Error: the message was empty."
         if len(sent) >= MAX_SENT:
@@ -1691,7 +1722,7 @@ def _reply(
             on_call = (CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT) \
                 + "\n" + humanvoice.spoken()
         system = sparks.chat_prompt(
-            spark, host, model, flash_tools.CURRENT_DATE_PROMPT,
+            spark, host, model, timesense.now_block(),
         ) + "\n\n" + said + on_call
         # How the user sounded saying their latest, on a call.
         heard = _call_notes.get(team.id, "") if call else ""
@@ -1722,6 +1753,7 @@ def _reply(
                 names=_ultra_tools() if ultra else None,
                 audit_as="team chat", quiet_ok=True,
             )
+        text = timesense.unstamp(text or "").strip()
         said = "" if not text or _quiet(text) else text
         # Its answer only repeating the message it just sent is not
         # another message.
@@ -1986,12 +2018,7 @@ def _dm_block(spark: sparks.Spark) -> str:
     with contextlib.suppress(OSError):
         _seen(room, spark, entries)
     by_id = {s.id: s for s in sparks.all_sparks()}
-    lines = []
-    for entry in entries:
-        line = _line(entry, by_id)
-        if len(line) > PROMPT_CHARS:
-            line = line[:PROMPT_CHARS].rstrip() + " [...]"
-        lines.append(f"#{entry.get('id', 0)} {line}")
+    lines = _timed(entries, by_id, cut=PROMPT_CHARS)
     return (
         "=== The latest in your private chat with the user ===\n"
         + "\n".join(lines)
@@ -2008,12 +2035,7 @@ def _team_block(spark: sparks.Spark) -> str:
     with contextlib.suppress(OSError):
         _seen(spark.team, spark, entries)
     by_id = {s.id: s for s in sparks.all_sparks()}
-    lines = []
-    for entry in entries:
-        line = _line(entry, by_id)
-        if len(line) > PROMPT_CHARS:
-            line = line[:PROMPT_CHARS].rstrip() + " [...]"
-        lines.append(f"#{entry.get('id', 0)} {line}")
+    lines = _timed(entries, by_id, cut=PROMPT_CHARS)
     return (
         "=== The latest in your team's group chat (what the user says "
         "there is meant for the whole team; to point at a message in a "

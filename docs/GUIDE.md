@@ -749,6 +749,16 @@ files a report or, when nothing is new, a quiet one that doesn't count
 as news. New reports show up at your prompt (`● Scout has news ·
 /sparks scout`) and as a count beside Sparks in the web UI's sidebar.
 
+Sparks have a sense of time. Every shift and every answer is told the
+day, the date and the time as they are then, in your time zone, read
+afresh each time, so a keeper that has run for days still has the right
+day. A shift knows when its last one ran and when the next is due, and
+when it starts late because Flash was closed or the computer was
+asleep, how late it is and how many shifts never ran, so it covers the
+whole gap. Its notes, its last report and what was handed to it each
+say how long ago they were. In its private chat, its team's chat and
+`/sparks chat`, every message carries when it was said.
+
 ```text
 /sparks teach scout Only tell me about issues labelled bug.
 ```

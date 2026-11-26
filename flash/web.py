@@ -102,6 +102,7 @@ from . import (
     teamchat,
     themes,
     tidy,
+    timesense,
     titles,
     triggers,
     tunnel,
@@ -4892,8 +4893,8 @@ def _respond(
             # The chat's project, not the spark's, is added below, and
             # the turn runs in its folder.
             prompt = sparks.chat_prompt(
-                spark, ai.Config.host, model,
-                flash_tools.CURRENT_DATE_PROMPT, project=False,
+                spark, ai.Config.host, model, timesense.now_block(),
+                project=False,
             )
             if guest:
                 prompt += "\n\n" + sparks.MENTIONED_PROMPT.format(

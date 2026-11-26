@@ -41,7 +41,7 @@ import ollama
 from . import agent as subagents
 from . import (
     audit, checkins, cron, loop, paths, pings, presence, providers, sources,
-    triggers,
+    timesense, triggers,
 )
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
@@ -181,13 +181,13 @@ less of what they did not: what you looked at, how much you said, how
 you said it.
 {rated}
 
-Your notes from last time, written by you for you:
+Your notes from last time, written by you for you{notes_when}:
 {notes}
 
-Your last report:
+Your last report{last_when}:
 {last}
 
-This shift runs {every}; the last one was {since}.
+This shift runs {every}. {timing}
 
 How to work:
 - Do what the goal asks now, with your tools. Do not only plan.
@@ -203,10 +203,18 @@ How to work:
   what is missing in your report.
 - Call keep_notes with anything the next shift has to know: what you
   have already seen or reported, what you are waiting on. Your notes are
-  replaced, not added to, so keep what still matters.
+  replaced, not added to, so keep what still matters. Start each thing
+  you note with the day it happened ("{today}: ..."), so a later shift
+  can tell how old it is, and drop what has gone stale.
   Keep in them, too, what the user said about themselves lately (a
   cold, a deadline, a trip, good news), so you can ask after it: a line
-  like "hope the cold's easing" at the end of a report is welcome, once.
+  like "hope the cold's easing" at the end of a report is welcome, once,
+  while it is still recent.
+- Mind the time: it is under "The time now". Weigh what you find by how
+  old it is, and say when things happened in plain words ("this
+  morning", "since Tuesday"). What came before your last shift is not
+  news unless your last report missed it. When a lot of time has passed
+  since your last shift, cover all of it.
 - End with your report to the user: short, what you found or did, and
   anything that needs them. Do not repeat news from your last report.
 - Every number in it says where it came from, beside it: a link, or the
@@ -378,6 +386,10 @@ How to talk:
 - Answer as yourself, in the first person: short, plain, friendly.
 - Answer from what you know. When they want something checked now, use
   your tools and say what you found.
+- Mind the time: it is under "The time now". Messages show when they
+  were sent, in [brackets]; that is for you, so never put one in your
+  own. After hours or days away, answer for how things stand now, not
+  where the chat left off, and greet for the time of day it is now.
 - When they tell you how to do your job differently, call learn, so
   every later shift follows it.
 - When they give you a new goal or a new schedule, call set_goal or
@@ -587,6 +599,9 @@ class Spark:
     status: str = IDLE
     activity: str = ""
     notes: str = ""
+    # When its notes last changed, or 0 for notes from before that was
+    # kept, for a shift to know how old they are.
+    notes_at: float = 0.0
     lessons: list[str] = field(default_factory=list)
     reports: list[Report] = field(default_factory=list)
     last_run: float = 0.0
@@ -3836,15 +3851,87 @@ def news() -> list[tuple[Spark, Report]]:
 
 # --- A shift -------------------------------------------------------------
 
+# A shift on its schedule that starts this much past its time, or half
+# its gap to the next if that is more (up to LATE_MOST_SECONDS), was held
+# up by more than other sparks' shifts: Flash was closed, or the
+# computer asleep. The shift is told so, and how many did not run.
+LATE_SECONDS = 30 * 60
+LATE_MOST_SECONDS = 3 * 3600
+# How far missed shifts are counted, for one asleep a long while.
+MISSED_MOST = 1000
+
+
+def missed_shifts(spark: Spark, due_at: float, now: float) -> int:
+    """How many more of SPARK's shifts came due after DUE_AT, the one
+    starting now, up to NOW: shifts that never ran."""
+
+    if on_call(spark) or due_at <= 0:
+        return 0
+    count, at = 0, next_shift(spark, due_at)
+    while at <= now and count < MISSED_MOST:
+        count += 1
+        later = next_shift(spark, at)
+        if later <= at:
+            break
+        at = later
+    return count
+
+
+def shift_timing(
+    spark: Spark, due_at: float = 0.0, on_schedule: bool = False,
+    now: Optional[float] = None,
+) -> str:
+    """When SPARK last worked, whether this shift, due at DUE_AT, starts
+    late, and when the next is due: for a shift starting NOW to know
+    where it stands in time. ON_SCHEDULE is a shift its schedule started,
+    not one asked for."""
+
+    now = time.time() if now is None else now
+    said = []
+    if spark.last_run:
+        said.append(
+            f"Your last shift was {timesense.when(spark.last_run, now)}, "
+            f"{timesense.ago(spark.last_run, now)}."
+        )
+    else:
+        said.append("This is your first shift.")
+    if on_schedule and spark.last_run and due_at > 0 and not on_call(spark):
+        gap = next_shift(spark, due_at) - due_at
+        late = now - due_at
+        if late >= max(LATE_SECONDS, min(gap / 2, LATE_MOST_SECONDS)):
+            missed = missed_shifts(spark, due_at, now)
+            skipped = (
+                f", and {missed} more of your shifts came due meanwhile "
+                "and never ran" if missed > 1 else
+                ", and one more of your shifts came due meanwhile and "
+                "never ran" if missed == 1 else ""
+            )
+            said.append(
+                f"This one was due {timesense.when(due_at, now)} and starts "
+                f"{timesense.span(late)} late (Flash was closed or the "
+                f"computer was asleep){skipped}. Cover everything since "
+                "your last shift, not only the usual stretch."
+            )
+    if spark.paused:
+        said.append("You are paused: no shift starts by itself until the "
+                    "user resumes you.")
+    elif not on_call(spark):
+        upcoming = next_shift(spark, now)
+        said.append(f"Your next one is due {timesense.when(upcoming, now)}.")
+    return " ".join(said)
+
 
 def _prompt(
     spark: Spark, host: str, model: str, date_prompt: str,
-    jobs: Optional[dict] = None,
+    jobs: Optional[dict] = None, timing: str = "",
 ) -> str:
+    """A shift's system prompt. DATE_PROMPT is what time it is (see
+    timesense.now_block); TIMING what shift_timing said of this one,
+    worked out without its due time when not given."""
+
+    now = time.time()
     lessons = "\n".join(f"- {lesson}" for lesson in spark.lessons)
-    last = next(
-        (r.text for r in reversed(spark.reports) if not r.failed), ""
-    )
+    last = next((r for r in reversed(spark.reports) if not r.failed), None)
     body = SPARK_PROMPT.format(
         name=spark.name,
         handle=spark.handle,
@@ -3854,9 +3941,18 @@ def _prompt(
         boundaries=lines_of(spark) or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",
         notes=spark.notes or "(none yet)",
-        last=last or "(none yet)",
+        notes_when=(
+            f" (last changed {timesense.when(spark.notes_at, now)})"
+            if spark.notes and spark.notes_at else ""
+        ),
+        last=last.text if last else "(none yet)",
+        last_when=(
+            f" ({timesense.when(last.at, now)}, "
+            f"{timesense.ago(last.at, now)})" if last else ""
+        ),
         every=schedule_words(spark),
-        since=_since(spark.last_run),
+        timing=timing or shift_timing(spark, now=now),
+        today=timesense.short_day(now, now),
         nothing_new=NOTHING_NEW,
     )
     parts = [
@@ -4562,7 +4658,7 @@ def consult(
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     prompt = "\n\n".join((
         chat_prompt(
-            spark, host, model_of(spark), flash_tools.CURRENT_DATE_PROMPT,
+            spark, host, model_of(spark), timesense.now_block(),
         ),
         CONSULT_PROMPT.format(asker=asker, who=who),
     ))
@@ -5587,9 +5683,22 @@ def _named_you(item: dict) -> str:
     ) else ""
 
 
-def _opening(why: str, inbox: list) -> str:
-    """What a shift is told first: to start, and why it started now."""
+def _aged(item: dict, now: float) -> str:
+    """How long ago a note in the inbox came, as "[2 hours ago] "; ""
+    for one that does not say."""
 
+    try:
+        at = float(item.get("at") or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    return f"[{timesense.ago(at, now)}] " if at > 0 else ""
+
+
+def _opening(why: str, inbox: list, now: Optional[float] = None) -> str:
+    """What a shift is told first: to start, and why it started now.
+    Each note handed to it says how long ago it came, as of NOW."""
+
+    now = time.time() if now is None else now
     parts = ["Start your shift."]
     if why:
         parts.append(f"It started early because: {why}")
@@ -5623,14 +5732,15 @@ def _opening(why: str, inbox: list) -> str:
             "The user asked you, in a chat, to do this. Do it first, then "
             "your goal if there is time, and report on it whatever else "
             "you find:\n"
-            + "\n".join(f"- {item.get('text', '')}" for item in jobs)
+            + "\n".join(f"- {_aged(item, now)}{item.get('text', '')}"
+                        for item in jobs)
         )
     if handed:
         parts.append(
             "Handed to you by other sparks. Do it, each in the project it "
             "came from, and say in your report what you did; it goes back "
             "to whoever handed it:\n" + "\n".join(
-                f"- From {item.get('from', 'a spark')}"
+                f"- {_aged(item, now)}From {item.get('from', 'a spark')}"
                 f"{_on_project(item)}: {item.get('text', '')}"
                 for item in handed
             )
@@ -5639,8 +5749,8 @@ def _opening(why: str, inbox: list) -> str:
         parts.append(
             "Answers to the work you handed off. Act on what needs you, "
             "and put what matters in your own report:\n" + "\n".join(
-                f"- {item.get('from', 'A spark')}{_named_you(item)}: "
-                f"{item.get('text', '')}"
+                f"- {_aged(item, now)}{item.get('from', 'A spark')}"
+                f"{_named_you(item)}: {item.get('text', '')}"
                 for item in answers
             )
         )
@@ -5649,7 +5759,8 @@ def _opening(why: str, inbox: list) -> str:
             "Other sparks @mentioned you in their reports. Do what they "
             "call on you for, and say in your report what you did:\n"
             + "\n".join(
-                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                f"- {_aged(item, now)}{item.get('from', 'A spark')}: "
+                f"{item.get('text', '')}"
                 for item in named
             )
         )
@@ -5658,8 +5769,8 @@ def _opening(why: str, inbox: list) -> str:
             "News from the sparks that report to you, since your last "
             "shift. Act on what needs you, and put what matters in your "
             "own report:\n" + "\n".join(
-                f"- {item.get('from', 'A spark')}{_named_you(item)}: "
-                f"{item.get('text', '')}"
+                f"- {_aged(item, now)}{item.get('from', 'A spark')}"
+                f"{_named_you(item)}: {item.get('text', '')}"
                 for item in rolled
             )
         )
@@ -5723,6 +5834,10 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             _save(spark)
             return None
         resuming = dict(spark.pending) if spark.pending else None
+        # When it was due, and whether its schedule started it, not a
+        # call for it: for it to know whether it starts late.
+        due_at = spark.next_run
+        on_schedule = not resuming and not spark.asked and not spark.why
         if resuming:
             # What was handed to it while it waited is for the next
             # shift: this one carries on from where it stopped.
@@ -5840,8 +5955,8 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         else:
             host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
             prompt = _prompt(
-                spark, host, model_of(spark),
-                flash_tools.CURRENT_DATE_PROMPT, jobs,
+                spark, host, model_of(spark), timesense.now_block(), jobs,
+                shift_timing(spark, due_at, on_schedule),
             )
             messages = [
                 {"role": "system", "content": prompt},
@@ -5950,6 +6065,8 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             return report  # removed mid-shift: nowhere to file it
         spark.reports.append(report)
         del spark.reports[:-MAX_REPORTS]
+        if notes[0][:NOTES_CHARS] != spark.notes:
+            spark.notes_at = time.time()
         spark.notes = notes[0][:NOTES_CHARS]
         spark.activity = ""
         # Anything handed over while it worked is still to do: another
@@ -6213,7 +6330,10 @@ def status_block(spark: Spark) -> str:
     if spark.last_run:
         last = next((r for r in reversed(spark.reports)), None)
         how = " and it failed" if last and last.failed else ""
-        lines.append(f"- Last shift: {_since(spark.last_run)}{how}.")
+        lines.append(
+            f"- Last shift: {_since(spark.last_run)} "
+            f"({timesense.when(spark.last_run)}){how}."
+        )
     else:
         lines.append("- You have not run a shift yet.")
     if not spark.paused and not spark.waiting and spark.status != WORKING:
@@ -6227,7 +6347,10 @@ def status_block(spark: Spark) -> str:
                 "@mentioned."
             )
         else:
-            lines.append(f"- Next shift: {_until(spark.next_run)}.")
+            lines.append(
+                f"- Next shift: {_until(spark.next_run)} "
+                f"({timesense.when(spark.next_run)})."
+            )
     lines.append(
         f"- Shifts so far: {spark.runs}. Reports the user has not read: "
         f"{spark.unread}."
@@ -6418,6 +6541,7 @@ class ChatKit:
                 spark.reply_activity = ""
             if self.notes[0] != self.first_notes:
                 spark.notes = self.notes[0][:NOTES_CHARS]
+                spark.notes_at = time.time()
             for lesson in self.lessons:
                 _add_lesson(spark, lesson)
             if "goal" in self.changes:
@@ -6612,13 +6736,15 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
         messages: list[dict] = [{
             "role": "system",
             "content": chat_prompt(
-                spark, host, model_of(spark),
-                flash_tools.CURRENT_DATE_PROMPT,
+                spark, host, model_of(spark), timesense.now_block(),
             ),
         }] + [
             {
                 "role": "user" if m.who == "you" else "assistant",
-                "content": m.text,
+                # The user's say when they were said, for it to see the
+                # gaps; its own are left as they were, so it writes none.
+                "content": f"{timesense.stamp(m.at)} {m.text}"
+                if m.who == "you" and m.at else m.text,
             }
             for m in spark.chat[-CHAT_CONTEXT:]
             if not m.failed
@@ -6630,6 +6756,7 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
             lambda doing: _set_activity(spark.id, doing, "reply_activity"),
             MAX_CHAT_ROUNDS, CHAT_LAST_WORD, client, audit_as="chat",
         )
+        text = timesense.unstamp(text).strip()
         reply = Message(
             at=time.time(), who="spark",
             text=text or "(I have nothing to say to that.)", steps=steps,

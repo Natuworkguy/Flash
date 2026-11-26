@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from flash import sparks, tools, web
+from flash import sparks, timesense, tools, web
 from flash.theme import answer_from, capture_tool_output
 
 
@@ -699,8 +699,11 @@ def test_a_spark_answers_in_its_chat(model):
     system = client.calls[0]["messages"][0]["content"]
     assert "Watch the issues." in system and "Never push." in system
     assert "Issue 12 is a bug." in system
+    asked = kept.chat[0]
+    # The user's message says when they said it, for the spark to tell.
     assert client.calls[0]["messages"][-1] == {
-        "role": "user", "content": "What did you find?",
+        "role": "user",
+        "content": f"{timesense.stamp(asked.at)} What did you find?",
     }
     names = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert {"learn", "set_goal", "set_schedule", "keep_notes"} <= names
@@ -714,8 +717,10 @@ def test_the_chat_so_far_goes_back_to_the_model(model):
     sparks.say("scout", "Still there?", client=client)
 
     said = [(m["role"], m["content"]) for m in client.calls[0]["messages"][1:]]
+    hi, _, still = sparks.find("scout").chat[:3]
     assert said == [
-        ("user", "Hi"), ("assistant", "Hello!"), ("user", "Still there?"),
+        ("user", f"{timesense.stamp(hi.at)} Hi"), ("assistant", "Hello!"),
+        ("user", f"{timesense.stamp(still.at)} Still there?"),
     ]
 
 
