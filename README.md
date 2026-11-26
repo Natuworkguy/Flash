@@ -598,6 +598,11 @@ Passing a `flash://` URL on the command line still works everywhere.
 
 Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also look at an image file with the `view_image` tool, search the web via Duck Duck Go, and show it's reasoning.
 
+## Project Stack
+The project is mainly built in **Python** and **HTML**, and has other languages in small proportions for auxiliar functionalities.
+
+It uses **Modelfiles** and **Powershell/Bash** too.
+
 ## License
 
 The Flash CLI, the Modelfiles under `models/`, and the system prompts in them
