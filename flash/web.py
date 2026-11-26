@@ -90,6 +90,7 @@ from . import (
     pings,
     progress,
     providers,
+    scope,
     showcase,
     skills,
     skilltrials,
@@ -4874,6 +4875,7 @@ def _respond(
         system = ai._message("system", prompt)
         if first:
             checkpoint.start_turn(ai._turn_label(text))
+            scope.set_request(text if isinstance(text, str) else "")
 
         # Flash may turn its own thinking on, for a reply that needs it.
         chat.thought_harder = False
@@ -6383,6 +6385,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # Late enough that this answer reaches the page first.
         threading.Timer(RESTART_DELAY, session.restart).start()
         return session.updates.snapshot()
+
+    if name == "server-stop":
+        # From the page or `flash --stop`: the server stops, after this
+        # answer is out. A reply still being written waits, unless told.
+        stop = getattr(session, "stop_server", None)
+        if stop is None:
+            raise ValueError("This Flash can't be stopped from here.")
+        if not body.get("force") and any(c.busy or c.queued for c in session.chats.values()):
+            raise ValueError("A reply is still being written. Stop it first, or stop anyway.")
+        session.hub.publish({"type": "server-stopping"})
+        threading.Timer(RESTART_DELAY, stop).start()
+        return {"stopping": True}
 
     if name == "server-restart":
         # From the page's shortcut: Flash started again, with a new link.
@@ -9616,6 +9630,9 @@ def _attach(server: "Server", standalone: bool) -> None:
     connectors.start()
     session.always.start()
     session.port = server.port
+    # Stopped from the page or `flash --stop`: serving ends (the whole
+    # process, for `flash --web`; just the web UI beside a terminal chat).
+    session.stop_server = (lambda: server.shutdown()) if standalone else stop_background
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
@@ -9667,7 +9684,105 @@ def note_running(server: "Server") -> None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             json.dump({"pid": os.getpid(), "port": server.port,
-                       "url": server.url}, out)
+                       "url": server.url,
+                       "network_url": server.network_url or ""}, out)
+
+
+def running_links() -> Optional[dict]:
+    """Where the web UI running on this computer is, as `flash --url`
+    says: its own link and, with --lan, the one for the network. None
+    when none is running."""
+
+    try:
+        found = json.loads(_running_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = int(found.get("pid") or 0)
+    try:
+        if pid:
+            os.kill(pid, 0)
+    except (OSError, SystemError):
+        return None
+    if not found.get("url"):
+        return None
+    return {"url": str(found["url"]), "network_url": str(found.get("network_url") or "")}
+
+
+def print_links() -> bool:
+    """`flash --url`: the running web UI's links, and a QR code for a
+    phone, without starting anything. False when none is running."""
+
+    found = running_links()
+    if found is None:
+        console.print(Text("No Flash web UI is running here. Start one with flash --web.", style=DIM))
+        return False
+    line = Text("Flash web UI at ", style=DIM)
+    line.append(found["url"], style=f"bold {ACCENT}")
+    console.print(line)
+    if found["network_url"]:
+        phone = Text("On your network: ", style=DIM)
+        phone.append(found["network_url"], style=f"bold {ACCENT}")
+        console.print(phone)
+        console.print(Text(qr_text(found["network_url"]), no_wrap=True, overflow="ignore"))
+        console.print(Text("Scan it with your phone's camera.", style=DIM))
+    else:
+        console.print(Text("Only this computer can reach it. Start it with flash --web --lan for a phone.",
+                           style=DIM))
+    return True
+
+
+def stop_running(timeout: float = 10.0) -> tuple:
+    """Stop the web UI running on this computer, as `flash --stop`: asked
+    through its own API, so it closes as it would from the page; ended
+    with a signal if it doesn't answer. (what happened, whether it stopped)."""
+
+    import signal
+    import urllib.error
+    import urllib.request
+    from urllib.parse import parse_qs, urlparse as parse
+
+    path = _running_path()
+    try:
+        found = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "No Flash web UI is running here.", True
+    url, pid = str(found.get("url") or ""), int(found.get("pid") or 0)
+    where = parse(url)
+    token = (parse_qs(where.query).get("token") or [""])[0]
+
+    def alive() -> bool:
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+        except (OSError, SystemError):
+            return False
+        return True
+
+    if not alive():
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return "No Flash web UI is running here.", True
+    try:
+        ask = urllib.request.Request(
+            f"{where.scheme}://{where.netloc}/api/command",
+            json.dumps({"name": "server-stop", "force": True}).encode(),
+            {"Content-Type": "application/json", "X-Flash-Token": token})
+        urllib.request.urlopen(ask, timeout=5).read()  # nosec B310 -- this computer's own Flash
+    except (OSError, urllib.error.URLError, ValueError):
+        pass
+    until = time.time() + timeout
+    while time.time() < until and alive():
+        time.sleep(0.2)
+    if alive():
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+        time.sleep(1)
+    if alive():
+        return f"Flash (process {pid}) didn't stop.", False
+    with contextlib.suppress(OSError):
+        path.unlink()
+    return "Flash's web UI stopped.", True
 
 
 def forget_running(server: "Server") -> None:

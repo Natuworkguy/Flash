@@ -11670,6 +11670,26 @@ def _review(name: str, args: dict) -> Optional[str]:
     )
 
 
+# The tools that write files, and the argument that names the file.
+WRITES_TO = {"write": "path", "edit": "path", "multi_edit": "path"}
+
+
+def _out_of_scope(name: str, args: dict) -> Optional[str]:
+    """What the model is told of a write outside the files the user said
+    this turn may touch (scope.py); None when it may go ahead."""
+
+    key = WRITES_TO.get(name)
+    if not key:
+        return None
+    from . import scope
+
+    why = scope.check(str(args.get(key) or ""))
+    if why:
+        tool_line(f"{name}({args.get(key)})")
+        tool_result("Outside what you said to touch", style=WARN)
+    return why
+
+
 def run_tool(call):
     """Run a tool with arguments"""
 
@@ -11685,7 +11705,7 @@ def run_tool(call):
     if missing:
         return _missing_note(name, missing, args)
 
-    stopped = _review(name, args)
+    stopped = _out_of_scope(name, args) or _review(name, args)
     if stopped is not None:
         return stopped
 

@@ -197,6 +197,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="stop the Flash web UI running on this computer",
+    )
+    parser.add_argument(
+        "--url",
+        action="store_true",
+        help="print the running web UI's links, with a QR code for a phone",
+    )
+
+    parser.add_argument(
         "--shortcut",
         nargs="?",
         const="add",

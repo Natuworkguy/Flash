@@ -49,6 +49,8 @@ ollama pull <model>
 flash               # the terminal
 flash --web         # the same agent in your browser
 flash --web --lan   # ... and on your phone, with a QR code to scan
+flash --stop        # stop the web UI running on this computer (or Settings > General > Stop Flash)
+flash --url         # print the running web UI's links, with a QR code for your phone
 ```
 
 The installer uses [pipx](https://pipx.pypa.io/); on Windows, run

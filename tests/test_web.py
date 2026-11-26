@@ -737,6 +737,25 @@ class TestPairing:
         with pytest.raises(extensions.ExtensionError, match="web address"):
             extensions.load(folder)
 
+    def test_the_server_can_be_stopped(self, monkeypatch):
+        session = web.Session()
+        stopped = []
+        session.stop_server = lambda: stopped.append(True)
+        monkeypatch.setattr(web, "RESTART_DELAY", 0)
+        assert web.command(session, {"name": "server-stop"}) == {"stopping": True}  # nosec B101
+        deadline = time.time() + 2
+        while not stopped and time.time() < deadline:
+            time.sleep(0.02)
+        assert stopped  # nosec B101
+
+    def test_stopping_waits_for_a_reply_unless_forced(self):
+        session = web.Session()
+        session.stop_server = lambda: None
+        session.new_chat().busy = True
+        with pytest.raises(ValueError, match="still being written"):
+            web.command(session, {"name": "server-stop"})
+        assert web.command(session, {"name": "server-stop", "force": True}) == {"stopping": True}  # nosec B101
+
     def test_only_flash_sets_a_timer(self):
         with pytest.raises(ValueError, match="Ask Flash"):
             web.command(web.Session(), {"name": "clock-act", "arg": "timer", "length": "5m"})
@@ -5874,3 +5893,14 @@ class TestSwitchingModels:
             assert "no model called" in web.switch_model(session, chat, {"model": "gpt-9"}, None)  # nosec B101
         finally:
             session.close()
+
+
+def test_url_prints_the_running_links(tmp_path, monkeypatch):
+    import json, os
+    from flash import web
+    monkeypatch.setattr(web, "_running_path", lambda: tmp_path / "running.json")
+    assert web.running_links() is None
+    (tmp_path / "running.json").write_text(json.dumps(
+        {"pid": os.getpid(), "url": "http://127.0.0.1:8080/?token=t", "network_url": "http://192.168.1.4:8080/?token=t"}))
+    assert web.running_links()["network_url"].startswith("http://192.168")
+    assert web.print_links()

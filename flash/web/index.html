@@ -2314,6 +2314,10 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .dev-code .row { display: flex; gap: 8px; }
 .dev-warn { grid-column: 1 / -1; font-size: 13px; color: var(--warn); margin: 0; }
 .dev-group .browser-list { max-width: none; }
+#stopped-screen { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); animation: rise .3s var(--ease) both; }
+#stopped-screen .ss-card { max-width: 420px; padding: 26px 28px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+#stopped-screen b { display: block; font-size: 18px; margin-bottom: 6px; }
+#stopped-screen p { margin: 0; color: var(--text-3); font-size: 14px; }
 .dev-intro { max-width: 680px; }
 .dev-empty { max-width: 680px; margin: 0 0 28px; padding: 22px 20px; border: 1px dashed var(--border-strong); border-radius: 14px; text-align: center; }
 .dev-empty b { display: block; font-size: 15px; margin-bottom: 4px; }
@@ -11790,6 +11794,43 @@ function drawGeneral(body) {
   };
   again.querySelector(".side").appendChild(go);
   body.appendChild(again);
+  const halt = el("div", "setting-row static", `<span class="what"><b>Stop Flash</b><span>Stops the server on this computer: every open page and paired device loses it until Flash is opened again (the Flash app, or <code>flash --web</code>). <code>flash --stop</code> does the same from a terminal.</span></span><span class="side"></span>`);
+  const stop = el("button", "btn danger", "Stop");
+  stop.type = "button";
+  stop.onclick = async () => {
+    if (!(await confirmPop(stop, { title: "Stop Flash?", text: "The server stops. Open the Flash app, or run flash --web, to start it again.", yes: "Stop" }))) return;
+    stopServer(false);
+  };
+  halt.querySelector(".side").appendChild(stop);
+  body.appendChild(halt);
+}
+
+// Stop the server: asked once more if a reply is still being written.
+async function stopServer(force) {
+  try { await command("server-stop", "", null, force ? { force: true } : {}); }
+  catch (error) {
+    if (!force && /still being written/.test(error.message || "")) {
+      if (await confirmPop(null, { title: "A reply is still being written", text: "Stopping Flash ends it. Stop anyway?", yes: "Stop anyway" })) stopServer(true);
+      return;
+    }
+    showFailure(error);
+    return;
+  }
+  serverStopped();
+}
+
+// Flash's server went away on purpose: say so, in place of a page that can't do anything.
+function serverStopped() {
+  if (document.getElementById("stopped-screen")) return;
+  const screen = el("div", "", `<div class="ss-card"><b>Flash has stopped</b><p>Open the Flash app, or run <code>flash --web</code>, to start it again. This page reconnects when it is back.</p></div>`);
+  screen.id = "stopped-screen";
+  document.body.appendChild(screen);
+  const wait = setInterval(async () => {
+    try {
+      const up = await fetch("/api/state?lite=1", { credentials: "same-origin", cache: "no-store" });
+      if (up.ok) { clearInterval(wait); location.reload(); }
+    } catch (_) { /* still stopped */ }
+  }, 3000);
 }
 
 // Skills --------------------------------------------------------------------
@@ -21821,6 +21862,7 @@ function apply(event) {
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   if (event.type === "music") { onMusic(event); return; }
   if (event.type === "clock") { clockRefresh(); return; }
+  if (event.type === "server-stopping") { setTimeout(serverStopped, 500); return; }
   if (event.type === "calendar") { const box = document.querySelector(".cal-box"); if (box) drawCalendarSettings(box); toast("Google Calendar is connected"); return; }
   // Flash ended the spoken conversation: voice mode goes off once its
   // reply is said.
@@ -26864,6 +26906,7 @@ const ACTIONS = [
   { label: "Keyboard shortcuts", keys: "?", slash: "/help", run: () => openHelp() },
   { label: "Send the document's comments to Flash", keys: "Ctrl Shift Enter", slash: "/comments", run: sendOpenComments },
   { label: "Restart the server with a new link", keys: "Ctrl Alt Shift R", slash: "/restart", run: restartServer },
+  { label: "Stop Flash", keys: "", slash: "/stop-flash", run: () => stopServer(false) },
   { label: "Health check: what works and how to fix the rest", keys: "", slash: "/doctor", run: () => runDoctorFromSlash() },
   { label: "Good reply: Flash learns what worked", keys: "", slash: "/good", run: () => rateLast("good") },
   { label: "Bad reply: Flash learns what to do differently", keys: "", slash: "/bad", run: () => rateLast("bad") },

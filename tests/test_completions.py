@@ -1,6 +1,7 @@
 """Tests for the completion dropdown and the prompt it draws over."""
 
 import inspect
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -141,7 +142,7 @@ class TestSurvivingAResize:
         source = inspect.getsource(repl_input.read_line)
 
         assert "_frame_message(" in source
-        assert "_session.prompt(\n        message," in source
+        assert re.search(r"_session\.prompt\(\s+message,", source)
         assert "def message()" in inspect.getsource(
             repl_input._frame_message
         )

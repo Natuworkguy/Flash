@@ -46,6 +46,7 @@ from . import (
     pings,
     plan,
     progress,
+    scope,
     providers,
     serif,
     showcase,
@@ -7366,6 +7367,18 @@ def _main() -> None:
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
 
+    if getattr(args, "url", False):
+        from . import web
+
+        sys.exit(0 if web.print_links() else 1)
+
+    if getattr(args, "stop", False):
+        from . import web
+
+        said, ok = web.stop_running()
+        console.print(Text(said, style=DIM))
+        sys.exit(0 if ok else 1)
+
     if getattr(args, "memory_prompt", False):
         print(memory.IMPORT_PROMPT)
         return
@@ -8348,6 +8361,7 @@ def _main() -> None:
             )
 
             checkpoint.start_turn(_turn_label(uin))
+            scope.set_request(uin if isinstance(uin, str) else "")
             # What System One holds this turn's tool calls up against: a
             # woken turn carries on with what the user last asked.
             if not woken:
