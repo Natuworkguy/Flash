@@ -3787,6 +3787,12 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 }
 .tc-react .e { font-size: 15px; line-height: 1; display: inline-block; }
 .tc-react:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.tc-presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px 39px; animation: tc-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.tc-preset { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 16px 0 13px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; color: var(--text); background: var(--surface); border: 1px solid var(--border); cursor: pointer; transition: transform 0.2s var(--spring), border-color 0.15s, background 0.15s; }
+.tc-preset span { color: var(--text-3); font-weight: 500; }
+.tc-preset:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.tc-preset:active { transform: scale(0.97); }
+.tc-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tc-react:active { transform: scale(0.94); }
 .tc-react.mine { color: color-mix(in srgb, var(--accent) 85%, var(--text)); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .tc-react.add { width: 26px; padding: 0; justify-content: center; color: var(--text-3); opacity: 0; transition: opacity 0.15s, transform 0.2s var(--spring); }
@@ -13239,6 +13245,7 @@ async function tcFetch(first = false) {
   });
   teamChat.seq = Math.max(teamChat.seq, r.seq);
   tcTyping(r.typing);
+  tcPresets();
   const mine = r.entries.some((e) => e.kind === "user");
   if (first || mine || (near && r.entries.length)) log.scrollTo({ top: log.scrollHeight, behavior: first || calm.matches ? "auto" : "smooth" });
   else if (near) log.scrollTop = log.scrollHeight;
@@ -13264,6 +13271,36 @@ function tcRemove(id) {
   // What comes next runs on from whatever is last now.
   const last = $("#team-chat .tc-log").lastElementChild;
   teamChat.lastWho = last && last.classList.contains("tc-msg") ? last.dataset.who : "";
+  tcPresets();
+}
+
+// Preset replies: under the chat's newest message, when a spark asked
+// something a tap answers. A tap sends the
+// words as the user's own message, and the row goes.
+function tcPresets() {
+  const log = $("#team-chat .tc-log");
+  if (!log) return;
+  log.querySelector(".tc-presets")?.remove();
+  let row = log.lastElementChild;
+  while (row && (row.hidden || row.classList.contains("tc-day"))) row = row.previousElementSibling;
+  if (!row || !row.classList.contains("tc-msg") || row.classList.contains("mine") || row.classList.contains("failed")) return;
+  const entry = teamChat.byId.get(Number(row.dataset.id));
+  const said = entry && Array.isArray(entry.presets) ? entry.presets : [];
+  if (!said.length) return;
+  const box = el("div", "tc-presets");
+  box.setAttribute("role", "group");
+  box.setAttribute("aria-label", "Quick replies");
+  said.forEach((text) => {
+    const tap = el("button", "tc-preset", `<span aria-hidden="true">↳</span>${esc(text)}`);
+    tap.type = "button";
+    tap.onclick = async () => {
+      box.remove();
+      try { await command("team-chat-say", teamChat.id, null, { text, thread: teamChat.thread || 0 }); await tcFetch(); }
+      catch (error) { showFailure(error); tcPresets(); }
+    };
+    box.appendChild(tap);
+  });
+  row.after(box);
 }
 
 function teamChatChanged(teamId, sparksToo = false) {

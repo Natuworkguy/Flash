@@ -115,6 +115,7 @@ from . import (
 )
 from .emojis import EMOJIS
 from .models import full_name
+from .presets import asks_yes_or_no
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -5869,25 +5870,6 @@ def small_view(summary: dict) -> dict:
     out["partial"] = cut(out.get("partial") or "")
     out["thinking"] = cut(out.get("thinking") or "")
     return out
-
-
-# The words a question a yes or a no answers starts with.
-_YES_NO_START = re.compile(
-    r"(should|shall|do|does|did|can|could|would|will|is|are|was|were|"
-    r"may|might|want|have|has|ok|okay|any)\b", re.IGNORECASE)
-
-
-def asks_yes_or_no(text: str) -> bool:
-    """Whether reply TEXT ends on a question a yes answers: its last
-    sentence asks, starts like "Should I" or "Do you", and offers no
-    choice of two ("this or that?")."""
-
-    text = re.sub(r"[*_`>#]+", "", str(text or "")).strip()
-    if not text.endswith("?"):
-        return False
-    last = re.split(r"(?<=[.!?])\s+|\n+", text[:-1])[-1].strip()
-    return bool(_YES_NO_START.match(last)) and not re.search(
-        r"\bor\b", last, re.IGNORECASE)
 
 
 def _last_reply(log: list) -> Optional[int]:

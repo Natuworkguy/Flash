@@ -27,7 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import humanvoice, paths, pings, sparks
+from . import humanvoice, paths, pings, presets, sparks
 from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -149,6 +149,10 @@ You are shown the latest of the chat, then asked to post your message.
   message, details only some need, or a long look into one thing. The
   spark who said that message answers there. The user is pinged for
   every message in a thread, so keep them for what they would want.
+- When you ask the user something a tap can answer, send that question
+  with send_message and give it replies: two or three short answers
+  they tap under it, as "Sounds right" and "Something's off". A yes or
+  no question gets Yes, No and Not now on its own.
 """.strip()
 
 # A spark answering in a thread: told where it is, after the room's rules.
@@ -206,6 +210,10 @@ You are shown the latest of the chat, then asked to post your message.
   often with your answer, and instead of a reply that would only say
   "ok" or "thanks". To fix a message of yours, call edit_message. When
   that says it all, answer with only {quiet}.
+- When you ask the user something a tap can answer, send that question
+  with send_message and give it replies: two or three short answers
+  they tap under it. A yes or no question gets Yes, No and Not now on
+  its own.
 """.strip()
 
 
@@ -250,6 +258,17 @@ SEND_MESSAGE_TOOL = {
                         "Post it in the thread on this message's number "
                         "instead, starting one if it has none. 0 for the "
                         "main chat. In a thread, it goes there anyway."
+                    ),
+                },
+                "replies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "When it asks the user something a tap answers: "
+                        f"up to {presets.MAX_PRESETS} short answers they "
+                        "can tap under it, as \"Sounds right\" and "
+                        "\"Something's off\". A yes or no question gets "
+                        "Yes, No and Not now without these."
                     ),
                 },
             },
@@ -875,6 +894,18 @@ def _team(key: str) -> sparks.Team:
     return team
 
 
+def _with_presets(entry: dict) -> dict:
+    """ENTRY for the page, with the replies a tap can give it when it is
+    a spark's message that asks the user something."""
+
+    if entry.get("kind") != SPARK or entry.get("call") \
+            or entry.get("failed"):
+        return entry
+    found = presets.for_message(str(entry.get("text") or ""),
+                                entry.get("replies"))
+    return {**entry, "presets": found} if found else entry
+
+
 def history(team_key: str, since: int = 0) -> dict:
     """TEAM_KEY's chat for the page: the entries after SINCE, those
     before it reacted to since, who is typing, and how many came in since
@@ -890,9 +921,9 @@ def history(team_key: str, since: int = 0) -> dict:
     ]
     return {
         "team": team.id, "seq": data["seq"],
-        "entries": _shown(
+        "entries": [_with_presets(e) for e in _shown(
             [e for e in data["entries"] if e.get("id", 0) > since]
-        ),
+        )],
         # Those it has, but changed since: their reactions, as now.
         "changed": [
             e for e in data["entries"]
@@ -1331,9 +1362,11 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
                 where = _thread_root(_read(team_id), where)["id"]
             except TeamChatError as exc:
                 return f"Error: {exc}"
+        replies = [] if call else presets.clean(args.get("replies"))
         sent.append(_post(
             team_id, spark, {"text": text, **({"call": call} if call else {}),
-                             **({"thread": where} if where else {})},
+                             **({"thread": where} if where else {}),
+                             **({"replies": replies} if replies else {})},
         ))
         sparks.tool_line(f"SendMessage({text[:60]})")
         return f"(posted in the thread on #{where})" if where \

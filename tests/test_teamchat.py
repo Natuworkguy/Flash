@@ -1783,3 +1783,41 @@ def test_the_page_sends_into_a_thread(team, monkeypatch):
     assert posted["entry"]["thread"] == said["id"]  # nosec B101
     changed = teamchat.history(team.id, said["id"])["changed"]
     assert [e["thread_count"] for e in changed] == [1]  # nosec B101
+
+
+# --- The team chat hands them to the page ----------------------------------
+
+
+def _send_with(text, replies=None):
+    args = {"text": text}
+    if replies is not None:
+        args["replies"] = replies
+    return _reply("", ("send_message", args))
+
+
+def test_a_sparks_question_comes_with_presets(team):
+    message = teamchat.say("desk", "@scout is the build green?")
+    client = FakeClient([
+        _send_with("It is. Does the summary read right to you?",
+                   ["Sounds right", "Something's off"]),
+        _reply("Should I ship it now?"),
+    ])
+
+    teamchat.answer("desk", message, client)
+
+    said = _said(team.id, teamchat.SPARK)
+    assert said[0]["presets"] == ["Sounds right", "Something's off"]
+    assert said[1]["presets"] == ["Yes", "No", "Not now"]
+    # The user's own messages never get any.
+    assert "presets" not in _said(team.id, teamchat.USER)[0]
+    # And the spark was told it can give them.
+    tool = next(t for t in client.calls[0]["tools"]
+                if t["function"]["name"] == "send_message")
+    assert "replies" in tool["function"]["parameters"]["properties"]
+
+
+def test_a_plain_message_comes_with_none(team):
+    message = teamchat.say("desk", "@scout any news?")
+    teamchat.answer("desk", message, FakeClient([_reply("All quiet.")]))
+
+    assert "presets" not in _said(team.id, teamchat.SPARK)[0]
