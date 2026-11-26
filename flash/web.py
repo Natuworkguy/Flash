@@ -5854,6 +5854,38 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             session.hub.publish({"type": "status"})
         return {"cards": shown, "problems": problems}
 
+    if name == "clock":
+        # Timers and alarms, as they stand: what the page's clock panel
+        # and the watch show.
+        from . import clock
+
+        return clock.state()
+
+    if name == "clock-act":
+        # arg: timer, alarm, cancel, stop, snooze, pause, resume, add_time,
+        # on, off; the rest from the body ("length", "at", "days",
+        # "label", "id", "minutes").
+        from . import clock
+
+        try:
+            if arg == "timer":
+                clock.add_timer(body.get("length"), str(body.get("label") or ""))
+            elif arg == "alarm":
+                clock.add_alarm(body.get("at"), str(body.get("label") or ""), body.get("days") or "")
+            elif arg in ("cancel", "stop", "pause", "resume"):
+                getattr(clock, arg)(str(body.get("id") or ""))
+            elif arg == "snooze":
+                clock.snooze(str(body.get("id") or ""), float(body.get("minutes") or clock.SNOOZE_MINUTES))
+            elif arg == "add_time":
+                clock.add_time(str(body.get("id") or ""), clock.parse_length(body.get("length") or "1m"))
+            elif arg in ("on", "off"):
+                clock.toggle(str(body.get("id") or ""), arg == "on")
+            else:
+                raise ValueError(f"No clock action {arg!r}.")
+        except clock.ClockError as exc:
+            raise ValueError(str(exc)) from None
+        return clock.state()
+
     if name == "briefing-dismiss":
         # One card's id, or "all" with the ids in "cards".
         ids = body.get("cards") if arg == "all" else [arg]
@@ -9419,6 +9451,12 @@ def _attach(server: "Server", standalone: bool) -> None:
     from . import awake
 
     awake.start()
+    # Timers and alarms: the page and the watch hear the moment one is set,
+    # rings or stops.
+    from . import clock
+
+    clock.on_change(lambda st: session.hub.publish({"type": "clock"}))
+    clock.state()
     # Sparks work for as long as the server runs, and the page hears of
     # every shift they start and finish.
     sparks.on_change(session.sparks_changed)
