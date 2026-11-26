@@ -6084,6 +6084,9 @@ def smart_home(action: str = "list", device: str = "", brightness: Any = None,
     try:
         if action == "list":
             said = smarthome.listing(device)
+            if said.startswith(("No device matches", "Home Assistant has no")):
+                tool_result(said, style=WARN)
+                return said + _elsewhere_hint(device)
             tool_result(f"{len(said.splitlines())} device"
                         f"{plural(len(said.splitlines()))}")
             return said
@@ -6092,7 +6095,8 @@ def smart_home(action: str = "list", device: str = "", brightness: Any = None,
         found = smarthome.find(device)
         if not found:
             raise smarthome.HomeError(
-                f"no device called {device!r}; list them with action list")
+                f"no device called {device!r} in Home Assistant; list them "
+                f"with action list.{_elsewhere_hint(device)}")
         if action == "state":
             said = "\n".join(smarthome.describe(e) for e in found[:10])
             tool_result(said.splitlines()[0])
@@ -6125,6 +6129,22 @@ def smart_home(action: str = "list", device: str = "", brightness: Any = None,
     others = [e["entity_id"] for e in found[1:4]]
     return said + (f"\n(Also matched, left alone: {', '.join(others)}.)"
                    if others else "")
+
+
+def _elsewhere_hint(device: str) -> str:
+    """When Home Assistant hasn't got it: the other ways Flash can reach
+    a thing like DEVICE (a TV through Flash for TV's tv_remote, say)."""
+
+    words = set(re.findall(r"[a-z]+", str(device).lower()))
+    tv = words & {"tv", "tvs", "television", "telly", "screen"}
+    if tv:
+        try:
+            if extensions.find_tool("tv_remote", frozenset(FUNCTIONS)) is not None:
+                return (" The TV is reached with the tv_remote tool (Flash for "
+                        "TV): use that.")
+        except Exception:  # noqa: BLE001
+            pass
+    return ""
 
 
 def verify(commands: Any = None, folder: str = "") -> str:

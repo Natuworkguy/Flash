@@ -166,6 +166,14 @@ def find(name: str, every: Optional[list[dict]] = None) -> list[dict]:
     words = [w for w in _words(wanted) if w not in ("the", "my", "all", "s")]
     if not words:
         return []
+    # "the TV": a media player Home Assistant knows is a television, even
+    # when it is named for the room or the brand ("Living Room", "Hisense")
+    if set(words) <= {"tv", "tvs", "television", "telly"}:
+        tvs = [e for e in every if e.get("entity_id", "").startswith("media_player.")
+               and (str((e.get("attributes") or {}).get("device_class") or "") == "tv"
+                    or re.search(r"\b(tv|television|telly)\b", _name(e).lower()))]
+        if tvs:
+            return tvs
     hits = []
     for entity in every:
         entity_id = entity.get("entity_id", "")

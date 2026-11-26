@@ -251,3 +251,18 @@ class TestConnecting:
         )
         web.command(session, {"name": "smarthome-off"})
         assert not smarthome.connected()
+
+
+def test_the_tv_is_a_media_player_marked_as_one():
+    every = [{"entity_id": "media_player.living_room", "state": "on",
+              "attributes": {"friendly_name": "Living Room", "device_class": "tv"}},
+             {"entity_id": "light.lamp", "state": "off", "attributes": {"friendly_name": "Lamp"}}]
+    assert [e["entity_id"] for e in smarthome.find("TV", every)] == ["media_player.living_room"]
+    assert smarthome.find("the tv", every[1:]) == []
+
+
+def test_no_tv_in_home_assistant_points_to_the_tv_extension(monkeypatch):
+    from flash import extensions, tools
+    monkeypatch.setattr(extensions, "find_tool", lambda name, builtin: (object(), object()) if name == "tv_remote" else None)
+    assert "tv_remote" in tools._elsewhere_hint("TV")
+    assert tools._elsewhere_hint("kitchen light") == ""
