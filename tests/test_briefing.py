@@ -414,3 +414,25 @@ def test_an_email_that_will_not_move_is_noted_not_raised(monkeypatch):
     monkeypatch.setenv(briefing.TRASH_SETTING, "on")
     briefing.dismiss(["email:me@example.com:43"], now=NOW)
     assert any("trash" in str(n) for n in briefing._news)  # nosec B101
+
+
+def test_the_briefing_can_be_switched_off_and_on(monkeypatch):
+    monkeypatch.setenv(briefing.SETTING, "on")
+    looked = []
+    monkeypatch.setattr(briefing, "new_waiting",
+                        lambda *a, **kw: looked.append(1) or True)
+    session = web.Session()
+
+    assert web.command(session, {"name": "briefing-enabled"}) == {"on": True}
+    assert session.state()["status"]["briefing_new"] is True  # nosec B101
+    assert web.command(session, {"name": "briefing-enabled",
+                                 "arg": "off"}) == {"on": False}
+    looked.clear()
+    status = session.state()["status"]
+    # Off: no button on the page, no dot, and nothing looked at for it.
+    assert status["briefing"] is False and status["briefing_new"] is False
+    assert looked == []  # nosec B101
+    assert web.command(session, {"name": "briefing-enabled",
+                                 "arg": "on"}) == {"on": True}
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "briefing-enabled", "arg": "maybe"})

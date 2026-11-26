@@ -1673,7 +1673,10 @@ class Session:
                 "update": self.updates.snapshot(),
                 "wake_always": self.always.snapshot(),
                 # Cards the last briefing did not show: a dot by it.
-                "briefing_new": briefing.new_waiting(
+                # Switched off, there is no briefing and nothing looked
+                # at for it.
+                "briefing": briefing.enabled(),
+                "briefing_new": briefing.enabled() and briefing.new_waiting(
                     self, lambda: self.hub.publish({"type": "status"})),
             },
         }
@@ -6671,6 +6674,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             heyflash.set_sensitivity(arg)
             session.hub.publish({"type": "status"})
         return {"sensitivity": voice.wake_sensitivity()}
+
+    if name == "briefing-enabled":
+        # The briefing on or off; no arg: only what it is, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError(f"{name} takes on or off")
+        if arg:
+            briefing.set_enabled(arg == "on")
+            session.hub.publish({"type": "status"})
+        return {"on": briefing.enabled()}
 
     if name == "briefing-trash-email":
         # on or off; no arg: only what it is, for Settings.

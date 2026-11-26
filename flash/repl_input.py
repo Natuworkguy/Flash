@@ -83,7 +83,9 @@ COMMANDS = [
                 "(/debate a vs b; rounds 4; question picks models and how "
                 "long; /debate more [steer] keeps it going)"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
-    ("/briefing", "what came in while you were away, a card at a time"),
+    ("/briefing", "what came in while you were away, a card at a time "
+                  "(/briefing off hides it in the web page, on brings it "
+                  "back)"),
     ("/doctor", "check that everything Flash needs works, and how to fix "
                 "what does not (/doctor fix runs the fixes)"),
     ("/resume", "pick up an earlier conversation (or /resume <words>)"),

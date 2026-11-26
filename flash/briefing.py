@@ -3,8 +3,9 @@
 Each card is one short thing Flash knows about: a spark's report, a wait
 that finished, an unread email or iMessage, a chat that answered that
 you have not read, a wait coming up soon, something new in a connector,
-a spark's @user, or a notification Flash sent you. The page shows them one
-at a time, full screen, newest first. A card that is dismissed stays gone.
+a spark's @user, or a notification Flash sent you. The page shows them
+as a list, newest first. A card that is dismissed stays gone. Settings
+can switch the briefing off.
 """
 
 from __future__ import annotations
@@ -97,6 +98,27 @@ def dismissed() -> dict[str, float]:
         return {}
     return {k: float(v) for k, v in found.items()
             if isinstance(v, (int, float))}
+
+
+SETTING = "BRIEFING"
+
+
+def enabled() -> bool:
+    """Whether the briefing is on: its button, its dot and its page. On
+    unless switched off in Settings, General."""
+
+    return (os.getenv(SETTING) or "").strip().lower() not in (
+        "off", "0", "false", "no")
+
+
+def set_enabled(on: bool) -> bool:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    value = "on" if on else "off"
+    os.environ[SETTING] = value
+    set_env_var(ENV_PATH, SETTING, value)
+    return on
 
 
 TRASH_SETTING = "BRIEFING_TRASH_EMAIL"

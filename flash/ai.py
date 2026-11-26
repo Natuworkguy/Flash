@@ -7899,6 +7899,14 @@ def _main() -> None:
                 _think_command(uin[len("/think"):].strip())
                 continue
 
+            if uin in ("/briefing on", "/briefing off"):
+                from . import briefing
+
+                briefing.set_enabled(uin.endswith("on"))
+                console.print(Text("The briefing is " + (
+                    "on." if briefing.enabled() else
+                    "off. /briefing on turns it back on."), style=DIM))
+                continue
             if uin == "/briefing":
                 _briefing_command()
                 continue

@@ -4400,7 +4400,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 .dialog code { background: var(--hover); border: 1px solid var(--border); padding: 2px 6px; border-radius: 6px; }
 
 #tip {
-  position: fixed; z-index: 60; pointer-events: none;
+  position: fixed; z-index: 75; pointer-events: none;
   display: flex; align-items: center; gap: 8px;
   padding: 6px 9px; border-radius: 8px;
   background: var(--invert-bg); color: var(--invert-text);
@@ -4550,23 +4550,20 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 #clock-ring .ck-alert .stop { background: #f5f4ef; color: #111; }
 #clock-ring .ck-alert .snz { background: rgba(255, 255, 255, 0.14); color: #f5f4ef; }
 @media (prefers-reduced-motion: reduce) { .ck-item.ringing, #clock-ring .ck-alert { animation: none; } }
-#briefing { position: fixed; inset: 0; z-index: 65; display: flex; background: #0e0e0d; color: #f5f4ef; color-scheme: dark; animation: bf-in 0.32s var(--apple); }
+/* The briefing: a sheet over the page, which draws back behind it as it does for any pop-up. A list of quiet cards
+   in the app's own colours, one line of what each is, a few words of it and what to do about it. */
+#briefing { position: fixed; inset: 0; z-index: 65; display: flex; justify-content: center; align-items: flex-end; padding: 5vh 16px 0; background: rgba(0, 0, 0, 0.38); animation: fade 0.2s var(--ease); }
 #briefing[hidden] { display: none; }
-@keyframes bf-in { from { opacity: 0; transform: translateY(24px) scale(0.985); } }
-/* Closing: the feed fades away and sinks a little, over what is under it. */
-#briefing.closing { animation: bf-out 0.3s var(--ease) forwards; pointer-events: none; }
-@keyframes bf-out { to { opacity: 0; transform: translateY(18px) scale(0.985); filter: blur(2px); } }
-#briefing .bf-feed { flex: 1; height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; outline: none; }
-#briefing .bf-feed::-webkit-scrollbar { display: none; }
-#briefing .bf-top { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 10px; padding: max(14px, env(safe-area-inset-top)) 18px 14px; pointer-events: none; background: linear-gradient(rgba(0, 0, 0, 0.45), transparent); }
-#briefing .bf-top > * { pointer-events: auto; }
-#briefing .bf-name { font-family: var(--brand); font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
-#briefing .bf-count { font-size: 13px; color: rgba(245, 244, 239, 0.62); font-variant-numeric: tabular-nums; }
+#briefing.closing { animation: fade-out 0.24s var(--ease) both; pointer-events: none; }
+#briefing .bf-sheet { width: min(680px, 100%); height: 100%; display: flex; flex-direction: column; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-bottom: 0; border-radius: 22px 22px 0 0; box-shadow: var(--shadow); overflow: hidden; animation: sheet-in 0.45s var(--apple) both; }
+#briefing.closing .bf-sheet { animation: sheet-out 0.24s var(--ease) both; }
+#briefing .bf-sheet::before { content: ""; display: block; flex: none; width: 38px; height: 5px; margin: 8px auto 0; border-radius: 3px; background: var(--border-strong); }
+#briefing .bf-top { display: flex; align-items: center; gap: 8px; padding: 8px 14px 12px 20px; border-bottom: 1px solid var(--border); }
+#briefing .bf-name { font: 600 19px/1.3 var(--sans); letter-spacing: -0.01em; }
+#briefing .bf-count { font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 #briefing .bf-top .grow { flex: 1; }
-#briefing .bf-top .icon-btn { color: #f5f4ef; background: rgba(255, 255, 255, 0.1); border-radius: 999px; }
-#briefing .bf-top .icon-btn:hover { background: rgba(255, 255, 255, 0.18); }
-.bf-card { position: relative; height: 100%; box-sizing: border-box; scroll-snap-align: start; scroll-snap-stop: always; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 28px; padding: 80px max(64px, calc(50% - 380px)) max(56px, calc(env(safe-area-inset-bottom) + 36px)) max(24px, calc(50% - 380px)); overflow: hidden; --hue: #d97757;
-  background: radial-gradient(110% 70% at 10% 105%, color-mix(in srgb, var(--hue) 50%, transparent), transparent 62%), radial-gradient(80% 60% at 100% 0%, color-mix(in srgb, var(--hue) 20%, transparent), transparent 70%), #121211; }
+#briefing .bf-feed { flex: 1; overflow-y: auto; overscroll-behavior: contain; outline: none; display: flex; flex-direction: column; gap: 8px; padding: 14px 14px calc(28px + env(safe-area-inset-bottom)); }
+.bf-card { --hue: #d97757; position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 12px; padding: 13px 44px 13px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); cursor: default; transition: border-color 0.15s, box-shadow 0.15s; }
 .bf-card[data-kind="email"] { --hue: #4a8fe7; }
 .bf-card[data-kind="imessage"] { --hue: #34c759; }
 .bf-card[data-kind="spark"] { --hue: #9b7bff; }
@@ -4577,95 +4574,46 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-card[data-kind="team"] { --hue: var(--team, #5b8def); }
 .bf-card[data-kind="ping"] { --hue: var(--team, #d97757); }
 .bf-card[data-kind="notify"] { --hue: #c98bff; }
-.bf-card[data-kind="end"] { --hue: #62c073; align-items: center; }
-/* A large faint sign of the kind, behind the words. */
-.bf-card .bf-mark { position: absolute; right: -6vmin; top: 12%; width: 52vmin; height: 52vmin; color: var(--hue); opacity: 0.09; pointer-events: none; }
-.bf-card .bf-mark svg { width: 100%; height: 100%; stroke-width: 1.2; }
-.bf-inner { min-width: 0; display: flex; flex-direction: column; gap: 12px; transform: translateY(14px); opacity: 0.4; transition: transform 0.5s var(--apple), opacity 0.5s var(--apple); }
-.bf-card.here .bf-inner { transform: none; opacity: 1; }
-/* Between cards: where scroll position can drive it, each card's words,
-   actions and sign rise into place as it comes in, and lift away,
-   blurring, as it goes, moving with the finger the whole way. */
-@supports (animation-timeline: view()) {
-  /* Timed by where the whole card is, not where each part sits in it. */
-  .bf-card { view-timeline: --bf-card block; }
-  /* Its edges melt into the next card's rather than meeting in a line. */
-  .bf-card:not([data-kind="end"]) { -webkit-mask-image: linear-gradient(transparent, #000 7%, #000 93%, transparent); mask-image: linear-gradient(transparent, #000 7%, #000 93%, transparent); }
-  .bf-card .bf-inner, .bf-card .bf-actions, .bf-card .bf-end { transition: none; transform: none; opacity: 1; animation: bf-through linear both; animation-timeline: --bf-card; }
-  .bf-card .bf-actions { animation-name: bf-through-side; }
-  .bf-card .bf-mark { animation: bf-mark-through linear both; animation-timeline: --bf-card; }
-  @keyframes bf-through {
-    0% { opacity: 0; transform: translateY(22vh) scale(0.94); filter: blur(8px); }
-    42%, 58% { opacity: 1; transform: none; filter: none; }
-    100% { opacity: 0; transform: translateY(-16vh) scale(0.96); filter: blur(8px); }
-  }
-  @keyframes bf-through-side {
-    0% { opacity: 0; transform: translateX(28px) translateY(10vh); }
-    45%, 55% { opacity: 1; transform: none; }
-    100% { opacity: 0; transform: translateX(28px) translateY(-8vh); }
-  }
-  @keyframes bf-mark-through {
-    0% { opacity: 0; transform: translateY(30vh) rotate(-12deg) scale(0.8); }
-    50% { opacity: 0.09; transform: none; }
-    100% { opacity: 0; transform: translateY(-30vh) rotate(10deg) scale(1.1); }
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .bf-card .bf-inner, .bf-card .bf-actions, .bf-card .bf-end, .bf-card .bf-mark { animation: none; }
-}
-.bf-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: rgba(245, 244, 239, 0.7); }
-.bf-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px; border-radius: 999px; font-weight: 600; font-size: 12.5px; color: #fff; background: color-mix(in srgb, var(--hue) 70%, #000 0%); }
-.bf-chip svg { width: 14px; height: 14px; }
-.bf-who { font-size: 15px; font-weight: 600; color: rgba(245, 244, 239, 0.86); }
-.bf-title { margin: 0; padding-bottom: 0.12em; font-family: var(--brand); font-size: clamp(26px, 5.2vw, 44px); line-height: 1.12; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.bf-body { font-size: clamp(15px, 2.1vw, 17.5px); line-height: 1.5; color: rgba(245, 244, 239, 0.82); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; max-width: 62ch; }
-.bf-card.open .bf-body { -webkit-line-clamp: unset; display: block; max-height: 46vh; overflow-y: auto; }
-.bf-more { align-self: flex-start; padding: 0; border: 0; background: none; color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; opacity: 0.8; }
-.bf-more:hover { opacity: 1; text-decoration: underline; }
+.bf-card.here { border-color: color-mix(in srgb, var(--hue) 50%, var(--border-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hue) 13%, transparent); }
+.bf-icon { grid-row: 1 / span 5; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: var(--hue); background: color-mix(in srgb, var(--hue) 14%, transparent); }
+.bf-icon svg { width: 17px; height: 17px; }
+.bf-meta { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-3); }
+.bf-meta b { font-weight: 600; color: var(--text-2); }
+.bf-title { margin: 1px 0 0; font: 600 15.5px/1.35 var(--sans); color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.bf-body { margin-top: 3px; font-size: 14px; line-height: 1.5; color: var(--text-2); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.bf-body:empty { display: none; }
+.bf-card.open .bf-body { -webkit-line-clamp: unset; display: block; }
+.bf-more { justify-self: start; margin-top: 2px; padding: 0; border: 0; background: none; font-size: 13px; font-weight: 500; color: var(--text-3); cursor: pointer; }
+.bf-more:hover { color: var(--text); }
 .bf-more[hidden] { display: none; }
-/* The actions, down the right side as on a video feed. */
-.bf-actions { display: flex; flex-direction: column; align-items: center; gap: 16px; }
-.bf-act { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: #f5f4ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
-.bf-act .bf-round { display: grid; place-items: center; width: 50px; height: 50px; border-radius: 50%; background: rgba(255, 255, 255, 0.12); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: transform 0.2s var(--spring), background 0.15s; }
-.bf-act svg { width: 22px; height: 22px; }
-.bf-act:hover .bf-round { background: rgba(255, 255, 255, 0.22); }
-.bf-act:active .bf-round { transform: scale(0.88); }
-.bf-act:focus-visible { outline: none; }
-.bf-act:focus-visible .bf-round { box-shadow: 0 0 0 2px #fff; }
-.bf-act[data-act="reply"] .bf-round, .bf-act.lead .bf-round { background: var(--hue); color: #fff; }
-.bf-act kbd { font: 10.5px var(--mono); opacity: 0.5; }
-.bf-act > span:not(.bf-round) { white-space: nowrap; }
-/* Away: the card folds up and the next one comes in. */
-.bf-card.going { animation: bf-gone 0.34s var(--apple) forwards; }
-@keyframes bf-gone { to { opacity: 0; transform: translateX(-12%) rotate(-3deg) scale(0.94); } }
-.bf-end { grid-column: 1 / -1; justify-self: center; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
-.bf-end .bf-tick { display: grid; place-items: center; width: 76px; height: 76px; border-radius: 50%; background: var(--hue); color: #fff; }
-.bf-end .bf-tick svg { width: 38px; height: 38px; stroke-width: 2.4; }
-.bf-end .bf-title { font-size: clamp(26px, 5vw, 38px); display: block; overflow: visible; }
-.bf-end .bf-body { margin: 0 auto; }
-.bf-end .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
-.bf-end .btn { color: #f5f4ef; background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.16); }
-.bf-end .btn.primary { background: #f5f4ef; color: #121211; border-color: transparent; }
-.bf-empty-note { font-size: 13px; color: rgba(245, 244, 239, 0.55); }
-/* The rail: one tick a card, the one showing drawn long. */
-#briefing .bf-rail { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 5px; max-height: 70vh; }
-#briefing .bf-rail button { width: 4px; height: 10px; padding: 0; border: 0; border-radius: 2px; background: rgba(255, 255, 255, 0.28); cursor: pointer; transition: height 0.3s var(--apple), background 0.2s; flex: 0 1 auto; min-height: 3px; }
-#briefing .bf-rail button.seen { background: rgba(255, 255, 255, 0.5); }
-#briefing .bf-rail button.here { height: 30px; background: #fff; }
-#briefing .bf-rail::before { content: ""; position: absolute; inset: -10px -10px; }
-#briefing .bf-loading { position: absolute; inset: 0; margin: 0; justify-content: center; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 12px; color: rgba(245, 244, 239, 0.7); font-size: 14px; }
-#briefing .bf-hint { position: absolute; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2; font-size: 12px; color: rgba(245, 244, 239, 0.45); pointer-events: none; white-space: nowrap; }
+.bf-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bf-act { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 9px; border: 1px solid var(--border-strong); font-size: 13px; font-weight: 500; color: var(--text-2); transition: background 0.12s, color 0.12s; }
+.bf-act:hover { background: var(--hover); color: var(--text); }
+.bf-act svg { width: 15px; height: 15px; }
+.bf-act.lead { background: var(--invert-bg); color: var(--invert-text); border-color: transparent; }
+.bf-act.lead:hover { opacity: 0.9; background: var(--invert-bg); color: var(--invert-text); }
+.bf-x { position: absolute; top: 9px; right: 9px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--text-3); }
+.bf-x:hover { background: var(--hover); color: var(--text); }
+.bf-x svg { width: 16px; height: 16px; }
+/* Dismissed: it slides away and the ones under it close up. */
+.bf-card.going { animation: bf-gone 0.26s var(--ease) forwards; pointer-events: none; }
+@keyframes bf-gone { to { opacity: 0; transform: translateX(-18px); } }
+.bf-end { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 26px 16px 8px; text-align: center; }
+.bf-end .bf-tick { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; margin-bottom: 4px; color: #2f9e4f; background: color-mix(in srgb, #34c759 16%, transparent); }
+.bf-end .bf-tick svg { width: 22px; height: 22px; stroke-width: 2.2; }
+.bf-end h2 { margin: 0; font: 600 16px/1.35 var(--sans); color: var(--text); }
+.bf-end p { margin: 0; font-size: 14px; color: var(--text-2); }
+.bf-end .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+.bf-empty-note { font-size: 13px; color: var(--text-3); }
+#briefing .bf-loading { flex: 1; display: grid; place-items: center; color: var(--text-3); font-size: 14px; }
 @media (max-width: 640px) {
-  .bf-card { grid-template-columns: minmax(0, 1fr) 58px; gap: 14px; padding: 72px 30px max(40px, calc(env(safe-area-inset-bottom) + 28px)) 20px; }
-  .bf-act .bf-round { width: 46px; height: 46px; }
-  .bf-act { font-size: 11px; }
-  .bf-act kbd, #briefing .bf-hint { display: none; }
-  .bf-title { -webkit-line-clamp: 5; }
-  #briefing .bf-rail { right: 8px; }
+  #briefing { padding: 10px 0 0; }
+  #briefing .bf-sheet { border-left: 0; border-right: 0; border-radius: 18px 18px 0 0; }
+  #briefing .bf-feed { padding: 10px 10px calc(24px + env(safe-area-inset-bottom)); }
+  .bf-card { padding: 12px 40px 12px 12px; column-gap: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #briefing, #briefing.closing, .bf-card.going { animation: none; }
-  .bf-inner { transition: none; transform: none; opacity: 1; }
+  #briefing, #briefing.closing, #briefing .bf-sheet, #briefing.closing .bf-sheet, .bf-card.going { animation: none; }
 }
 
 /* Extensions' UI: panels in place of the chat, their buttons, and their
@@ -4922,7 +4870,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 <div id="clock-ring" role="alertdialog" aria-label="Ringing" hidden></div>
-<div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="pill bf-brief" data-tip="Flash reads it to you in a chat, and marks it read">Brief me</button><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
+<div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-sheet"><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="pill bf-brief" data-tip="Flash reads it to you in a chat, and marks it read">Brief me</button><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div></div></div>
 <div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><button type="button" class="icon-btn sc-mini" aria-label="Minimise" data-tip="Keep the call going in a small bar"></button><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><p class="sc-caption" aria-live="polite"></p><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button><button type="button" class="icon-btn sc-screen" aria-pressed="false" aria-label="Share your screen" data-tip="Share your screen"></button></div><div class="sc-answer" hidden><button type="button" class="icon-btn sc-decline" aria-label="Decline" data-tip="Decline"></button><button type="button" class="icon-btn sc-pick" aria-label="Answer" data-tip="Answer"></button></div><video class="sc-screen-view" muted playsinline hidden></video></section></div>
 <div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-thread" hidden><div class="tc-thread-head"><button type="button" class="icon-btn tc-thread-back" aria-label="Back to the chat" data-tip="Back to the chat"></button><span class="tc-thread-title"><b>Thread</b><span class="sub"></span></span></div><div class="tc-thread-log" aria-live="polite"></div></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
@@ -11439,6 +11387,26 @@ function drawGeneral(body) {
   body.appendChild(fastRow);
   body.appendChild(useWarn);
   showUse();
+
+  // The briefing, on or off: off, its button, its dot and Alt B go, and Flash stops looking for new cards.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Briefing</h2><p class="settings-sub">What came in while you were away, as a list of cards: unread email and messages, sparks' reports, finished waits and what is coming up.</p>`);
+  const briefRow = el("button", "setting-row briefing-row", `<span class="what"><b>Show the briefing</b><span>Off, its button and its dot leave the sidebar, and Flash stops checking for new cards. /briefing in the terminal still works.</span></span><span class="switch" aria-hidden="true"></span>`);
+  briefRow.type = "button";
+  briefRow.setAttribute("role", "switch");
+  briefRow.setAttribute("aria-checked", info.briefing === false ? "false" : "true");
+  briefRow.onclick = async () => {
+    const on = briefRow.getAttribute("aria-checked") !== "true";
+    briefRow.setAttribute("aria-checked", on);
+    try {
+      const r = await command("briefing-enabled", on ? "on" : "off", null);
+      info.briefing = r.on;
+      if (!r.on) info.briefing_new = false;
+      briefRow.setAttribute("aria-checked", !!r.on);
+      renderInfo();
+      toast(r.on ? "The briefing is on" : "The briefing is off");
+    } catch (error) { briefRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(briefRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Notifications</h2><p class="settings-sub">Flash and your sparks can tap you on the shoulder when something can't wait: a pop-up here, or on your desktop when no page is open. Every chat and spark shares one limit.</p>`);
   const notifyOn = el("button", "setting-row notify-on-row", `<span class="what"><b>Let the agent notify you</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
@@ -22550,6 +22518,8 @@ function renderModelButtons() {
 function renderInfo() {
   renderAgents();
   renderExtUI();
+  // Switched off in Settings: no button, no dot, no Alt B.
+  $("#briefing-btn").hidden = info.briefing === false;
   $("#briefing-btn .new-dot").hidden = !info.briefing_new;
   showPublic();
   syncScene();
@@ -26203,16 +26173,15 @@ async function removeHost(url) {
 document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest(".model-pick, #agents-btn, #project-btn, #plus-btn")) { closeMenu(); slashOpen = false; } });
 
 // Briefing ------------------------------------------------------------------
-// What came in while you were away, as a feed of full-screen cards: one
-// at a time, scrolled or swiped through (scroll-snap does the swiping), or
-// stepped with j and k. Each card's actions answer it, open what it is
-// about, ask Flash about it, or take it out of the feed for good.
+// What came in while you were away, as a list of cards on a sheet over the
+// page: scrolled through, or stepped with j and k. Each card's actions
+// answer it, open what it is about, ask Flash about it, or take it out of
+// the list for good.
 
 const BRIEF_ICON = { email: "mail", imessage: "chat", spark: "spark", wait: "clock", reminder: "bell", chat: "reply", news: "globe", team: "users", ping: "spark", notify: "bell" };
-const briefing = { cards: [], at: 0, seen: new Set(), watch: null };
+const briefing = { cards: [], at: 0, seen: new Set() };
 const briefEl = document.getElementById("briefing");
 const briefFeed = briefEl.querySelector(".bf-feed");
-const briefRail = briefEl.querySelector(".bf-rail");
 
 function briefActions(card) {
   const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" || (card.kind === "ping" && card.team) ? "Team chat" : card.kind === "ping" ? "Spark" : "Chat";
@@ -26231,46 +26200,37 @@ function briefCard(card, i) {
   sec.dataset.i = i;
   if ((card.kind === "team" || card.kind === "ping") && card.colour) sec.style.setProperty("--team", card.colour);
   sec.setAttribute("aria-roledescription", "card");
-  const who = card.who && card.kind !== "imessage" ? `<div class="bf-who">${card.kind === "email" ? "From " : ""}${esc(card.who)}</div>` : "";
-  const where = card.chat_title ? ` · ${esc(card.chat_title)}` : "";
   const when = card.kind === "reminder" ? `at ${new Date(card.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : card.at ? ago(card.at) : "";
-  sec.innerHTML = `<div class="bf-mark" aria-hidden="true">${icon(BRIEF_ICON[card.kind] || "dot")}</div>
-    <div class="bf-inner"><div class="bf-meta"><span class="bf-chip">${icon(BRIEF_ICON[card.kind] || "dot")}${esc(card.label)}</span><span>${esc(when)}${where}</span></div>${who}<h2 class="bf-title"></h2><div class="bf-body"></div><button type="button" class="bf-more" hidden>More</button></div>
-    <div class="bf-actions">${briefActions(card).map((a) => `<button type="button" class="bf-act" data-act="${a.act}" aria-label="${a.label}"><span class="bf-round">${icon(a.icon)}</span><span>${a.label}</span><kbd>${a.key}</kbd></button>`).join("")}</div>`;
+  // One line of what it is: the kind, who it is from, when, and where.
+  const meta = [`<b>${esc(card.label)}</b>`];
+  if (card.who && card.kind !== "imessage") meta.push(esc(card.who));
+  if (when) meta.push(esc(when));
+  if (card.chat_title) meta.push(esc(card.chat_title));
+  const acts = briefActions(card);
+  const dismiss = acts.find((a) => a.act === "dismiss");
+  sec.innerHTML = `<span class="bf-icon" aria-hidden="true">${icon(BRIEF_ICON[card.kind] || "dot")}</span>
+    <div class="bf-meta">${meta.join("<span aria-hidden=\"true\">·</span>")}</div><h2 class="bf-title"></h2><div class="bf-body"></div><button type="button" class="bf-more" hidden>More</button>
+    <div class="bf-actions">${acts.filter((a) => a !== dismiss).map((a, n) => `<button type="button" class="bf-act${n === 0 && a.act === "reply" ? " lead" : ""}" data-act="${a.act}" data-tip="${a.label}" data-keys="${a.key.toUpperCase()}">${icon(a.icon)}<span>${a.label}</span></button>`).join("")}</div>
+    <button type="button" class="bf-x" data-act="dismiss" aria-label="Dismiss" data-tip="Dismiss" data-keys="D">${icon("x")}</button>`;
   sec.querySelector(".bf-title").textContent = card.title;
   sec.querySelector(".bf-body").textContent = card.body;
   return sec;
 }
 
 function briefEnd() {
-  const sec = el("section", "bf-card");
-  sec.dataset.kind = "end";
-  sec.dataset.i = briefing.cards.length;
+  const end = el("div", "bf-end");
+  end.dataset.i = briefing.cards.length;
   const none = !briefing.cards.length;
-  sec.innerHTML = `<div class="bf-end"><span class="bf-tick">${icon("check")}</span><h2 class="bf-title">${none ? "Nothing new" : "You’re all caught up"}</h2><div class="bf-body">${none ? "No unread email, messages, reports or finished waits since yesterday." : "That’s everything since yesterday."}</div><div class="row">${none ? "" : `<button type="button" class="btn" data-act="clear">Dismiss all</button>`}<button type="button" class="btn" data-act="refresh">Refresh</button><button type="button" class="btn primary" data-act="close">Done</button></div>${briefing.problems ? `<div class="bf-empty-note">${esc(briefing.problems)}</div>` : ""}</div>`;
-  return sec;
+  end.innerHTML = `<span class="bf-tick">${icon("check")}</span><h2>${none ? "Nothing new" : "You’re all caught up"}</h2><p>${none ? "No unread email, messages, reports or finished waits since yesterday." : "That’s everything since yesterday."}</p><div class="row">${none ? "" : `<button type="button" class="btn" data-act="clear">Dismiss all</button>`}<button type="button" class="btn" data-act="refresh">Refresh</button><button type="button" class="btn primary" data-act="close">Done</button></div>${briefing.problems ? `<div class="bf-empty-note">${esc(briefing.problems)}</div>` : ""}`;
+  return end;
 }
 
 function drawBriefing() {
-  if (briefing.watch) briefing.watch.disconnect();
   briefFeed.replaceChildren(...briefing.cards.map(briefCard), briefEnd());
-  briefRail.replaceChildren(...[...briefing.cards, null].map((c, i) => {
-    const b = el("button", "");
-    b.type = "button";
-    b.setAttribute("role", "tab");
-    b.setAttribute("aria-label", c ? `${c.label}: ${c.title}` : "The end");
-    b.onclick = () => briefGo(i);
-    return b;
-  }));
-  // The card filling the feed is the one showing.
-  briefing.watch = new IntersectionObserver((seen) => {
-    for (const s of seen) if (s.isIntersecting) briefHere(Number(s.target.dataset.i));
-  }, { root: briefFeed, threshold: 0.6 });
   briefFeed.querySelectorAll(".bf-card").forEach((c) => {
-    briefing.watch.observe(c);
     const body = c.querySelector(".bf-body");
     const more = c.querySelector(".bf-more");
-    if (more && body.scrollHeight > body.clientHeight + 2) {
+    if (body.scrollHeight > body.clientHeight + 2) {
       more.hidden = false;
       more.onclick = () => { c.classList.toggle("open"); more.textContent = c.classList.contains("open") ? "Less" : "More"; };
     }
@@ -26278,23 +26238,20 @@ function drawBriefing() {
   briefHere(Math.min(briefing.at, briefing.cards.length));
 }
 
+// The card j and k are on, and its keys act on.
 function briefHere(i) {
   briefing.at = i;
   briefFeed.querySelectorAll(".bf-card").forEach((c) => c.classList.toggle("here", Number(c.dataset.i) === i));
   if (i < briefing.cards.length) briefing.seen.add(briefing.cards[i].id);
-  [...briefRail.children].forEach((b, n) => {
-    b.classList.toggle("here", n === i);
-    b.classList.toggle("seen", n < briefing.cards.length && briefing.seen.has(briefing.cards[n].id));
-    b.setAttribute("aria-selected", n === i ? "true" : "false");
-  });
   const n = briefing.cards.length;
-  briefEl.querySelector(".bf-count").textContent = n ? `${Math.min(i + 1, n)} of ${n}` : "";
+  briefEl.querySelector(".bf-count").textContent = n ? `${n} new` : "";
 }
 
 function briefGo(i, smooth = true) {
-  const cards = briefFeed.querySelectorAll(".bf-card");
-  i = Math.max(0, Math.min(cards.length - 1, i));
-  cards[i].scrollIntoView({ behavior: smooth && !calm.matches ? "smooth" : "auto", block: "start" });
+  const all = briefFeed.querySelectorAll(".bf-card, .bf-end");
+  if (!all.length) return;
+  i = Math.max(0, Math.min(all.length - 1, i));
+  all[i].scrollIntoView({ behavior: smooth && !calm.matches ? "smooth" : "auto", block: "nearest" });
   briefHere(i);
 }
 
@@ -26313,6 +26270,11 @@ async function openBriefing(push = true) {
   // goes back there.
   // An address of its own, so it can be linked to, bookmarked, and left
   // with Back.
+  if (info.briefing === false) {
+    if (/^\/briefing\/?$/.test(location.pathname)) history.replaceState(null, "", routeFor());
+    toast("The briefing is off. Turn it on in Settings, General.");
+    return;
+  }
   if (push && !/^\/briefing\/?$/.test(location.pathname)) history.pushState(null, "", "/briefing");
   closeMenu();
   info.briefing_new = false;
@@ -26321,6 +26283,7 @@ async function openBriefing(push = true) {
   clearTimeout(briefing.closing);
   briefEl.classList.remove("closing");
   briefEl.hidden = false;
+  recede();
   briefFeed.focus({ preventScroll: true });
   await loadBriefing(true);
   briefFeed.scrollTop = 0;
@@ -26331,10 +26294,10 @@ function closeBriefing() {
   // Off its address, onto the page under it. Replaced, not gone back
   // from: whatever is opened next (a chat about a card) comes after.
   if (/^\/briefing\/?$/.test(location.pathname)) history.replaceState(null, "", routeFor());
-  if (briefing.watch) briefing.watch.disconnect();
-  if (calm.matches) { briefEl.hidden = true; return; }
+  if (calm.matches) { briefEl.hidden = true; recede(); return; }
   briefEl.classList.add("closing");
-  briefing.closing = setTimeout(() => { briefEl.hidden = true; briefEl.classList.remove("closing"); }, 300);
+  recede();
+  briefing.closing = setTimeout(() => { briefEl.hidden = true; briefEl.classList.remove("closing"); }, 240);
 }
 
 // Flash gives the briefing itself, in a new chat, and marks it read.
@@ -26387,7 +26350,7 @@ async function briefDismiss(i) {
   command("briefing-dismiss", card.id, null).catch(showFailure);
   if (!calm.matches) {
     sec.classList.add("going");
-    await new Promise((done) => setTimeout(done, 320));
+    await new Promise((done) => setTimeout(done, 240));
   }
   briefing.cards.splice(i, 1);
   briefing.at = i;
@@ -26433,9 +26396,14 @@ function briefAct(act, i) {
 
 briefFeed.addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]");
-  if (!b) return;
-  briefAct(b.dataset.act, Number(b.closest(".bf-card").dataset.i));
+  const at = e.target.closest("[data-i]");
+  if (!at) return;
+  if (b) briefAct(b.dataset.act, Number(at.dataset.i));
+  // A click on a card puts j, k and its keys there.
+  else if (at.classList.contains("bf-card")) briefHere(Number(at.dataset.i));
 });
+// A click on the dim page around the sheet closes it, as for any pop-up.
+briefEl.addEventListener("mousedown", (e) => { if (e.target === briefEl) closeBriefing(); });
 briefEl.querySelector(".bf-close").onclick = closeBriefing;
 briefEl.querySelector(".bf-refresh").onclick = () => loadBriefing();
 briefEl.querySelector(".bf-close").innerHTML = icon("x");
@@ -26443,10 +26411,10 @@ briefEl.querySelector(".bf-refresh").innerHTML = icon("retry");
 document.addEventListener("keydown", (e) => {
   if (briefEl.hidden || briefEl.classList.contains("closing") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest("input, textarea, select, [contenteditable]")) return;
-  const step = { j: 1, ArrowDown: 1, PageDown: 1, " ": 1, k: -1, ArrowUp: -1, PageUp: -1 }[e.key];
+  const step = { j: 1, ArrowDown: 1, k: -1, ArrowUp: -1 }[e.key];
   const acts = { r: "reply", o: "open", a: "ask", d: "dismiss", Delete: "dismiss", m: "read" };
   if (e.key === "Escape") closeBriefing();
-  else if (step) briefGo(briefing.at + (e.shiftKey && e.key === " " ? -1 : step));
+  else if (step) briefGo(briefing.at + step);
   else if (e.key === "Home") briefGo(0);
   else if (e.key === "End") briefGo(briefing.cards.length);
   else if (acts[e.key]) {
@@ -27633,10 +27601,10 @@ function showOverlay(node) { node.classList.remove("closing"); node.hidden = fal
 // Open and staying open: one on its way out already counts as closed.
 const isOpen = (node) => !node.hidden && !node.classList.contains("closing");
 // While a pop-up is open, the page behind it draws back, smaller and dimmer, the way a sheet does on a phone; it
-// comes forward again as the last one leaves. The palette and search drop in over the page and leave it be.
-const POPUPS = ".overlay:not(#palette):not(#search)";
+// comes forward again as the last one leaves. The briefing is a sheet too. The palette and search drop in over the
+// page and leave it be.
 function recede() {
-  document.body.classList.toggle("receded", [...document.querySelectorAll(POPUPS)].some(isOpen));
+  document.body.classList.toggle("receded", [...document.querySelectorAll(".overlay:not(#palette):not(#search), #briefing")].some(isOpen));
 }
 function closePalette() { hideOverlay(palette); input.focus(); }
 function runPalette(i) { const row = paletteRows[i]; closePalette(); if (row) row.run(); }
