@@ -2097,6 +2097,27 @@ html.theme-switch::view-transition-new(root) { animation: theme-sweep 0.8s cubic
 @keyframes pop-out { to { opacity: 0; transform: scale(0.97); } }
 @keyframes fade-out { to { opacity: 0; } }
 @keyframes alert-in { from { opacity: 0; transform: scale(1.07); } }
+@keyframes sheet-in { from { transform: translateY(100%); } }
+@keyframes sheet-out { to { transform: translateY(100%); } }
+
+/* A pop-up open: the page behind draws back, smaller, rounded and dimmer, on a dark ground, as a sheet does on a
+   phone. On a phone the pop-up itself is a sheet, up from the bottom edge. */
+body { transition: background-color 0.45s var(--apple); }
+#app { transform-origin: 50% 40%; transition: transform 0.45s var(--apple), border-radius 0.45s var(--apple), filter 0.45s var(--apple); }
+body.receded { background-color: #050506; }
+body.receded #app { transform: scale(0.95); border-radius: 18px; overflow: hidden; background: var(--bg); filter: brightness(0.9); }
+@media (max-width: 640px) {
+  body.receded #app { transform: translateY(14px) scale(0.92); border-radius: 14px; }
+  .overlay:not(#palette):not(#search) { align-items: flex-end; padding: 0; }
+  .overlay:not(#palette):not(#search) .dialog { width: 100%; border-radius: 22px 22px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); animation: sheet-in 0.42s var(--apple) both; }
+  .overlay:not(#palette):not(#search).closing .dialog { animation: sheet-out 0.2s var(--ease) both; }
+  .overlay:not(#palette):not(#search) .dialog::before { content: ""; display: block; width: 38px; height: 5px; margin: 8px auto 0; border-radius: 3px; background: var(--border-strong); }
+  .overlay:not(#palette):not(#search) .dialog .inner { max-height: 84vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #app, body { transition: none; }
+  body.receded #app { transform: none; border-radius: 0; }
+}
 @keyframes spotlight-in { from { opacity: 0; transform: translateY(-10px) scale(0.98); } }
 @keyframes icon-in { from { opacity: 0; transform: scale(0.5) rotate(-30deg); } }
 @keyframes launch { 40% { transform: translateY(-5px); opacity: 0; } 41% { transform: translateY(6px); opacity: 0; } }
@@ -27606,10 +27627,17 @@ function hideOverlay(node) {
   // Reopened while it was still leaving: the opener took the class off,
   // and the dialog stays up.
   leave(node, "closing", () => { if (node.classList.contains("closing")) { node.hidden = true; node.classList.remove("closing"); } }, 160);
+  recede();
 }
-function showOverlay(node) { node.classList.remove("closing"); node.hidden = false; }
+function showOverlay(node) { node.classList.remove("closing"); node.hidden = false; recede(); }
 // Open and staying open: one on its way out already counts as closed.
 const isOpen = (node) => !node.hidden && !node.classList.contains("closing");
+// While a pop-up is open, the page behind it draws back, smaller and dimmer, the way a sheet does on a phone; it
+// comes forward again as the last one leaves. The palette and search drop in over the page and leave it be.
+const POPUPS = ".overlay:not(#palette):not(#search)";
+function recede() {
+  document.body.classList.toggle("receded", [...document.querySelectorAll(POPUPS)].some(isOpen));
+}
 function closePalette() { hideOverlay(palette); input.focus(); }
 function runPalette(i) { const row = paletteRows[i]; closePalette(); if (row) row.run(); }
 
