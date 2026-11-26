@@ -402,6 +402,20 @@ def offer_draft(draft: Optional[dict]) -> None:
     _capture.offered = dict(draft) if draft else None
 
 
+def offer_rule(proposal: Optional[dict]) -> None:
+    """The standing rule (see rules.py) an Always allow beside the next
+    question on this thread would keep. None takes it back."""
+
+    _capture.rule = dict(proposal) if proposal else None
+
+
+def offered_rule() -> Optional[dict]:
+    """The rule offered beside the question being asked now, if any."""
+
+    rule = getattr(_capture, "rule", None)
+    return dict(rule) if rule else None
+
+
 def offered_draft() -> Optional[dict]:
     """The draft offered beside the question being asked now, if any."""
 
@@ -862,16 +876,19 @@ def mouse_on() -> bool:
     return sys.stdin.isatty() and console.is_terminal
 
 
-def yes_no(edit: bool = False) -> str:
+def yes_no(edit: bool = False, always: bool = False) -> str:
     """The answer to a yes-or-no question just printed: "y" or "n". Two
     buttons under it take a click, and y, n, Enter, the arrows and Esc
     work too. Without a terminal to draw them on, a typed line, as
     typed() reads it. With EDIT, a third button, and e, answer "e": the
-    user wants to change what is asked about first."""
+    user wants to change what is asked about first. With ALWAYS, one
+    more, and a, answer "a": yes, and keep the rule offered."""
 
     if not mouse_on():
         said = typed()
-        return said if edit or said != "e" else "n"
+        if (said == "e" and not edit) or (said == "a" and not always):
+            return "n"
+        return said
 
     from prompt_toolkit.application import Application
     from prompt_toolkit.key_binding import KeyBindings
@@ -882,6 +899,8 @@ def yes_no(edit: bool = False) -> str:
     choices = [("y", " Yes "), ("n", " No ")]
     if edit:
         choices.append(("e", " Edit "))
+    if always:
+        choices.append(("a", " Always "))
     picked = {"at": 0}
 
     def choose(answer: str):
@@ -900,7 +919,7 @@ def yes_no(edit: bool = False) -> str:
                      else "reverse bold" if on else f"{DIM_HEX}")
             out.append((style, f"[{label}]", choose(answer)))
             out.append(("", "  "))
-        keys_said = "y / n / e" if edit else "y / n"
+        keys_said = " / ".join(answer for answer, _ in choices)
         out.append((DIM_HEX, f"  {keys_said}, or click"))
         return out
 
@@ -920,6 +939,11 @@ def yes_no(edit: bool = False) -> str:
         @keys.add("e")
         def _edit(event) -> None:
             event.app.exit(result="e")
+
+    if always:
+        @keys.add("a")
+        def _always(event) -> None:
+            event.app.exit(result="a")
 
     @keys.add("right")
     @keys.add("tab")
@@ -953,10 +977,10 @@ def yes_no(edit: bool = False) -> str:
             console.asking = False
             if _dock is not None:
                 _dock.resume()
-    said = {"y": "yes", "n": "no", "e": "edit"}[answer]
+    said = {"y": "yes", "n": "no", "e": "edit", "a": "always"}[answer]
     # Under the question, where the buttons were: what was picked.
-    console.print(Text(f"     {said}", style=f"bold {ACCENT}" if answer ==
-                       "y" else DIM))
+    console.print(Text(f"     {said}", style=f"bold {ACCENT}"
+                       if answer in ("y", "a") else DIM))
     return answer
 
 

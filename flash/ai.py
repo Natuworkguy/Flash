@@ -8185,6 +8185,13 @@ def _main() -> None:
                 _hook_command(uin[len("/hook"):].strip().lower())
                 continue
 
+            if uin == "/rules" or uin.startswith("/rules "):
+                from . import rules
+
+                console.print(Text(rules.command_line(uin[len("/rules"):]),
+                                   style=DIM))
+                continue
+
             if uin == "/tasks" or uin.startswith("/tasks "):
                 from . import bgtasks
 

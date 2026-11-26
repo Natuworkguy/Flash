@@ -53,6 +53,7 @@ from . import (
     model3d,
     pcb,
     plan,
+    rules,
     skills,
     sparks,
     systemone,
@@ -102,6 +103,7 @@ from .theme import (
     edited_draft,
     glimmer,
     offer_draft,
+    offer_rule,
     plural,
     remote_answer,
     set_denial_why,
@@ -856,22 +858,41 @@ def shell_tool(command: str, timeout=None, is_user=False,
         from . import stakes
 
         risky = stakes.why(command) if CAREFUL else ""
-        if (not NO_COMMAND_CONFIRMATION or risky) and not (
-                walled and walls.auto_allow()):
+        # The user's own standing rules (rules.py): a never is refused
+        # in every mode, an ask asks even in Auto, and an allow lets a
+        # plain command through without asking.
+        rule = rules.for_command(command)
+        if rule and rule["verdict"] == "never":
+            result = (f"Not run: the user's rule says \"{rules.words(rule)}"
+                      "\". Do not run it another way.")
+            tool_result(result, style=WARN)
+            return result
+        must_ask = bool(rule and rule["verdict"] == "ask"
+                        and not ultra_auto())
+        asks = (not NO_COMMAND_CONFIRMATION or risky) and not (
+            walled and walls.auto_allow())
+        if rule and rule["verdict"] == "allow" and asks and not risky:
+            asks = False
+            tool_result(f"Allowed by your rule: {rules.words(rule)}",
+                        style=DIM)
+        if asks or must_ask:
             notify_needs_input()
+            proposal = None if must_ask or risky else \
+                rules.proposal_for_command(command)
+            offer_rule(proposal)
+            try:
+                user_input = remote_answer(
+                    f"Run this command?{f' It {risky}.' if risky else ''}"
+                    f"\n{command}")
+            finally:
+                offer_rule(None)
 
-            user_input = remote_answer(
-                f"Run this command?{f' It {risky}.' if risky else ''}"
-                f"\n{command}")
-
-            if user_input is None:
-                prompt = Text("  ⎿  ", style=DIM)
-                prompt.append("Run this command? ", style=DIM)
-                prompt.append("y", style=f"bold {ACCENT}")
-                prompt.append("/n ", style=DIM)
-                console.print(prompt, end="")
-
-                user_input = yes_no()
+            if user_input is None and must_ask and capturing():
+                # Asked only for the rule, on a thread with no terminal
+                # to ask from (a sub-agent's): a no.
+                user_input = "n"
+            elif user_input is None:
+                user_input = _ask_here("Run this command?", proposal)
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
@@ -1410,6 +1431,26 @@ def _confirm_change(
     return _ask_change(file_path, old_text, new_text, question)
 
 
+def _ask_here(question: str, proposal: Optional[dict] = None) -> str:
+    """QUESTION, asked in the terminal: "y" or not. With PROPOSAL, a
+    standing rule (rules.py) Always keeps, and then it is a yes."""
+
+    if proposal:
+        tool_result(f"a: always, and keep the rule "
+                    f"\"{proposal['words']}\"", style=DIM)
+    prompt = Text(f"  {BRANCH}  ", style=DIM)
+    prompt.append(question + " ", style=DIM)
+    prompt.append("y", style=f"bold {ACCENT}")
+    prompt.append("/n/a " if proposal else "/n ", style=DIM)
+    console.print(prompt, end="")
+    answer = yes_no(always=True) if proposal else yes_no()
+    if answer == "a" and proposal:
+        rules.keep(proposal)
+        tool_result(f"Kept: {proposal['words']}", style=DIM)
+        return "y"
+    return answer
+
+
 def _ask_change(
     file_path: Path,
     old_text: str,
@@ -1421,7 +1462,18 @@ def _ask_change(
     """Ask whether the change shown may go in. None means go ahead;
     otherwise BLOCKED, for the model."""
 
-    if NO_COMMAND_CONFIRMATION:
+    # The user's own standing rules on this folder (rules.py) first.
+    rule = rules.for_file(file_path)
+    if rule and rule["verdict"] == "never":
+        result = (f"Not changed: the user's rule says \"{rules.words(rule)}"
+                  "\". Do not change it another way.")
+        tool_result(result, style=WARN)
+        return result
+    must_ask = bool(rule and rule["verdict"] == "ask" and not ultra_auto())
+    if NO_COMMAND_CONFIRMATION and not must_ask:
+        return None
+    if rule and rule["verdict"] == "allow" and not must_ask:
+        tool_result(f"Allowed by your rule: {rules.words(rule)}", style=DIM)
         return None
 
     notify_needs_input()
@@ -1429,9 +1481,18 @@ def _ask_change(
     # Asked of the browser when the web UI is running this turn, where
     # the diff is already on screen above the question, and the change
     # in the document itself when it is open in the side panel.
+    proposal = None if must_ask else rules.proposal_for_file(file_path)
     livedocs.propose(file_path, new_text)
-    answer = remote_answer(f"{question}\n{file_path}")
+    offer_rule(proposal)
+    try:
+        answer = remote_answer(f"{question}\n{file_path}")
+    finally:
+        offer_rule(None)
     livedocs.take_proposal()
+    if answer is None and must_ask and capturing():
+        # Asked only for the rule, on a thread with no terminal to ask
+        # from (a sub-agent's): a no.
+        answer = "n"
     if answer is not None:
         if answer != "y":
             tool_result(blocked, style=WARN)
@@ -1443,14 +1504,8 @@ def _ask_change(
     ):
         tool_result("Opened side by side in VS Code")
 
-    prompt = Text(f"  {BRANCH}  ", style=DIM)
-    prompt.append(question + " ", style=DIM)
-    prompt.append("y", style=f"bold {ACCENT}")
-    prompt.append("/n ", style=DIM)
-    console.print(prompt, end="")
-
     try:
-        answer = yes_no()
+        answer = _ask_here(question, proposal)
     finally:
         # Closed on the way out whichever way it went, and even if the
         # read was interrupted, so a decided diff never lingers.

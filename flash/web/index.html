@@ -1289,9 +1289,9 @@ body.course-open { overflow: hidden; }
 .rate-why { display: flex; gap: 8px; margin-top: 6px; max-width: 520px; animation: rise 0.2s var(--ease) both; }
 .rate-why input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
 .rate-why input:focus { outline: none; border-color: var(--accent); }
-.secret-add { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.secret-add input { flex: 1 1 160px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
-.secret-add input:focus { outline: none; border-color: var(--accent); }
+:is(.secret-add, .rule-add) { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+:is(.secret-add, .rule-add) :is(input, select) { flex: 1 1 160px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
+:is(.secret-add, .rule-add) :is(input, select):focus { outline: none; border-color: var(--accent); }
 .secret-row .what span { font-family: var(--mono); font-size: 12px; }
 .secret-where { margin-top: 8px; font-size: 12px; }
 .doctor-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
@@ -1370,6 +1370,7 @@ body.course-open { overflow: hidden; }
 .ask .ask-field input, .ask .ask-field textarea { width: 100%; box-sizing: border-box; font: 14px/1.5 var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; resize: vertical; }
 .ask .ask-field input:focus, .ask .ask-field textarea:focus { border-color: var(--accent); }
 .ask.done .ask-draft, .ask.done .ask-to { display: none; }
+.ask .ask-rule { margin-top: 8px; font-size: 12.5px; color: var(--text-2); }
 .btn { padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 500; border: 1px solid var(--border-strong); transition: background 0.12s, transform 0.08s; }
 .btn:hover { background: var(--hover); }
 .btn:active { transform: scale(0.98); }
@@ -7012,6 +7013,19 @@ function askCard(entry) {
   no.type = "button"; no.dataset.tip = draft ? "Don't send" : "Deny"; no.dataset.keys = "N";
   no.onclick = () => answer(entry.id, "n");
   card.querySelector(".buttons").append(yes, no);
+  // A rule Flash offers beside the question (flash/rules.py): pressing it says yes now and keeps the rule, in the
+  // words shown, so the same kind of step is not asked about again. The page only says yes to it; Flash keeps the
+  // rule it offered.
+  if (entry.rule && !draft) {
+    const always = el("button", "btn ask-always", "Always allow");
+    always.type = "button"; always.dataset.tip = entry.rule;
+    always.setAttribute("aria-label", `Allow, and keep the rule: ${entry.rule}`);
+    always.onclick = () => answer(entry.id, "y", "", true);
+    const said = el("div", "ask-rule");
+    said.textContent = `Always allow keeps a rule: ${entry.rule}`;
+    card.querySelector(".buttons").append(always);
+    card.querySelector(".buttons").after(said);
+  }
   // Asked for the computer: a no can say why, so Flash knows what to do
   // instead. Left empty, it is a plain no.
   if (/see your screen/i.test(first)) {
@@ -7027,7 +7041,7 @@ function askCard(entry) {
   return card;
 }
 
-function settleAsk(card, value, why = "", edited = false) {
+function settleAsk(card, value, why = "", edited = false, kept = "") {
   // Folds down from the full card to its one-line record.
   const from = card.offsetHeight;
   card.classList.add("done");
@@ -7041,7 +7055,9 @@ function settleAsk(card, value, why = "", edited = false) {
     q.innerHTML = icon(value === "y" ? "check" : "x") + `<span>${value === "y" ? "Allowed" : "Denied"}: ${esc(q.textContent)}</span>`;
   }
   card.querySelector(".ask-why")?.remove();
+  card.querySelector(".ask-rule")?.remove();
   if (why) q.lastChild.append(` (${why})`);
+  if (kept) q.lastChild.append(`. Kept: ${kept}`);
   if (!calm.matches && from) {
     card.animate([{ height: from + "px" }, { height: card.offsetHeight + "px" }], { duration: 260, easing: "cubic-bezier(0.2, 0, 0, 1)" });
   }
@@ -10340,7 +10356,7 @@ function drawEntry(entry, ctx) {
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;
-    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer, entry.why, entry.edited); break; }
+    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer, entry.why, entry.edited, entry.kept); break; }
     case "error": {
       const node = el("div", "block error", icon("alert") + "<span></span>");
       richText(node.lastChild, entry.text);
@@ -17580,6 +17596,38 @@ async function drawSecurity(body) {
   const r = await renderBrowsers(body.querySelector(".browser-list"));
   if (r) { remember.setAttribute("aria-checked", !!r.remember); sayRemembering(body, r.remember); }
   drawSecrets(body);
+  drawRules(body);
+}
+
+// Standing rules (flash/rules.py): the user's own word on one kind of step, between Ask first and Auto. Made with
+// Always allow on a question, /rules in the terminal, or here; nothing the model says makes one.
+async function drawRules(body) {
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Rules</h2><p class="settings-sub">Your word on one kind of step, kept. An allow skips the question for a command or a folder; an ask asks even in Auto; a never refuses it. Emails, iMessages and printing always ask, whatever a rule says.</p><div class="rule-list"></div><form class="rule-add"><select name="verdict" aria-label="What the rule says"><option value="allow">No need to ask</option><option value="ask">Always ask</option><option value="never">Never</option></select><select name="kind" aria-label="What it is about"><option value="command">before running</option><option value="files">before changing files in</option></select><input name="match" placeholder="npm test, or ~/code/site" maxlength="300" autocomplete="off" spellcheck="false" aria-label="Which command or folder"><button type="submit" class="btn">Keep it</button></form>`);
+  const list = body.querySelector(".rule-list");
+  const show = (r) => {
+    list.textContent = "";
+    for (const rule of r.rules) {
+      const row = list.appendChild(el("div", "setting-row static rule-row", `<span class="what"><b></b></span><span class="side"></span>`));
+      row.querySelector("b").textContent = rule.words;
+      const rm = row.querySelector(".side").appendChild(el("button", "btn danger small", "Remove"));
+      rm.type = "button";
+      rm.onclick = async () => {
+        try { show(await command("rules", "remove", null, { id: rule.id })); toast("Rule removed"); } catch (error) { showFailure(error); }
+      };
+    }
+    if (!r.rules.length) list.appendChild(el("p", "settings-sub", "None yet."));
+  };
+  const form = body.querySelector(".rule-add");
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const get = (name) => form.querySelector(`[name="${name}"]`).value;
+    try {
+      show(await command("rules", "add", null, { verdict: get("verdict"), kind: get("kind"), match: get("match") }));
+      form.querySelector('[name="match"]').value = "";
+      toast("Rule kept");
+    } catch (error) { showFailure(error); }
+  };
+  try { show(await command("rules", "", null)); } catch (error) { showFailure(error); }
 }
 
 // The vault: keys and passwords Flash uses by name and never sees. Only
@@ -25804,11 +25852,11 @@ function toggleSide() {
 
 const pendingAsk = () => messagesEl.querySelector(".ask:not(.done)");
 function focusAsk() { const card = pendingAsk(); if (card) { card.focus({ preventScroll: true }); reveal(logEl, card, true, 16); } }
-async function answer(id, value, why = "") {
+async function answer(id, value, why = "", always = false) {
   buzz(value === "y" ? 10 : 6);
   // A yes to a draft sends it as the card holds it now, changes and all.
   const draft = value === "y" ? draftOf(messagesEl.querySelector(`[data-ask="${id}"]`)) : null;
-  await api("/api/answer", { id, answer: value, why, ...(draft ? { draft } : {}) }).catch(showFailure);
+  await api("/api/answer", { id, answer: value, why, ...(draft ? { draft } : {}), ...(always && value === "y" ? { always: true } : {}) }).catch(showFailure);
   input.focus();
 }
 function answerPending(value) { const card = pendingAsk(); if (!card) return false; answer(card.dataset.ask, value); return true; }

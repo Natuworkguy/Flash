@@ -91,6 +91,7 @@ from . import (
     pings,
     progress,
     providers,
+    rules,
     scope,
     showcase,
     skills,
@@ -124,6 +125,7 @@ from .theme import (
     capture_tool_output,
     console,
     offered_draft,
+    offered_rule,
     set_edited_draft,
 )
 from .tidy import OutGuard
@@ -633,6 +635,10 @@ class Ask:
     # to be changed first, and as the user sent it, when they changed it.
     draft: Optional[dict] = None
     edited: Optional[dict] = None
+    # The standing rule an Always allow beside it would keep (rules.py),
+    # and the rule kept, when the user pressed it.
+    rule: Optional[dict] = None
+    kept: Optional[dict] = None
 
 
 # Events that are part of the conversation and drawn again on reload.
@@ -2211,12 +2217,14 @@ class Session:
 
         def ask(question: str) -> str:
             entry = Ask(id=uuid.uuid4().hex[:8], chat=chat.id,
-                        question=question, draft=offered_draft())
+                        question=question, draft=offered_draft(),
+                        rule=offered_rule())
             proposal = livedocs.take_proposal()
             self.asks[entry.id] = entry
             self.emit(chat, {
                 "type": "ask", "id": entry.id, "question": question,
                 **({"draft": entry.draft} if entry.draft else {}),
+                **({"rule": entry.rule["words"]} if entry.rule else {}),
             })
             if proposal is not None:
                 self.document_proposed(entry.id, *proposal)
@@ -2236,6 +2244,7 @@ class Session:
                 **({"why": entry.why} if entry.why else {}),
                 **({"edited": True} if answer == "y" and entry.edited
                    else {}),
+                **({"kept": rules.words(entry.kept)} if entry.kept else {}),
             })
             # The reason, on a line of its own after the answer.
             return f"{answer}\n{entry.why}" if entry.why else answer
@@ -2244,6 +2253,7 @@ class Session:
 
     def answer(
         self, ask_id: str, answer: str, why: str = "", draft: Any = None,
+        always: bool = False,
     ) -> bool:
         entry = self.asks.get(ask_id)
         if entry is None:
@@ -2251,10 +2261,15 @@ class Session:
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
         if entry.answer == "n":
             entry.why = " ".join(str(why or "").split())[:500]
-        elif entry.draft and draft:
-            # Only a draft that was offered can come back changed, and
-            # only in the fields of its own kind.
-            entry.edited = drafts.changed(entry.draft, draft)
+        else:
+            if entry.draft and draft:
+                # Only a draft that was offered can come back changed,
+                # and only in the fields of its own kind.
+                entry.edited = drafts.changed(entry.draft, draft)
+            if always and entry.rule:
+                # The rule kept is the one Flash offered, never one the
+                # page names: the page only says yes to it.
+                entry.kept = rules.keep(entry.rule)
         entry.done.set()
         return True
 
@@ -6755,6 +6770,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
 
+    if name == "rules":
+        # The user's standing rules (rules.py): listed, made or taken
+        # away, from Settings.
+        if arg == "add":
+            # A ValueError says what is missing, as the page shows it.
+            rules.add(str(body.get("kind") or ""),
+                      str(body.get("match") or ""),
+                      str(body.get("verdict") or ""))
+        elif arg == "remove":
+            rules.remove(str(body.get("id") or ""))
+        return {"rules": [dict(r, words=rules.words(r))
+                          for r in rules.load()]}
+
     if name == "checkins":
         # What to tell the user about, and quiet hours: read, or changed.
         from . import checkins
@@ -9023,6 +9051,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": session.answer(
                     str(body.get("id", "")), str(body.get("answer", "")),
                     str(body.get("why") or ""), body.get("draft"),
+                    body.get("always") is True,
                 )
             }
 

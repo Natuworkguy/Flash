@@ -112,6 +112,8 @@ COMMANDS = [
     ("/skills", "procedures Flash has learned (/skills show|remove|code <name>, /skills add <code>)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
+    ("/rules", "standing rules: list, /rules allow|ask|never <command>, "
+               "/rules allow|ask|never files <folder>, /rules remove N"),
     ("/tasks", "background tasks: list, /tasks <id> for one's output, /tasks stop <id>"),
     ("/sparks", "agents that keep working on a goal (new, chat <name>)"),
     ("/call", "a voice call with a spark: /call <name>; /call take to "
