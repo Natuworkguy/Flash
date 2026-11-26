@@ -133,6 +133,7 @@ and cannot point outside it.
 | `voice` | A program in the middle of voice mode: told what is said both ways, and able to change it. See below. |
 | `settings` | Choices the user makes for the extension, in its own settings panel. See below. |
 | `ui` | What it changes of the web page and the terminal: its own stylesheet and script, panels, buttons, a status line, the greeting, the banner. See below. |
+| `device` | A device it brings (a watch, a robot, a TV), on Flash's Devices page. See Devices. |
 | `network` | `true` opens Flash's web UI to your network whenever Flash starts, as `--lan` does: for an extension that pairs a device, such as a watch, that reaches Flash there. The install preview says so. |
 
 ### Commands
@@ -270,6 +271,36 @@ the device as the signal `say` (`{"text", "id"}`) instead of playing it,
 and waits for the device's `said` (`{"id"}`) before the next; a line it
 never hears back about is given up on after as long as it could take to
 say. Cut short (talked over, "stop voice"), it signals `hush`.
+
+### Devices
+
+An extension that brings a device says so, and Flash's **Devices** page
+(in the sidebar) gives it a section of its own: how to connect a new one,
+a pairing code just for it, and the ones paired, each to rename or remove.
+
+```json
+"device": {
+  "label": "TV",
+  "icon": "monitor",
+  "matches": ["GoogleTV", "AndroidTV"],
+  "connect": ["Open Flash on the TV.", "Type Flash's address and the code shown here."],
+  "app": "https://example.com/get-the-app"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `label` | What the device is called on the page. The extension's name if left out. |
+| `icon` | One of the page's icon names. |
+| `matches` | Words in what its devices say they are (the end of their `FlashDevice/1.0 ...` User-Agent), to know ones paired before codes were each extension's own. |
+| `connect` | Up to 8 steps, each up to 300 characters. |
+| `app` | Where to get the device's app, a web address. |
+
+Each extension's code is its own: a device that pairs with the TV's code
+is the TV extension's, whatever it says it is. From the extension's page,
+`Flash.request("device-pair", "<extension>")` makes that code too, and
+`{"cancel": true}` as the body stops it. A device that pairs is announced
+on the event stream as `{"type": "paired", "name", "extension"}`.
 
 ### Themes
 

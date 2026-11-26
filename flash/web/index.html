@@ -2294,6 +2294,27 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .browser-row .sub { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-row .btn { flex: none; padding: 6px 12px; font-size: 13px; }
 .browser-empty { padding: 18px 16px; color: var(--text-3); font-size: 14px; }
+/* Devices: a section for each extension that brings a device, with how to connect one, its own pairing code and its devices */
+.dev-group { max-width: 680px; margin: 0 0 34px; }
+.dev-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.dev-head .badge { flex: none; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.dev-head .badge svg { width: 19px; height: 19px; }
+.dev-head .what { flex: 1; min-width: 0; }
+.dev-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.dev-head p { margin: 1px 0 0; font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-connect { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 16px 18px; margin-bottom: 12px; display: grid; grid-template-columns: 1fr auto; gap: 14px 22px; align-items: start; }
+.dev-connect h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.dev-connect ol { margin: 0; padding-left: 20px; font-size: 14px; color: var(--text-2); line-height: 1.55; }
+.dev-connect ol li + li { margin-top: 3px; }
+.dev-connect .app { display: inline-block; margin-top: 10px; font-size: 13px; color: var(--accent); }
+.dev-code { min-width: 190px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.dev-code .digits { font: 600 30px/1 var(--mono, ui-monospace, monospace); letter-spacing: .14em; color: var(--text); padding: 12px 16px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border-strong); }
+.dev-code .left { font-size: 12px; color: var(--text-3); }
+.dev-code .where { font-size: 12px; color: var(--text-3); max-width: 220px; overflow-wrap: anywhere; }
+.dev-code .row { display: flex; gap: 8px; }
+.dev-warn { grid-column: 1 / -1; font-size: 13px; color: var(--warn); margin: 0; }
+.dev-group .browser-list { max-width: none; }
+@media (max-width: 620px) { .dev-connect { grid-template-columns: 1fr; } .dev-code { align-items: flex-start; text-align: left; } }
 .btn.danger { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); white-space: nowrap; }
 .btn.danger:hover { background: color-mix(in srgb, var(--del) 10%, transparent); }
 .btn.danger.solid { background: var(--del); color: #fff; border-color: transparent; }
@@ -4703,6 +4724,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <div id="spark-roster" aria-label="Your sparks"></div>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
     <div id="ext-side"></div>
+    <button class="side-row" id="devices-btn" data-tip="Devices: connect a watch, a robot, a TV"></button>
     <button class="side-row in-more" id="side-more" data-tip="More" aria-haspopup="menu"></button>
     </div>
     <button class="side-label" id="recents-btn" type="button" aria-expanded="true" aria-controls="chats"><span>Recents</span><span class="count"></span><i></i></button>
@@ -5176,7 +5198,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/skills(?:\/(knowledge))?\/?$/))) {
     view = "skills";
     skillsTab = m[1] ? "knowledge" : "mine";
-  } else if ((m = path.match(/^\/(projects|sparks|extensions|made)\/?$/))) {
+  } else if ((m = path.match(/^\/(projects|sparks|extensions|devices|made)\/?$/))) {
     view = m[1];
   } else if (/^\/briefing\/?$/.test(path)) {
     // The briefing, over a new chat: it opens once the page is in.
@@ -10448,11 +10470,11 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
-  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions" || view === "made" || view === "inbox");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions" || view === "devices" || view === "made" || view === "inbox");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage, made: drawMadePage, inbox: drawInboxPage };
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage, devices: drawDevicesPage, made: drawMadePage, inbox: drawInboxPage };
   (pages[view] || drawProject)();
   renderPending();
   renderBtw();
@@ -11900,6 +11922,121 @@ function toolPage(title, draw) {
   draw(body);
 }
 const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
+const drawDevicesPage = () => toolPage("Devices", drawDevices);
+
+// Devices: one page for every extension that brings a device (a watch, a robot, a TV). Each has how to connect a
+// new one, a pairing code of its own (a device that pairs with it is that extension's), and the ones paired, to
+// rename, remove or open the extension's own page for.
+let devicesBody = null;
+let devicesTimer = 0;
+function redrawDevices() { if (devicesBody && devicesBody.isConnected) drawDevices(devicesBody); }
+async function drawDevices(body) {
+  devicesBody = body;
+  let said;
+  try { said = await command("devices"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  body.textContent = "";
+  body.appendChild(el("p", "settings-sub", "Each extension that brings a device has its own place here: how to connect one, a pairing code just for it, and the ones you have."));
+  if (!said.groups.length) {
+    body.appendChild(el("p", "page-empty", "No extension here brings a device yet. Flash for Apple Watch, Flash Bot and Flash for TV each add one, from the Extensions page."));
+  }
+  for (const g of said.groups) body.appendChild(deviceGroup(g, said));
+  if (said.other.length) {
+    const other = el("div", "dev-group");
+    other.innerHTML = `<div class="dev-head"><span class="badge">${icon("phone")}</span><span class="what"><h2>Other devices</h2><p>Paired with Flash, but no extension here says they are its own.</p></span></div><div class="browser-list dev-list"></div>`;
+    for (const b of said.other) other.querySelector(".dev-list").appendChild(deviceRow(b, null));
+    body.appendChild(other);
+  }
+  clearInterval(devicesTimer);
+  devicesTimer = setInterval(() => {
+    if (!body.isConnected) { clearInterval(devicesTimer); return; }
+    for (const left of body.querySelectorAll(".dev-code .left[data-until]")) {
+      const s = Math.max(0, Math.round(+left.dataset.until - Date.now() / 1000));
+      left.textContent = s ? `Good for ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "Ran out";
+      if (!s) redrawDevices();
+    }
+  }, 1000);
+}
+
+function deviceGroup(g, said) {
+  const group = el("div", "dev-group");
+  group.dataset.ext = g.extension;
+  group.innerHTML = `<div class="dev-head"><span class="badge">${icon(ICON[g.icon] ? g.icon : "monitor")}</span><span class="what"><h2></h2><p></p></span></div>` +
+    `<div class="dev-connect"><div class="how"><h3>Connect a new one</h3><ol></ol></div><div class="dev-code"></div></div><div class="browser-list dev-list"></div>`;
+  group.querySelector("h2").textContent = g.label;
+  group.querySelector(".dev-head p").textContent = g.about || `From the ${g.extension} extension`;
+  const head = group.querySelector(".dev-head");
+  if (g.panel) {
+    const go = el("button", "btn small", "Open its page");
+    go.type = "button";
+    go.onclick = () => {
+      const panel = extPanels().find((p) => p.ext === g.extension && p.id === g.panel);
+      if (panel) openExtPanel(panel.url, panel.label, panel); else toast("That extension's page isn't loaded");
+    };
+    head.appendChild(go);
+  }
+  const steps = group.querySelector("ol");
+  for (const step of g.connect.length ? g.connect : ["Open its app on the device.", "Type in the code shown here."]) steps.appendChild(el("li", "", "")).textContent = step;
+  if (g.app) {
+    const a = el("a", "app", "Get the app");
+    a.href = g.app;
+    a.target = "_blank";
+    a.rel = "noopener";
+    group.querySelector(".how").appendChild(a);
+  }
+  const box = group.querySelector(".dev-code");
+  const where = (said.addresses || []).find((a) => !/127\.0\.0\.1|localhost|\[::1\]/.test(a)) || (said.addresses || [])[0] || "";
+  if (g.code) {
+    box.innerHTML = `<span class="digits"></span><span class="left"></span><span class="where"></span><span class="row"><button type="button" class="btn small" data-new>New code</button><button type="button" class="btn small" data-stop>Stop</button></span>`;
+    box.querySelector(".digits").textContent = g.code.code.replace(/(\d{3})(\d{3})/, "$1 $2");
+    box.querySelector(".left").dataset.until = g.code.expires;
+    box.querySelector(".where").textContent = where ? `Flash is at ${where.replace(/^https?:\/\//, "")}` : "";
+    box.querySelector("[data-new]").onclick = () => pairCode(g.extension);
+    box.querySelector("[data-stop]").onclick = async () => {
+      try { await command("device-pair", g.extension, null, { cancel: true }); } catch (error) { showFailure(error); }
+      redrawDevices();
+    };
+  } else {
+    const make = el("button", "btn primary", "Show a pairing code");
+    make.type = "button";
+    make.onclick = () => pairCode(g.extension);
+    box.appendChild(make);
+    box.appendChild(el("span", "left", `A code just for ${g.label}, good for five minutes.`));
+  }
+  if (!said.lan) {
+    group.querySelector(".dev-connect").appendChild(el("p", "dev-warn", "Flash is only open to this computer right now, so a device can't reach it. Start it with --lan, or install the extension again so it opens Flash to your network when it starts."));
+  }
+  const list = group.querySelector(".dev-list");
+  if (!g.devices.length) list.innerHTML = `<div class="browser-empty">None yet.</div>`;
+  for (const b of g.devices) list.appendChild(deviceRow(b, g));
+  return group;
+}
+
+async function pairCode(extension) {
+  try { await command("device-pair", extension); } catch (error) { showFailure(error); return; }
+  redrawDevices();
+}
+
+function deviceRow(b, g) {
+  const row = el("div", "browser-row", `<span class="dev${b.active ? " live" : ""}">${icon(g && ICON[g.icon] ? g.icon : b.phone ? "phone" : "monitor")}</span><span class="who"><span class="name"><span class="device"></span></span><span class="sub"></span></span>`);
+  row.dataset.id = b.id;
+  row.querySelector(".device").textContent = b.device;
+  row.querySelector(".sub").textContent = [b.address, b.active ? "Connected now" : `Seen ${ago(b.seen)}`, `Paired ${when(b.since)}`].join(" · ");
+  const rename = el("button", "icon-btn", icon("edit"));
+  rename.type = "button";
+  rename.dataset.tip = "Rename";
+  rename.setAttribute("aria-label", `Rename ${b.device}`);
+  rename.onclick = () => renameDevice(b, row.querySelector(".device"));
+  row.appendChild(rename);
+  const out = el("button", "btn danger", "Remove");
+  out.type = "button";
+  out.onclick = async () => {
+    if (!(await confirmPop(out, { title: `Remove ${b.device}?`, text: "It is signed out of Flash at once. To use it again, pair it with a new code.", yes: "Remove" }))) return;
+    signOut(b);
+  };
+  row.appendChild(out);
+  return row;
+}
 
 // Made: everything Flash made, in every chat, newest first. Each opens in
 // the chat that made it, scrolled to where it was shown.
@@ -18323,6 +18460,7 @@ function markSide() {
   $("#inbox-btn").classList.toggle("on", view === "inbox");
   $("#sparks-btn").classList.toggle("active", !panel && view === "sparks");
   $("#extensions-btn").classList.toggle("active", !panel && view === "extensions");
+  $("#devices-btn").classList.toggle("active", !panel && view === "devices");
   $("#settings-btn").classList.toggle("active", !panel && view === "settings");
   for (const row of document.querySelectorAll("#sidebar .ext-row[data-url]")) row.classList.toggle("active", row.dataset.url === panel);
 }
@@ -21679,7 +21817,8 @@ function apply(event) {
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
   if (event.type === "voice-model") { voiceModelEvent(event); return; }
   if (event.type === "sparks") { sparksChanged(); return; }
-  if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
+  if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); if (view === "devices") redrawDevices(); return; }
+  if (event.type === "paired") { if (view === "devices") { toast(`Paired ${event.name || "a device"}`); redrawDevices(); } return; }
   if (event.type === "notify") { notified(event); return; }
   if (event.type === "ping") { pinged(event); return; }
   if (event.type === "team-chat") { teamChatChanged(event.team); callsElsewhereChanged(); return; }
@@ -26675,6 +26814,7 @@ const ACTIONS = [
   { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
+  { label: "Devices", keys: "", slash: "/devices", run: () => showPage("devices") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
   { label: `Listen for “${wakeName()}”, or stop`, keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
@@ -27562,6 +27702,7 @@ $("#projects-btn").onclick = showProjects;
 $("#skills-btn").onclick = () => showPage("skills");
 $("#sparks-btn").onclick = () => showPage("sparks");
 $("#extensions-btn").onclick = () => showPage("extensions");
+$("#devices-btn").onclick = () => showPage("devices");
 $("#crumb").onclick = () => { const c = chats.get(current); const id = c ? c.project : viewProject; if (id) openProject(id, "back"); };
 $("#title").onclick = rename;
 $("#keys-btn").onclick = () => openHelp();
@@ -27719,6 +27860,7 @@ $("#spark-roster").addEventListener("scroll", rosterMore, { passive: true });
 $("#sidebar").addEventListener("scroll", rosterMore, { passive: true });
 addEventListener("resize", rosterMore);
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
+$("#devices-btn").innerHTML = icon("monitor") + "<span>Devices</span>";
 
 // ---------------------------------------------------------------------------
 // The rows under New chat, in the order the user put them, and any of them
@@ -27727,7 +27869,7 @@ $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 // Kept for this browser. A spark list and the extensions' rows go with
 // the row they belong to.
 const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["clock-btn", "Clock"], ["projects-btn", "Projects"], ["made-btn", "Made"],
-  ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"]];
+  ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"], ["devices-btn", "Devices"]];
 // Rows in the More menu until you move them out: the ones most people open now and then, not every day.
 const SIDE_TUCKED = new Set(["made-btn", "skills-btn", "extensions-btn"]);
 const SIDE_WITH = { "sparks-btn": "spark-roster", "extensions-btn": "ext-side" };

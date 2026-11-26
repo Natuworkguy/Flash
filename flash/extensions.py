@@ -377,6 +377,53 @@ class Inbox:
 
 
 @dataclass
+class Device:
+    """A device the extension brings (a watch, a robot, a TV): shown on
+    Flash's Devices page with how to connect one, a pairing code of its
+    own, and the ones paired."""
+
+    label: str
+    # Words in what its devices say they are ("GoogleTV"), to know ones
+    # paired before each extension had its own code.
+    matches: list[str] = field(default_factory=list)
+    # How to connect a new one, a step a line.
+    connect: list[str] = field(default_factory=list)
+    # Where to get its app, if it has one.
+    app: str = ""
+    icon: str = ""
+
+
+MAX_DEVICE_STEPS = 8
+DEVICE_STEP_CHARS = 300
+
+
+def _device(entry: Any, name: str) -> Device:
+    if not isinstance(entry, dict):
+        raise ExtensionError('"device" has to be an object')
+    label = _text(entry.get("label"), "device.label") or name
+    matches = entry.get("matches") or []
+    if isinstance(matches, str):
+        matches = [matches]
+    if not isinstance(matches, list) or not all(isinstance(m, str) and m.strip() for m in matches):
+        raise ExtensionError('"device": "matches" has to be a list of words')
+    steps = entry.get("connect") or []
+    if isinstance(steps, str):
+        steps = [steps]
+    if not isinstance(steps, list) or not all(isinstance(t, str) for t in steps):
+        raise ExtensionError('"device": "connect" has to be a list of steps')
+    if len(steps) > MAX_DEVICE_STEPS:
+        raise ExtensionError(f'"device": at most {MAX_DEVICE_STEPS} steps to connect')
+    if any(len(t) > DEVICE_STEP_CHARS for t in steps):
+        raise ExtensionError(f'"device": a step is at most {DEVICE_STEP_CHARS} characters')
+    app = _text(entry.get("app"), "device.app")
+    if app and not app.startswith(("https://", "http://")):
+        raise ExtensionError('"device": "app" has to be a web address')
+    return Device(label=label[:40], matches=[m.strip()[:40] for m in matches][:6],
+                  connect=[t.strip() for t in steps if t.strip()], app=app,
+                  icon=_text(entry.get("icon"), "device.icon")[:24])
+
+
+@dataclass
 class Service:
     """A program that runs for as long as Flash's web page does: started
     with it, started again if it stops, stopped with it (services.py)."""
@@ -418,11 +465,15 @@ class Extension:
     # Flash's web UI is opened to the network when Flash starts, as with
     # --lan: for a device it pairs, a watch say, that reaches it there.
     network: bool = False
+    # A device it brings, for the Devices page.
+    device: Optional[Device] = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
 
         lines = []
+        if self.device:
+            lines.append(f"devices: {self.device.label}, on the Devices page with a pairing code of its own")
 
         if self.network:
             lines.append(
@@ -1148,15 +1199,17 @@ def load(root: Path) -> Extension:
 
     services = (_services(manifest["services"], root)
                 if manifest.get("services") is not None else [])
+    device = (_device(manifest["device"], name)
+              if manifest.get("device") is not None else None)
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
             or system_one or tunnels or briefing or inbox or knowledge
-            or services):
+            or services or device):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, system_one, tunnels, briefing, inbox, ui, knowledge "
-            "or services"
+            "speech, system_one, tunnels, briefing, inbox, ui, knowledge, "
+            "services or device"
         )
 
     try:
@@ -1189,6 +1242,7 @@ def load(root: Path) -> Extension:
         inbox=inbox,
         services=services,
         network=_network(manifest.get("network", False)),
+        device=device,
     )
 
 

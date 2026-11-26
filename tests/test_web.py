@@ -669,6 +669,74 @@ class TestPairing:
         assert request(server, "POST", "/api/pair", {"code": code},
                        token=False)[0] == 400
 
+    def test_each_extension_has_its_own_code(self, server, monkeypatch):
+        from flash import extensions
+
+        monkeypatch.setattr(extensions, "find", lambda name: object() if name in ("tv", "watch") else None)
+        tv = web.command(server.session, {"name": "device-pair", "arg": "tv"})["code"]
+        watch = web.command(server.session, {"name": "device-pair", "arg": "watch"})["code"]
+        assert tv != watch  # nosec B101
+        assert set(server.session.pairing.live()) == {"tv", "watch"}  # nosec B101
+
+        status, body = request(server, "POST", "/api/pair", {"code": tv, "name": "Living room"},
+                               headers={"User-Agent": "FlashDevice/1.0 GoogleTV"}, token=False)
+        assert status == 200  # nosec B101
+        listed = [b for b in server.session.access.listing("", set()) if b["paired"]]
+        assert [(b["device"], b["extension"], b["product"]) for b in listed] == [  # nosec B101
+            ("Living room", "tv", "tv")]
+        # the watch's code is still out; the TV's was used up
+        assert set(server.session.pairing.live()) == {"watch"}  # nosec B101
+
+    def test_an_unknown_extension_gets_no_code(self, server):
+        with pytest.raises(ValueError, match="No extension"):
+            web.command(server.session, {"name": "device-pair", "arg": "nothing-here"})
+
+    def test_a_wrong_try_counts_against_every_code(self):
+        pairing = web.Pairing()
+        a = pairing.start("tv")["code"]
+        pairing.start("watch")
+        wrong = next(f"{n:06d}" for n in range(10 ** 6) if f"{n:06d}" not in {a, pairing.live()["watch"]["code"]})
+        for _ in range(web.PAIR_TRIES):
+            assert pairing.take(wrong) is None  # nosec B101
+        assert pairing.live() == {}  # nosec B101
+        assert pairing.take(a) is None  # nosec B101
+
+    def test_the_devices_page_groups_them(self, server, tmp_path, monkeypatch):
+        from flash import extensions
+
+        folder = tmp_path / "tv"
+        folder.mkdir()
+        (folder / "flash-extension.json").write_text(json.dumps({
+            "name": "tv",
+            "description": "Flash on a TV",
+            "device": {"label": "TV", "matches": ["GoogleTV"], "connect": ["Open Flash on the TV.", "Type the code."],
+                       "app": "https://example.com/flash-tv"},
+        }), encoding="utf-8")
+        ext = extensions.load(folder)
+        monkeypatch.setattr(extensions, "installed", lambda: [ext])
+        monkeypatch.setattr(extensions, "find", lambda name: ext if name == "tv" else None)
+        access = server.session.access
+        access.sign_in("10.0.0.7", "FlashDevice/1.0 Den", "GoogleTV")           # paired before codes were each one's
+        access.sign_in("10.0.0.8", "FlashDevice/1.0 Wrist", "watchOS")          # no extension here claims it
+        code = web.command(server.session, {"name": "device-pair", "arg": "tv"})["code"]
+
+        page = web.command(server.session, {"name": "devices"})
+        [group] = page["groups"]
+        assert group["label"] == "TV" and group["connect"] == ["Open Flash on the TV.", "Type the code."]  # nosec B101
+        assert group["code"]["code"] == code  # nosec B101
+        assert [b["device"] for b in group["devices"]] == ["Den"]  # nosec B101
+        assert [b["device"] for b in page["other"]] == ["Wrist"]  # nosec B101
+
+    def test_a_device_is_checked(self, tmp_path):
+        from flash import extensions
+
+        folder = tmp_path / "bad"
+        folder.mkdir()
+        (folder / "flash-extension.json").write_text(json.dumps({
+            "name": "bad", "device": {"label": "X", "app": "file:///etc/passwd"}}), encoding="utf-8")
+        with pytest.raises(extensions.ExtensionError, match="web address"):
+            extensions.load(folder)
+
     def test_no_code_no_pairing(self, server):
         assert request(server, "POST", "/api/pair", {"code": "000000"},
                        token=False)[0] == 400

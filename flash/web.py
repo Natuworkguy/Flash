@@ -214,7 +214,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills(?:/knowledge)?"
-    r"|sparks|extensions|made"
+    r"|sparks|extensions|devices|made"
     r"|briefing|x/[a-z0-9][a-z0-9_-]{0,63}/[a-z][a-z0-9_-]{0,31}"
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
@@ -809,9 +809,11 @@ class Access:
         with self._lock:
             return bool(key) and _hashed(key) in self._gone
 
-    def sign_in(self, address: str, agent: str, product: str = "") -> str:
+    def sign_in(self, address: str, agent: str, product: str = "",
+                extension: str = "") -> str:
         """Sign a browser in, and give back the key for its cookie.
-        PRODUCT: what a paired device says it is ("watchOS", "FlashBot/0.1")."""
+        PRODUCT: what a paired device says it is ("watchOS", "FlashBot/0.1");
+        EXTENSION: the one whose code it paired with, whose device it is."""
 
         key = secrets.token_urlsafe(24)
         now = time.time()
@@ -823,6 +825,7 @@ class Access:
                 "since": now,
                 "seen": now,
                 **({"product": product[:AGENT_CHARS]} if product else {}),
+                **({"ext": extension[:64]} if extension else {}),
             }
             while len(self._browsers) > MAX_BROWSERS:
                 stalest = min(
@@ -941,6 +944,11 @@ class Access:
                 "current": key == mine,
                 "active": key in live,
                 "desk": bool(b.get("desk")),
+                # The extension it paired through, and what it said it is
+                # (for one paired before codes were each extension's own).
+                "extension": b.get("ext", ""),
+                "said": b.get("product", "")
+                if DEVICE_AGENT in b.get("agent", "") else "",
             }
             for key, b in items
         ]
@@ -962,27 +970,57 @@ DEVICE_AGENT = "FlashDevice/"
 
 
 class Pairing:
-    """A short code a device types in to be signed in, like a browser.
+    """Short codes a device types in to be signed in, like a browser.
 
     A device with no camera for the QR code, and no good way to type a
-    long link, gets six digits to type instead. One code at a
-    time: it ends when it is used, after five minutes, or after five
-    wrong tries, which leaves a guesser one chance in two hundred
-    thousand.
+    long link, gets six digits to type instead. Each extension that
+    brings a device has a code of its own (and there is one for no
+    extension in particular), so a device paired with the TV's code is
+    the TV extension's. A code ends when it is used, after five minutes,
+    or after five wrong tries at any code, which leaves a guesser one
+    chance in two hundred thousand for each code out.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.code = ""
-        self.until = 0.0
-        self.tries = 0
+        # extension ("" for none): [code, until, tries]
+        self._codes: dict[str, list] = {}
         self._announcing = False
 
+    # The code for no extension in particular, as it was before each had
+    # its own.
+    @property
+    def code(self) -> str:
+        return self._codes.get("", ["", 0.0, 0])[0]
+
+    @property
+    def until(self) -> float:
+        return self._codes.get("", ["", 0.0, 0])[1]
+
+    @until.setter
+    def until(self, when: float) -> None:
+        with self._lock:
+            if "" in self._codes:
+                self._codes[""][1] = when
+
+    def _prune(self) -> None:
+        now = time.time()
+        for ext in [e for e, c in self._codes.items() if not c[0] or now > c[1]]:
+            del self._codes[ext]
+
     def waiting(self) -> bool:
-        """Whether a code is out and still good."""
+        """Whether any code is out and still good."""
 
         with self._lock:
-            return bool(self.code) and time.time() <= self.until
+            self._prune()
+            return bool(self._codes)
+
+    def live(self) -> dict:
+        """Each extension's code still out: {extension: {code, expires}}."""
+
+        with self._lock:
+            self._prune()
+            return {e: {"code": c[0], "expires": c[1]} for e, c in self._codes.items()}
 
     def announce(self, port: int) -> None:
         """While a code is waiting, say once a second, to this network
@@ -1015,32 +1053,38 @@ class Pairing:
 
         threading.Thread(target=say, name="pair-beacon", daemon=True).start()
 
-    def start(self) -> dict:
+    def start(self, extension: str = "") -> dict:
         with self._lock:
-            self.code = f"{secrets.randbelow(10 ** 6):06d}"
-            self.until = time.time() + PAIR_SECONDS
-            self.tries = 0
-            return {"code": self.code, "expires": self.until}
+            self._prune()
+            taken = {c[0] for e, c in self._codes.items() if e != extension}
+            code = f"{secrets.randbelow(10 ** 6):06d}"
+            while code in taken:
+                code = f"{secrets.randbelow(10 ** 6):06d}"
+            until = time.time() + PAIR_SECONDS
+            self._codes[extension] = [code, until, 0]
+            return {"code": code, "expires": until, "extension": extension}
 
-    def cancel(self) -> None:
+    def cancel(self, extension: str = "") -> None:
         with self._lock:
-            self.code = ""
+            self._codes.pop(extension, None)
 
-    def take(self, given: str) -> bool:
-        """Whether GIVEN is the code, which is then used up."""
+    def take(self, given: str) -> Optional[str]:
+        """Whose code GIVEN is (an extension's name, or "" for none), the
+        code then used up; None for no code at all."""
 
         given = "".join(ch for ch in str(given) if ch.isdigit())
         with self._lock:
-            if not self.code or time.time() > self.until:
-                self.code = ""
-                return False
-            if secrets.compare_digest(given.encode(), self.code.encode()):
-                self.code = ""
-                return True
-            self.tries += 1
-            if self.tries >= PAIR_TRIES:
-                self.code = ""
-            return False
+            self._prune()
+            for ext, c in list(self._codes.items()):
+                if secrets.compare_digest(given.encode(), c[0].encode()):
+                    del self._codes[ext]
+                    return ext
+            # a wrong try counts against every code out
+            for ext, c in list(self._codes.items()):
+                c[2] += 1
+                if c[2] >= PAIR_TRIES:
+                    del self._codes[ext]
+            return None
 
 
 _BROWSER_NAMES = (
@@ -1062,6 +1106,47 @@ def device_product(user_agent: str) -> str:
 
     return user_agent.split(DEVICE_AGENT, 1)[1].partition(" ")[2].strip() \
         if DEVICE_AGENT in user_agent else ""
+
+
+def devices_page(session: Any, browser: str) -> dict:
+    """What the Devices page shows (see command "devices")."""
+
+    listed = [b for b in session.access.listing(browser, session.hub.owners())
+              if b["paired"]]
+    codes = session.pairing.live()
+    claimed: set = set()
+    groups = []
+    for ext in extensions.installed():
+        device = getattr(ext, "device", None)
+        if device is None:
+            continue
+        words = [w.lower() for w in device.matches]
+        mine = [
+            b for b in listed
+            if b["extension"] == ext.name or (
+                not b["extension"] and words
+                and any(w in b["said"].lower() for w in words))
+        ]
+        claimed |= {b["id"] for b in mine}
+        panels = getattr(getattr(ext, "ui", None), "panels", None) or []
+        groups.append({
+            "extension": ext.name,
+            "label": device.label,
+            "about": ext.description,
+            "connect": device.connect,
+            "app": device.app,
+            "icon": device.icon,
+            "panel": panels[0].id if panels else "",
+            "code": codes.get(ext.name),
+            "devices": mine,
+        })
+    return {
+        "groups": groups,
+        "other": [b for b in listed if b["id"] not in claimed],
+        "addresses": session.addresses(),
+        "lan": bool(getattr(session, "lan", False)),
+        "port": getattr(session, "port", 0),
+    }
 
 
 def device_kind(product: str) -> str:
@@ -6809,14 +6894,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"removed": arg}
 
     if name == "device-pair":
-        # A code for a device, and where it can reach this computer.
-        if arg == "cancel":
-            session.pairing.cancel()
+        # A code for a device, and where it can reach this computer: ARG
+        # the extension whose device it is (its own code), none for any.
+        if arg == "cancel" or body.get("cancel"):
+            session.pairing.cancel("" if arg == "cancel" else arg)
             return {}
-        made = session.pairing.start()
+        if arg and extensions.find(arg) is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        made = session.pairing.start(arg)
         if session.lan and session.port:
             session.pairing.announce(session.port)
         return {**made, "addresses": session.addresses()}
+
+    if name == "devices":
+        # The Devices page: each extension that brings a device, how to
+        # connect one, its code if one is out, and its devices; then any
+        # paired device no extension claims.
+        return devices_page(session, browser)
 
     if name == "addresses":
         # Where this Flash can be reached from now: a device away from
@@ -8622,7 +8716,8 @@ class Handler(BaseHTTPRequestHandler):
         session = self.server.session
 
         if path == "/api/pair":
-            if not session.pairing.take(str(body.get("code", ""))):
+            extension = session.pairing.take(str(body.get("code", "")))
+            if extension is None:
                 raise ValueError(
                     "That code did not work. Make a new one on the computer."
                 )
@@ -8632,9 +8727,10 @@ class Handler(BaseHTTPRequestHandler):
                 agent = f"{DEVICE_AGENT}1"
             key = session.access.sign_in(
                 self._address(), f"{agent.split()[0]} {name}".strip(),
-                device_product(agent))
+                device_product(agent), extension)
             session.hub.publish({"type": "browsers"})
-            session.hub.publish({"type": "paired", "name": name})
+            session.hub.publish({"type": "paired", "name": name,
+                                 "extension": extension})
             return {"key": key}
 
         if path == "/api/send":
