@@ -5868,6 +5868,38 @@ def small_view(summary: dict) -> dict:
     return out
 
 
+# The words a question a yes or a no answers starts with.
+_YES_NO_START = re.compile(
+    r"(should|shall|do|does|did|can|could|would|will|is|are|was|were|"
+    r"may|might|want|have|has|ok|okay|any)\b", re.IGNORECASE)
+
+
+def asks_yes_or_no(text: str) -> bool:
+    """Whether reply TEXT ends on a question a yes answers: its last
+    sentence asks, starts like "Should I" or "Do you", and offers no
+    choice of two ("this or that?")."""
+
+    text = re.sub(r"[*_`>#]+", "", str(text or "")).strip()
+    if not text.endswith("?"):
+        return False
+    last = re.split(r"(?<=[.!?])\s+|\n+", text[:-1])[-1].strip()
+    return bool(_YES_NO_START.match(last)) and not re.search(
+        r"\bor\b", last, re.IGNORECASE)
+
+
+def _last_reply(log: list) -> Optional[int]:
+    """Where in LOG the last reply is, when nothing the user said came
+    after it; else None."""
+
+    for at in range(len(log) - 1, -1, -1):
+        kind = log[at].get("type") if isinstance(log[at], dict) else None
+        if kind == "user":
+            return None
+        if kind == "assistant":
+            return at
+    return None
+
+
 def command(session: Session, body: dict, browser: str = "") -> dict:
     """The page's commands: models, modes, chats, undo.
 
@@ -6027,6 +6059,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         if entry.get("type") != "assistant" or arg not in (
                 "good", "bad", "clear"):
             raise ValueError("Only a reply can be rated good or bad.")
+        if arg == "good" and not entry.get("rating") \
+                and not (chat.busy or chat.queued) \
+                and _last_reply(chat.log) == at \
+                and asks_yes_or_no(str(entry.get("text") or "")):
+            # A thumbs-up on the last reply, when it asks a yes or no
+            # question, is a yes: the page sends it as the next message.
+            # Not a rating, so no review runs on it.
+            return {"rating": "", "answer": "Yes"}
         if arg == "clear":
             entry.pop("rating", None)
         else:

@@ -64,3 +64,59 @@ def test_the_terminal_rates_the_last_reply(monkeypatch):
                      [{"role": "assistant", "content": "Done."}])
     assert rated == [([{"role": "assistant", "content": "Done."}],  # nosec
                       "Done.", True, "short and right")]
+
+
+# --- A thumbs-up that answers a question ---------------------------------
+
+
+@pytest.mark.parametrize("text,asks", [
+    ("I drafted the fix. Should I open a PR to dev?", True),
+    ("Done.\n\n**Want me to push it?**", True),
+    ("Do you want the short version or the long one?", False),
+    ("Which file should I start with?", False),
+    ("Should I push it? Tests pass.", False),
+    ("", False),
+])
+def test_a_yes_or_no_question_is_told_from_others(text, asks):
+    assert web.asks_yes_or_no(text) is asks  # nosec B101
+
+
+def _chat_with(session, reply):
+    chat = session.new_chat()
+    chat.log += [{"type": "user", "text": "fix it"},
+                 {"type": "assistant", "text": reply}]
+    return chat
+
+
+def test_a_thumbs_up_on_the_last_question_is_a_yes(monkeypatch):
+    rated = []
+    monkeypatch.setattr(learning, "rated",
+                        lambda *a, **kw: rated.append(a))
+    session = web.Session()
+    chat = _chat_with(session, "It's fixed. Should I push it?")
+
+    said = web.command(session, {"name": "rate", "chat": chat.id,
+                                 "arg": "good", "at": 1})
+
+    assert said == {"rating": "", "answer": "Yes"}  # nosec B101
+    assert rated == [] and "rating" not in chat.log[1]  # nosec B101
+
+
+def test_a_thumbs_up_is_a_rating_once_the_user_has_moved_on(monkeypatch):
+    rated = []
+    monkeypatch.setattr(learning, "rated",
+                        lambda *a, **kw: rated.append(a))
+    monkeypatch.setattr(ai.Config, "model", "m")
+    session = web.Session()
+    chat = _chat_with(session, "It's fixed. Should I push it?")
+    chat.log.append({"type": "user", "text": "not yet"})
+
+    said = web.command(session, {"name": "rate", "chat": chat.id,
+                                 "arg": "good", "at": 1})
+
+    assert said == {"rating": "good"} and len(rated) == 1  # nosec B101
+    # A reply that asks nothing is rated as before.
+    chat = _chat_with(session, "It's fixed and pushed.")
+    assert web.command(session, {"name": "rate", "chat": chat.id,
+                                 "arg": "good", "at": 1}) == {  # nosec
+        "rating": "good"}

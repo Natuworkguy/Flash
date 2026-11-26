@@ -9799,21 +9799,24 @@ async function rateReply(row, entry, rating) {
   const at = Math.max(...blocks.map((b) => Number(b.dataset.log)).filter((n) => Number.isFinite(n)));
   if (!Number.isFinite(at)) return;
   const again = entry.rating === rating;
-  const send = async (why = "") => {
+  const rate = async (why = "") => {
     try {
       const said = await command("rate", again ? "clear" : rating, current, { at, why });
+      // A thumbs-up on the last reply, when it asks a yes or no question, answers it: Flash says so, and it goes as
+      // the next message. It is not kept as a rating.
+      if (said.answer) { send(said.answer); return; }
       entry.rating = said.rating || undefined;
       showRating(row, said.rating);
       if (!again) toast(rating === "good" ? "Thanks. Flash will keep doing that." : "Thanks. Flash will learn from it.");
     } catch (error) { showFailure(error); }
   };
   row.parentElement.querySelector(".rate-why")?.remove();
-  if (again || rating === "good") { send(); return; }
+  if (again || rating === "good") { rate(); return; }
   showRating(row, "bad");
-  const box = el("form", "rate-why", `<input type="text" maxlength="400" placeholder="What was wrong? (optional)" aria-label="What was wrong"><button type="submit" class="btn small primary">Send</button>`);
+  const box = el("form", "rate-why", `<input type="text" maxlength="400" placeholder="What should change? (optional)" aria-label="What should change"><button type="submit" class="btn small primary">Send</button>`);
   const field = box.querySelector("input");
-  box.onsubmit = (e) => { e.preventDefault(); box.remove(); send(field.value.trim()); };
-  field.onkeydown = (e) => { if (e.key === "Escape") { box.remove(); send(); } };
+  box.onsubmit = (e) => { e.preventDefault(); box.remove(); rate(field.value.trim()); };
+  field.onkeydown = (e) => { if (e.key === "Escape") { box.remove(); rate(); } };
   row.after(box);
   field.focus();
 }
