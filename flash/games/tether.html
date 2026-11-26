@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tether</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,900&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Tether: Paper ground, you in Tide, Flash in Ember, the rope between you in Iris, sparks in Volt, drones in Ink.
+     Flat colours, so a reflex reading pixels can tell everything apart. */
+  :root { --paper: #f3eee4; --oat: #e3dacc; --ink: #141210; --muted: #5b544b; --ember: #ff5a36; --tide: #2f6bff; --volt: #d7ff3a; --iris: #8f7fe0;
+    --display: Fraunces, Georgia, serif; --sans: "Space Grotesk", "Helvetica Neue", Arial, sans-serif; --mono: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: var(--sans); }
+  .wrap { min-height: 100%; display: grid; grid-template-rows: auto 1fr auto; gap: 14px; padding: 18px max(16px, env(safe-area-inset-left)); box-sizing: border-box; }
+  header { display: flex; align-items: end; justify-content: space-between; gap: 16px; flex-wrap: wrap; max-width: 960px; width: 100%; margin: 0 auto; }
+  h1 { font: 900 40px/.92 var(--display); letter-spacing: -.02em; margin: 0; }
+  .score { display: flex; gap: 10px; align-items: center; font: 500 13px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; background: var(--oat); }
+  .chip b { font: 600 20px/1 var(--mono); letter-spacing: 0; }
+  .chip i { width: 12px; height: 12px; border-radius: 50%; }
+  .marks { display: grid; gap: 6px; min-width: 150px; } .marks .bar { height: 6px; border-radius: 3px; background: var(--oat); overflow: hidden; } .marks .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .3s; }
+  .clock { font: 500 18px/1 var(--mono); min-width: 54px; text-align: right; }
+  .stage { position: relative; max-width: 960px; width: 100%; margin: 0 auto; align-self: start; }
+  canvas:focus { outline: none; }
+  canvas { display: block; width: 100%; height: auto; aspect-ratio: 960 / 600; border-radius: 28px; background: var(--paper); box-shadow: 0 24px 48px -24px rgba(20,18,16,.35), inset 0 0 0 2px var(--oat); }
+  .say { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; pointer-events: none; }
+  .say h2 { font: 900 clamp(34px, 7vw, 72px)/.92 var(--display); letter-spacing: -.02em; margin: 0 0 10px; }
+  .say p { font: 500 16px/1.4 var(--sans); color: var(--muted); margin: 0; }
+  footer { max-width: 960px; width: 100%; margin: 0 auto; font: 400 14px/1.5 var(--sans); color: var(--muted); display: flex; gap: 18px; flex-wrap: wrap; }
+  kbd { font: 500 12px/1 var(--mono); background: var(--oat); color: var(--ink); padding: 4px 7px; border-radius: 6px; }
+</style>
+<meta name="flash-game" content="Tether: a co-op game. You are orange (Flash, the F), the user is blue, tied by a rope 340 long in a 960 by 600 arena. Sparks (green) are caught by sweeping the rope through them or touching them; a drone (black disc) touching the rope cuts it and costs three; touching a player stuns them. 90 seconds, one shared score: 25 good, 45 great, 65 legendary. The page title says the phase (lobby, countdown, play, over), snapped while the rope is cut, and the score. Play it live: start the reflex below with look_every, then every look decide a plan from the screen and api.memory.seen (where everyone is): go, near, stay, follow, dodge or sharp, as the reflex's comments say, and talk to the user with say like a teammate. Space readies you in the lobby; the reflex does that.">
+<meta name="flash-invite" content="/">
+<script type="text/flash-reflex">
+// Tether's reflex: Flash's hands, run every frame by play_realtime. Flash's
+// head is the model, which looks in every few seconds and sets api.plan;
+// the reflex does what the plan says, fast, and keeps clear of drones.
+// api.plan (all optional):
+//   go: [x, y]       walk there and hold
+//   near: [x, y]     go for the spark nearest that point
+//   stay: true       hold still (an anchor for the user to swing round)
+//   follow: true     keep close behind the user
+//   dodge: false     stop pulling away from drones
+//   sharp: true      look every frame and dash, instead of a person's pace
+// What it sees goes in api.memory.seen, for the model to read when it looks.
+const ROPE = 340, P = api.plan || {}, M = api.memory, T = document.title, sharp = !!P.sharp;
+const hold = (k, on) => { M.k = M.k || {}; if (on && !M.k[k]) { api.press(k); M.k[k] = 1; } if (!on && M.k[k]) { api.release(k); M.k[k] = 0; } };
+const stop = () => ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].forEach(k => hold(k, false));
+const score = +(T.match(/together (\d+)/) || [])[1] || 0, cut = /snapped/.test(T);
+if (M.score !== undefined && score > M.score) api.log(`caught ${score - M.score}, together ${score}`);
+if (cut && !M.cut) api.log("the rope was cut");
+M.score = score; M.cut = cut;
+if (/lobby|over/.test(T)) { stop(); if (api.frame % 15 === 0) api.tap(" "); return; }
+if (!/play/.test(T)) { stop(); return; }
+if (!sharp && api.frame % 12 !== 0) return;   // a person's reaction time
+const solid = (b, r) => b.w > r && b.h > r && b.n > b.w * b.h * .45;
+const biggest = c => api.blobs(c, 0, 0, api.width, api.height, { tol: 30 }).filter(b => solid(b, 20)).sort((a, b) => b.n - a.n)[0];
+const me = biggest("#ff5a36"), mate = biggest("#2f6bff");
+if (!me) { stop(); return; }
+const sparks = api.blobs("#d7ff3a", 0, 0, api.width, api.height, { tol: 40 }).filter(b => b.w > 8);
+const drones = api.blobs("#141210", 0, 0, api.width, api.height, { tol: 30 }).filter(b => solid(b, 18));
+const xy = b => [Math.round(b.cx), Math.round(b.cy)];
+M.seen = { me: xy(me), user: mate ? xy(mate) : null, sparks: sparks.map(xy), drones: drones.map(xy), title: T };
+const clampX = x => Math.max(24, Math.min(api.width - 24, x)), clampY = y => Math.max(24, Math.min(api.height - 24, y));
+const segDist = (px, py, ax, ay, bx, by) => { const dx = bx - ax, dy = by - ay, n = dx * dx + dy * dy, k = n ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / n)) : 0; return Math.hypot(px - ax - k * dx, py - ay - k * dy); };
+const nearDrone = (x, y) => drones.reduce((m, d) => Math.min(m, Math.hypot(d.cx - x, d.cy - y)), 1e9);
+// where to stand for a spark: past it, on the line from the user, so the rope crosses it
+const standFor = s => {
+  if (!mate) return { x: s.cx, y: s.cy };
+  const dx = s.cx - mate.cx, dy = s.cy - mate.cy, d = Math.hypot(dx, dy) || 1;
+  if (d >= ROPE - 40) return { x: s.cx, y: s.cy };
+  const reach = Math.min(ROPE - 30, d + 80);
+  return { x: clampX(mate.cx + dx / d * reach), y: clampY(mate.cy + dy / d * reach) };
+};
+let goal = null, best = 1e9;
+if (P.stay) goal = { x: me.cx, y: me.cy };
+else if (Array.isArray(P.go)) goal = { x: clampX(+P.go[0]), y: clampY(+P.go[1]) };
+else if (P.follow && mate) { const dx = me.cx - mate.cx, dy = me.cy - mate.cy, d = Math.hypot(dx, dy) || 1; goal = d > 90 ? { x: mate.cx + dx / d * 80, y: mate.cy + dy / d * 80 } : { x: me.cx, y: me.cy }; }
+else if (Array.isArray(P.near) && sparks.length) {
+  const s = sparks.slice().sort((a, b) => Math.hypot(a.cx - P.near[0], a.cy - P.near[1]) - Math.hypot(b.cx - P.near[0], b.cy - P.near[1]))[0];
+  goal = standFor(s); best = Math.hypot(goal.x - me.cx, goal.y - me.cy);
+} else for (const s of sparks) {
+  const g = standFor(s);
+  let cost = Math.hypot(g.x - me.cx, g.y - me.cy);
+  if (mate && drones.some(q => segDist(q.cx, q.cy, mate.cx, mate.cy, g.x, g.y) < 40)) cost += 300;
+  if (nearDrone(s.cx, s.cy) < 60) cost += 250;
+  if (cost < best) { best = cost; goal = g; }
+}
+let gx = goal ? goal.x - me.cx : 0, gy = goal ? goal.y - me.cy : 0;
+const gl = Math.hypot(gx, gy);
+if (gl < 12) { gx = gy = 0; } else { gx /= gl; gy /= gl; }
+// keep clear of drones, and keep the rope clear: pull in when one comes close to it
+if (P.dodge !== false) for (const d of drones) {
+  const ax = me.cx - d.cx, ay = me.cy - d.cy, dist = Math.hypot(ax, ay) || 1;
+  if (dist < 110) { const k = (110 - dist) / 110 * 2; gx += ax / dist * k; gy += ay / dist * k; }
+  if (mate && segDist(d.cx, d.cy, mate.cx, mate.cy, me.cx, me.cy) < 55) {
+    const mx = mate.cx - me.cx, my = mate.cy - me.cy, ml = Math.hypot(mx, my) || 1; gx += mx / ml * 1.6; gy += my / ml * 1.6;
+  }
+}
+hold("ArrowRight", gx > .3); hold("ArrowLeft", gx < -.3); hold("ArrowDown", gy > .3); hold("ArrowUp", gy < -.3);
+if (sharp && goal && best > 220 && nearDrone(me.cx, me.cy) > 150 && api.frame % 6 === 0) api.tap(" ");
+</script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Tether</h1>
+    <div class="score">
+      <span class="chip"><i style="background:var(--tide)"></i><i style="background:var(--ember);margin-left:-4px"></i>Together<b id="sAll">0</b></span>
+      <span class="marks" aria-label="Marks"><span class="bar"><i id="bar"></i></span><span id="next">25 to good</span></span>
+      <span class="clock" id="clock">1:30</span>
+    </div>
+  </header>
+  <div class="stage">
+    <canvas id="cv" width="960" height="600" tabindex="0" aria-label="The arena"></canvas>
+    <div class="say" id="say"><div><h2 id="sayBig">Waiting for Flash</h2><p id="saySmall">Ask Flash to play Tether with you.</p></div></div>
+  </div>
+  <footer>
+    <span><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move</span>
+    <span><kbd>Space</kbd> to dash, and to say you're ready</span>
+    <span>You're tied to Flash. Sweep the rope through green sparks to catch them, or touch them. Keep the rope away from the black drones: if one touches it, it snaps and costs three. 90 seconds, one score: 25 is good, 45 great, 65 legendary.</span>
+  </footer>
+</div>
+<script>
+(() => {
+  const me = new URLSearchParams(location.search).get('as') === 'flash' ? 'flash' : 'you';
+  const them = me === 'you' ? 'flash' : 'you';
+  // what Flash says shows over its head, for both of you to see (play_realtime's say)
+  if (me === 'flash') window.flashSay = text => fetch('/say?as=flash', { method: 'POST', body: JSON.stringify({ text }) }).catch(() => {});
+  const COL = { you: '#2f6bff', flash: '#ff5a36', spark: '#d7ff3a', sparkRing: '#7d9a00', drone: '#141210', paper: '#f3eee4', oat: '#e3dacc', ink: '#141210', rope: '#8f7fe0' };
+  const cv = document.getElementById('cv'), g = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  let prev = null, cur = null, at = 0;
+
+  // ----- keys held, sent whenever they change, and every second so the arena knows we're here -----
+  const held = new Set(); let ready = false;
+  const KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', ' ', 'Shift']);
+  const norm = k => (k.length === 1 ? k.toLowerCase() : k);
+  function send() { fetch('/keys?as=' + me, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys: [...held], ready }), keepalive: true }).catch(() => {}); ready = false; }
+  addEventListener('keydown', e => { const k = norm(e.key); if (!KEYS.has(k)) return; e.preventDefault();
+    if (k === ' ' && cur && (cur.phase === 'lobby' || cur.phase === 'over')) ready = true;
+    if (!held.has(k) || ready) { held.add(k); send(); } });
+  addEventListener('keyup', e => { const k = norm(e.key); if (!KEYS.has(k)) return; e.preventDefault(); held.delete(k); send(); });
+  addEventListener('blur', () => { held.clear(); send(); });
+  setInterval(send, 1000); send();
+  cv.focus();
+
+  // ----- the game as the arena says it is -----
+  const es = new EventSource('/events');
+  es.onmessage = ev => { prev = cur; cur = JSON.parse(ev.data); at = performance.now(); hud(); };
+  es.onerror = () => { $('sayBig').textContent = 'The game has closed'; $('saySmall').textContent = 'Ask Flash to start Tether again.'; $('say').hidden = false; };
+
+  function clockText(s) { s = Math.ceil(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+  function hud() {
+    const P = cur.players, M = cur.marks;
+    $('sAll').textContent = cur.score;
+    const next = M.find(m => cur.score < m);
+    $('bar').style.width = `${Math.min(100, cur.score / M[2] * 100)}%`;
+    $('next').textContent = next ? `${next - cur.score} to ${['good', 'great', 'legendary'][M.indexOf(next)]}` : 'legendary';
+    $('clock').textContent = cur.phase === 'play' ? clockText(cur.clock) : cur.phase === 'countdown' ? clockText(90) : '–';
+    const say = $('say'); let big = '', small = '';
+    if (cur.phase === 'lobby') {
+      if (!P[them].here) { big = me === 'you' ? 'Waiting for Flash' : 'Waiting for a partner'; small = me === 'you' ? 'Ask Flash to play Tether with you.' : 'They open this page to join.'; }
+      else if (!P[me].ready) { big = 'Press Space'; small = P[them].ready ? `${me === 'you' ? 'Flash is' : 'They are'} ready.` : 'when you are ready.'; }
+      else { big = 'Ready'; small = `Waiting for ${me === 'you' ? 'Flash' : 'them'}.`; }
+    } else if (cur.phase === 'countdown') { big = String(Math.ceil(cur.clock)); small = 'You are ' + (me === 'you' ? 'blue' : 'orange') + '. Sweep the rope through the sparks.'; }
+    else if (cur.phase === 'over') {
+      big = { legendary: 'Legendary.', great: 'Great.', good: 'Good.' }[cur.mark] || 'Again?';
+      small = `${cur.score} sparks together, ${cur.bestRun} in a row at best, the rope cut ${cur.snaps} time${cur.snaps === 1 ? '' : 's'}. Space to play again.`;
+    }
+    say.hidden = !big; $('sayBig').textContent = big; $('saySmall').textContent = small;
+    // the title carries the state, for anyone reading the page rather than looking at it
+    document.title = `Tether · ${cur.phase}${cur.snapped ? ' · snapped' : ''} · together ${cur.score} · ${Math.ceil(cur.clock)}s`;
+  }
+
+  // ----- drawing: flat, so pixels say what things are -----
+  const lerp = (a, b, k) => a + (b - a) * k;
+  function pos(get) { if (!prev) return get(cur); const k = Math.min(1, (performance.now() - at) / 33); const a = get(prev), b = get(cur); return a && b ? { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k) } : b; }
+  function disc(x, y, r, fill) { g.fillStyle = fill; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
+  function frame(t) {
+    g.fillStyle = COL.paper; g.fillRect(0, 0, 960, 600);
+    // a faint floor grid, Oat on Paper
+    g.strokeStyle = COL.oat; g.lineWidth = 2;
+    for (let x = 80; x < 960; x += 80) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 600); g.stroke(); }
+    for (let y = 80; y < 600; y += 80) { g.beginPath(); g.moveTo(0, y); g.lineTo(960, y); g.stroke(); }
+    if (cur) {
+      cur.sparks.forEach((s, i) => { const p = pos(st => st.sparks[i]); const r = 10 + Math.sin(t / 180 + i) * 1.2;
+        disc(p.x, p.y, r + 3, COL.sparkRing); disc(p.x, p.y, r, COL.spark); });
+      cur.drones.forEach((d, i) => { const p = pos(st => st.drones[i]); disc(p.x, p.y, 16, COL.drone);
+        g.strokeStyle = COL.paper; g.lineWidth = 3; g.beginPath(); g.moveTo(p.x - 7, p.y); g.lineTo(p.x + 7, p.y); g.moveTo(p.x, p.y - 7); g.lineTo(p.x, p.y + 7); g.stroke(); });
+      // the rope: taut and straight, or two frayed ends while it's cut
+      if (cur.players.you.here && cur.players.flash.here) {
+        const a = pos(st => st.players.you), b = pos(st => st.players.flash);
+        g.strokeStyle = COL.rope; g.lineCap = 'round';
+        if (!cur.snapped) { g.lineWidth = 5; g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); }
+        else { g.lineWidth = 3; for (const [p, q] of [[a, b], [b, a]]) { g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x + (q.x - p.x) * .2, p.y + (q.y - p.y) * .2); g.stroke(); } }
+      }
+      for (const who of ['you', 'flash']) {
+        const P = cur.players[who]; if (!P.here && cur.phase === 'lobby') continue;
+        const p = pos(st => st.players[who]);
+        if (P.dash) { g.globalAlpha = .25; disc(p.x, p.y, 26, COL[who]); g.globalAlpha = 1; }
+        disc(p.x, p.y, 18, COL[who]);
+        // a ring round your own, so you never lose yourself
+        if (who === me) { g.strokeStyle = COL.ink; g.lineWidth = 3; g.beginPath(); g.arc(p.x, p.y, 23, 0, Math.PI * 2); g.stroke(); }
+        if (P.stun) { g.strokeStyle = COL.ink; g.lineWidth = 3; g.setLineDash([4, 5]); g.beginPath(); g.arc(p.x, p.y, 30, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
+        g.fillStyle = COL.paper; g.font = '600 13px "Space Grotesk", Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(who === 'flash' ? 'F' : me === 'you' ? 'YOU' : '', p.x, p.y + 1);
+        // what Flash says as it plays, over its head
+        if (P.say) {
+          g.font = '500 14px "Space Grotesk", Arial'; const w = g.measureText(P.say).width + 20;
+          const bx = Math.min(Math.max(p.x - w / 2, 6), 954 - w), by = Math.max(p.y - 62, 6);
+          g.fillStyle = COL.ink; g.beginPath(); g.roundRect(bx, by, w, 28, 8); g.fill();
+          g.beginPath(); g.moveTo(p.x - 6, by + 28); g.lineTo(p.x + 6, by + 28); g.lineTo(p.x, by + 35); g.fill();
+          g.fillStyle = COL.paper; g.fillText(P.say, bx + w / 2, by + 15);
+        }
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

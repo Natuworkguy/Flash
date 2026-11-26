@@ -147,10 +147,10 @@ def test_direct_shell_command():
 
 
 def test_trim_tool_output():
-    text = "a" * 2000
+    text = "a" * 10000
     trimmed = trim_tool_output(text)
     assert "truncated" in trimmed  # nosec B101
-    assert len(trimmed) < 2000  # nosec B101
+    assert len(trimmed) < 10000  # nosec B101
 
     short_text = "hello"
     assert trim_tool_output(short_text) == "hello"  # nosec B101
@@ -450,7 +450,8 @@ def test_hook_command_installs_after_asking(monkeypatch, isolated_home,
     assert "Added to" in out  # nosec B101
     assert "Set up in" in out  # nosec B101
     assert "Removed from" in out  # nosec B101
-    assert terminal.BEGIN not in (isolated_home / ".zshrc").read_text()
+    assert terminal.BEGIN not in (isolated_home / ".zshrc").read_text(
+            encoding="utf-8")
 
 
 def test_hook_command_declined_changes_nothing(monkeypatch, isolated_home):
@@ -534,75 +535,31 @@ def test_a_bang_command_with_no_output_or_a_timeout(monkeypatch):
     assert "$ sleep 999\ntimed out after 600s" in block  # nosec B101
 
 
-# --- Promises the model does not keep --------------------------------------
+# --- Leaving -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("text", [
-    "Wait, the block is completely covering the text. I'll move the "
-    "logo text forward so it sits in front of the grass block.",
-    "The fin is off. Let me fix that.",
-    "The test still fails.\n\nNow I\u2019ll update the fixture.",
-    "Next, I will add windows to the house.",
-    "I'm going to rerun the build.",
-])
-def test_a_reply_ending_in_a_plan_is_a_promise(text):
-    assert ai.unkept_promise(text)  # nosec B101
-
-
-@pytest.mark.parametrize("text", [
-    "Done! The model is saved as chair.glb.",
-    "I'll move it forward if you'd like.",
-    "Would you like me to add a door?",
-    "Let me know if you want changes.",
-    "Want me to add a roof? I can also make it red.",
-    "I'll be here if you need anything.",
-    "Started a sub-agent; I'll report back.",
-    "I'll wait for the build, then let you know.",
-    "I'll let you know when it finishes.",
-    "Now I have finished everything.",
-    # A plan early on, then a finish, is a summary.
-    "I'll start with the legs.\n\nEverything is built and checked.",
-    "",
-])
-def test_a_finished_reply_or_an_offer_is_not(text):
-    assert not ai.unkept_promise(text)  # nosec B101
-
-
-def test_the_terminal_tells_a_promising_model_to_go_on(monkeypatch):
-    replies = [
-        ("I'll move the text forward.", "", [], None),
-        ("", "", ["a call"], None),
+def test_leaving_says_what_the_session_came_to(monkeypatch):
+    shown = []
+    monkeypatch.setattr(ai.console, "print", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr(ai.Config, "model", "flash-test")
+    monkeypatch.setattr(ai.time, "monotonic", lambda: 1000.0)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hey"},
+        {"role": "user", "content": "fix it"},
     ]
-    seen = []
 
-    def fake(console, client, convo, tools_arg, **_):
-        seen.append(list(convo))
-        return replies.pop(0)
+    ai._leave(messages, True, 1000.0 - 125)
 
-    monkeypatch.setattr(ai, "_chat_retry_until_response", fake)
-    monkeypatch.setattr(ai, "_render_markdown", lambda *a, **k: None)
-    convo = [{"role": "user", "content": "logo"}]
-    nudged = [0]
-
-    final, _, calls, err = ai._chat_until_acted(
-        None, None, convo, ["tools"], nudged,
-    )
-
-    assert (calls, err, nudged) == (["a call"], None, [1])  # nosec B101
-    assert convo[-2:] == [  # nosec B101
-        {"role": "assistant", "content": "I'll move the text forward."},
-        ai.promise_nudge(),
-    ]
-    assert len(seen) == 2  # nosec B101
+    line = shown[-1][0].plain
+    assert line.startswith("\u25cf Bye.")  # nosec B101
+    assert "2 messages \u00b7 2m 5s \u00b7 flash-test" in line  # nosec B101
 
 
-def test_without_tools_there_is_nothing_to_nudge_towards(monkeypatch):
-    monkeypatch.setattr(
-        ai, "_chat_retry_until_response",
-        lambda *a, **k: ("I'll fix it.", "", [], None),
-    )
-    nudged = [0]
+def test_leaving_before_anything_was_said_is_just_bye(monkeypatch):
+    shown = []
+    monkeypatch.setattr(ai.console, "print", lambda *a, **k: shown.append(a))
 
-    final, *_ = ai._chat_until_acted(None, None, [], None, nudged)
+    ai._leave([], False, ai.time.monotonic())
 
-    assert (final, nudged) == ("I'll fix it.", [0])  # nosec B101
+    assert shown[-1][0].plain == "\u25cf Bye."  # nosec B101

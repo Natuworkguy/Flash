@@ -18,19 +18,29 @@ request from a page has to come from this server's own origin.
 """
 
 import base64
+import contextlib
+import hashlib
+import hmac
+import html
 import io
 import ipaddress
 import json
 import os
 import re
 import secrets
+import shlex
 import socket
+import shutil
+import subprocess  # nosec B404
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
+import urllib.parse
 import uuid
 import webbrowser
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -41,26 +51,67 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-import ollama
+import httpx
 import segno
 from rich.text import Text
 
 from . import agent as subagents
+from . import btw as btw_side
 from . import (
     background,
+    briefing,
+    calls,
     checkpoint,
+    computer,
+    computeruse,
+    connectors,
     context,
+    demo,
+    design,
+    ext_ui,
     extensions,
+    greetings,
+    heyflash,
+    humanvoice,
+    installer,
+    instructions,
+    interrupt,
+    keepalive,
     learning,
+    livedocs,
+    loop,
+    loaders,
+    meeting,
     memory,
+    modelchain,
+    paths,
+    pings,
+    progress,
+    providers,
+    showcase,
     skills,
+    skilltrials,
+    sparkcalls,
+    sparks,
+    systemone,
+    teamchat,
+    themes,
+    tidy,
+    titles,
+    triggers,
+    tunnel,
     updater,
+    visuals,
     voice,
+    voicehooks,
+    waits,
+    worknotes,
     workspace,
 )
-from .dashes import DashGuard
+from .emojis import EMOJIS
+from .models import full_name
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -71,6 +122,7 @@ from .theme import (
     capture_tool_output,
     console,
 )
+from .tidy import OutGuard
 from .version import __version__
 
 HOST = "127.0.0.1"
@@ -80,6 +132,76 @@ DEFAULT_PORT = 7433
 
 WEB_DIR = Path(__file__).parent / "web"
 PAGE = WEB_DIR / "index.html"
+DESIGN_KIT = WEB_DIR / "designkit.js"
+
+
+def _wake_voice_taught() -> bool:
+    try:
+        from . import wake_voice
+
+        return wake_voice.taught()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _sandbox() -> dict:
+    """The sandbox's state, for Settings."""
+
+    from . import sandbox
+
+    return {"sandbox": sandbox.enabled(),
+            "sandbox_auto_allow": sandbox.auto_allow(),
+            "sandbox_missing": sandbox.missing()}
+
+
+def _awake_state() -> dict:
+    """Keeping the Mac awake, for Settings."""
+
+    from . import awake
+
+    return awake.state()
+
+
+def _computer_use() -> dict:
+    """Computer Use's state, for Settings: on or off, the stop keys, and
+    what this computer lacks for it."""
+
+    return {
+        "computer_use": computeruse.enabled(),
+        "computer_use_keys": computeruse.stop_keys(),
+        "computer_use_mouse": computeruse.mouse_stops(),
+        "computer_use_fast": computeruse.fast(),
+        "computer_use_human": computeruse.human(),
+        "computer_use_missing": computeruse.missing(),
+    }
+
+
+def _computer_kinds() -> dict:
+    """What Flash can do on this computer, one by one, for Settings'
+    switches, and which the user has switched off."""
+
+    return {
+        "computer_kinds": [
+            {"name": kind, "title": computer.KINDS[kind][0],
+             "what": computer.KINDS[kind][1]}
+            for kind in computer.kinds()
+        ],
+        "computer_off": sorted(computer.switched_off()),
+    }
+
+
+def with_design_kit(page: bytes) -> bytes:
+    """A page with the side panel's design tools in it, before its
+    closing body tag, or at its end when it has none."""
+
+    kit = (
+        '<script id="flash-design-kit">'
+        + DESIGN_KIT.read_text(encoding="utf-8")
+        + "</script>"
+    ).encode("utf-8")
+    at = page.lower().rfind(b"</body>")
+    return page[:at] + kit + page[at:] if at >= 0 else page + kit
+
 
 # The only files served without the token: a stylesheet cannot send
 # one, and there is nothing in a font to protect.
@@ -91,11 +213,30 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # The addresses the page answers to. Each serves the same page, which
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
-    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|extensions"
-    r"|settings(?:/(?:general|usage|memory|security))?)?/?$"
+    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills(?:/knowledge)?"
+    r"|sparks|extensions|made"
+    r"|briefing|x/[a-z0-9][a-z0-9_-]{0,63}/[a-z][a-z0-9_-]{0,31}"
+    r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
+    r"/?$"
 )
 
+OAUTH_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash</title><body style="font:16px system-ui;background:#262624;
+color:#f5f4ee;display:grid;place-items:center;height:100vh;margin:0">
+<p>{said}</p><script>setTimeout(() => window.close(), 1500)</script>"""
+
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
+
+# Flash's own colour picker, opened in place of the system's by every colour field.
+STATIC["colour.js"] = "text/javascript; charset=utf-8"
+
+# Newsreader, the face the agent writes in: its replies and the
+# documents it sends. Shipped with Flash so it reads the same offline.
+STATIC.update({
+    name: "font/woff2"
+    for name in ("newsreader.woff2", "newsreader-italic.woff2")
+})
 
 # KaTeX, which turns the math in replies into MathML for the browser to
 # draw with its own math font: just the script, shipped with Flash so
@@ -114,6 +255,28 @@ STATIC.update({
     for path in sorted((WEB_DIR / "three").glob("*.js"))
 })
 
+# 3Dmol.js, which draws proteins and molecules in 3D in replies: shipped
+# with Flash too (BSD licence, web/3dmol/LICENSE.txt), loaded only once a
+# structure shows.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "3dmol").glob("*.js"))
+})
+
+# Leaflet, which draws the maps in replies on OpenStreetMap's tiles: shipped
+# with Flash (BSD licence, web/leaflet/LICENSE.txt), loaded once a map shows.
+STATIC.update({
+    "leaflet/leaflet.js": "text/javascript; charset=utf-8",
+    "leaflet/leaflet.css": "text/css; charset=utf-8",
+})
+
+# Mermaid, which draws the diagrams in replies and documents: shipped
+# with Flash as well, and loaded only once a diagram shows.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "mermaid").glob("*.js"))
+})
+
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
 PING_SECONDS = 15
@@ -126,6 +289,21 @@ TITLE_CHARS = 48
 MAX_BODY_BYTES = 1_000_000
 # An upload arrives as base64 in JSON: a third bigger than the file.
 MAX_UPLOAD_BODY = workspace.MAX_UPLOAD_BYTES * 4 // 3 + 64_000
+# A screen recording carries its stills, and what the user said over it
+# as 16 kHz 16-bit audio, besides the video.
+MAX_NARRATION_BYTES = 16_000 * 2 * 60 * 5
+MAX_RECORDING_BODY = (
+    workspace.MAX_UPLOAD_BYTES
+    + workspace.MAX_STILLS * workspace.MAX_STILL_BYTES
+    + MAX_NARRATION_BYTES
+) * 4 // 3 + 64_000
+# What a recording sent with nothing typed asks for.
+RECORDING_PROMPT = (
+    "This is a screen recording of me doing something I want you to be "
+    "able to do. Work out the procedure from it, step by step, and save "
+    "it as a skill with skill_manage so you can do it for me next time. "
+    "Ask me about anything you cannot tell from it."
+)
 # Voice from the page arrives as base64 16 kHz 16-bit mono audio, up to
 # the longest turn the terminal's voice mode would record.
 MAX_VOICE_BODY = (
@@ -138,8 +316,15 @@ MAX_ATTACHMENTS = 10
 # times in a row it may wake a chat before waiting for the person, the
 # same limit the terminal keeps.
 WATCH_SECONDS = 0.5
+# How many watch ticks apart it looks for a spark's report to post.
+SPARK_POST_TICKS = 20
 MAX_WAKES_IN_A_ROW = 3
 WAKE_TEXT = "A sub-agent finished. Flash is reading what it found."
+
+# A turn a save woke that finds nothing to do answers with only this.
+QUIET_WORD = "NOTHING"
+# How much of a saved document's change the model is shown.
+SAVED_DIFF_CHARS = 12_000
 
 # Search: how many chats come back, how many words a query may have,
 # and how much of a message a result quotes around its match.
@@ -177,6 +362,11 @@ SIGNED_OUT_PAGE = EXPIRED_PAGE.replace(
 # --- Events --------------------------------------------------------------
 
 
+# How many of those notes are kept, and how much of each.
+NOTES_KEPT = 50
+NOTE_CHARS = 400
+
+
 class Hub:
     """Every open page's event stream, fed from one place.
 
@@ -191,6 +381,36 @@ class Hub:
         # one opened with the link's token itself).
         self._queues: dict[Queue, str] = {}
         self.seq = 0
+        # What was worth telling the user lately, for a device that asks
+        # rather than keeps a page open, a watch say: Flash's notifications,
+        # a spark's mention, a reply finished, a question waiting.
+        self.notes: deque = deque(maxlen=NOTES_KEPT)
+        self.note_seq = 0
+
+    def note(self, kind: str, title: str, text: str, chat: str = "") -> None:
+        with self._lock:
+            self.note_seq += 1
+            self.notes.append({
+                "id": self.note_seq, "at": time.time(), "kind": kind,
+                "title": " ".join(str(title).split())[:120],
+                "text": str(text).strip()[:NOTE_CHARS], "chat": chat,
+            })
+
+    def notes_after(self, since: int) -> dict:
+        with self._lock:
+            return {"notes": [n for n in self.notes if n["id"] > since],
+                    "last": self.note_seq}
+
+    def watched(self) -> bool:
+        """Whether any page is open on this server to see an event."""
+
+        with self._lock:
+            return bool(self._queues)
+
+    # Which paired device a browser key is, by its id ("" for a page, not a
+    # device): set by the session, so an event "to" one device reaches only
+    # it (and the pages, which show everything).
+    device_of: Optional[Callable[[str], str]] = None
 
     def subscribe(self, owner: str = "") -> Queue:
         queue: Queue = Queue()
@@ -210,11 +430,12 @@ class Hub:
                 queue.put(None)
 
     def end(self, owners) -> None:
-        """End the streams of browsers just signed out."""
+        """End the streams of browsers just signed out: OWNERS are the
+        hashes of their keys, as Access keeps them."""
 
         with self._lock:
             for queue, owner in self._queues.items():
-                if owner and owner in owners:
+                if owner and _hashed(owner) in owners:
                     queue.put(None)
 
     def owners(self) -> set:
@@ -224,10 +445,23 @@ class Hub:
             return set(self._queues.values())
 
     def publish(self, event: dict) -> dict:
+        if event.get("type") == "notify":
+            self.note("notify", str(event.get("title") or "Flash"),
+                      str(event.get("text") or ""),
+                      str(event.get("chat") or ""))
+        elif event.get("type") == "ping":
+            who = event.get("name") or "A spark"
+            self.note("mention", f"{who} mentioned you",
+                      str(event.get("text") or ""))
+        to = str(event.get("to") or "")
         with self._lock:
             self.seq += 1
             event = {**event, "seq": self.seq}
-            for queue in self._queues:
+            for queue, owner in self._queues.items():
+                if to and owner and self.device_of is not None:
+                    device = self.device_of(owner)
+                    if device and device != to:
+                        continue  # meant for another device
                 queue.put(event)
         return event
 
@@ -250,13 +484,56 @@ class Chat:
     # {"id", "text", "mode"}. A "steer" one goes to the model at the
     # running turn's next step; a "queue" one becomes the next turn.
     pending: list[dict] = field(default_factory=list)
+    # Side questions answered while a turn ran, for the model at its next step: (question, answer).
+    asides: list = field(default_factory=list)
     stop: threading.Event = field(default_factory=threading.Event)
     # The turn running now came from voice mode: its reply is heard, so
     # the model is asked to keep it short and plain.
     heard: bool = False
+    # The turn running now was asked to think harder: the model reasons
+    # longer where it can, and is told to take its time.
+    deep: bool = False
+    # The turn running now turned its own thinking on (think_harder).
+    thought_harder: bool = False
+    # The user named it themselves: the model leaves the title alone.
+    named: bool = False
+    # Kept at the top of the list, under Pinned.
+    pinned: bool = False
+    # The model ended the spoken conversation this turn belongs to: voice
+    # mode goes off once its reply is said.
+    voice_ended: bool = False
+    # The user saved a document in the side panel while a turn ran: the
+    # next turn reads it, {"path", "name", "before", "text"}.
+    saved_doc: Optional[dict] = None
+    # The title its first message gave it, while the model may still
+    # write a better one (see titles.py); "" once that is settled.
+    auto_title: str = ""
+    # The turn running now is one a save of this file woke: it may find
+    # nothing in it to do, and then says so in a word nobody sees.
+    quiet: str = ""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     project: str = ""
+    # The spark this chat is with, if any: it answers instead of Flash.
+    spark: str = ""
+    # Every version of a message that was edited, by the group its
+    # versions share: what the chat was from that message on, in the log
+    # and in what the model saw, with None for the version showing now.
+    branches: dict[str, list] = field(default_factory=dict)
+    # Its forks, by id: where each began (the fork it came from, and the
+    # place in that one's log it kept up to) and, for every fork but the
+    # one showing, its log, messages and edited versions, kept aside.
+    # Empty until it is first forked; the first fork is "main".
+    forks: dict[str, dict] = field(default_factory=dict)
+    fork: str = ""
+    # How much of its log the user has had open on the page: a reply
+    # past that is one they have not read, for the briefing.
+    seen: int = 0
+    # The model it talks to; "" for Flash's default (MODEL).
+    model: str = ""
+    # The git worktree it works in instead of its project's folder, if
+    # one was picked (worktrees.py).
+    worktree: str = ""
 
     def summary(self) -> dict:
         return {
@@ -269,7 +546,15 @@ class Chat:
             "partial": self.partial,
             "thinking": self.thinking,
             "project": self.project,
+            "spark": self.spark,
             "updated": self.updated,
+            "pinned": self.pinned,
+            "model": self.model,
+            "worktree": self.worktree,
+            "forks": len(self.forks),
+            # What it is waiting for, while it is: a clock in the list.
+            "waiting": [w.what for w in waits.for_chat(self.id)
+                        if w.status == waits.WAITING],
         }
 
     def saved(self) -> dict:
@@ -283,6 +568,15 @@ class Chat:
             "created": self.created,
             "updated": self.updated,
             "project": self.project,
+            "spark": self.spark,
+            "branches": self.branches,
+            "named": self.named,
+            "pinned": self.pinned,
+            "forks": self.forks,
+            "fork": self.fork,
+            "seen": self.seen,
+            "model": self.model,
+            "worktree": self.worktree,
         }
 
     @classmethod
@@ -295,7 +589,31 @@ class Chat:
             created=float(data.get("created") or time.time()),
             updated=float(data.get("updated") or time.time()),
             project=str(data.get("project") or ""),
+            spark=str(data.get("spark") or ""),
+            branches=dict(data.get("branches") or {}),
+            named=bool(data.get("named")),
+            pinned=bool(data.get("pinned")),
+            forks=dict(data.get("forks") or {}),
+            fork=str(data.get("fork") or ""),
+            seen=int(data.get("seen") or 0),
+            model=str(data.get("model") or ""),
+            worktree=str(data.get("worktree") or ""),
         )
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def chat_model(chat: Optional[Chat]) -> str:
+    """The model CHAT talks to: its own, or Flash's default."""
+
+    from . import ai  # deferred: ai imports half of Flash
+
+    return (chat.model if chat is not None else "") or ai.Config.model or ""
 
 
 @dataclass
@@ -305,13 +623,16 @@ class Ask:
     question: str
     answer: Optional[str] = None
     done: threading.Event = field(default_factory=threading.Event)
+    # Why the user said no, when they said.
+    why: str = ""
 
 
 # Events that are part of the conversation and drawn again on reload.
 # The rest (tokens, status) only matter to a page that is watching.
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
-    "error", "stats", "note", "thought", "file", "plan", "browser",
+    "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
+    "seen", "debate", "course", "chess", "guide", "call", "canvas", "chatmsg",
 }
 
 
@@ -323,6 +644,9 @@ STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
 # the one that replaces it after an update, across the exec that starts
 # the new version.
 TOKEN_ENV = "FLASH_WEB_TOKEN"  # nosec B105 -- a variable name
+# Where this Flash's web API is, for an extension's programs: with the token,
+# a tool can ask Flash things (its paired devices) and signal its device.
+URL_ENV = "FLASH_WEB_URL"
 BROWSERS_ENV = "FLASH_WEB_BROWSERS"
 
 # The most browsers kept signed in at once: past it, the one seen least
@@ -332,13 +656,64 @@ MAX_BROWSERS = 50
 AGENT_CHARS = 300
 
 
+# Remembered browsers. Off, a browser stays signed in until Flash
+# stops, and every new Flash needs its link opened again. On (Settings,
+# Security), a browser that opened the link once is remembered on disk,
+# by a hash of its cookie's key, never the key, and opens Flash at its
+# plain address from then on, until it is signed out or REMEMBER_DAYS go
+# by without it.
+REMEMBER_SETTING = "WEB_REMEMBER_BROWSERS"
+REMEMBER_DAYS = 180
+
+
+def remembering() -> bool:
+    return os.environ.get(REMEMBER_SETTING, "").strip().lower() in (
+        "1", "true", "on", "yes",
+    )
+
+
+def _remembered_path() -> Path:
+    return workspace.FLASH_DIR / "web-browsers.json"
+
+
+def _hashed(key: str) -> str:
+    """What is kept of a cookie's key: enough to know it again, and
+    nothing that would let a reader of the file sign in with it."""
+
+    return hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()
+
+
+def _read_remembered() -> dict:
+    try:
+        found = json.loads(_remembered_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(found, dict):
+        return {}
+    stale = time.time() - REMEMBER_DAYS * 86400
+    return {
+        key: value for key, value in found.items()
+        if isinstance(value, dict) and value.get("id")
+        and float(value.get("seen") or 0) > stale
+    }
+
+
+def forget_remembered() -> None:
+    """Remember no browser on disk; those signed in now stay so until
+    Flash stops."""
+
+    with contextlib.suppress(OSError):
+        _remembered_path().unlink()
+
+
 class Access:
     """Who may use Flash.
 
     The link Flash prints carries a token. A browser that opens it is
     signed in: it gets a cookie of its own, a random key recorded here,
-    so each browser can be signed out by itself. A new token ends the
-    link, and with it the way back in for a browser signed out.
+    by its hash, so each browser can be signed out by itself. A new
+    token ends the link, and with it the way back in for a browser
+    signed out.
     """
 
     def __init__(
@@ -365,10 +740,30 @@ class Access:
             browsers = {}
         if not token or not isinstance(browsers, dict):
             browsers = {}
-        return cls(token, {
+        kept = _read_remembered() if remembering() else {}
+        kept.update({
             key: value for key, value in browsers.items()
             if isinstance(value, dict) and value.get("id")
         })
+        return cls(token, kept)
+
+    def remember(self) -> None:
+        """Write the signed-in browsers down, if they are remembered."""
+
+        if not remembering():
+            return
+        with self._lock:
+            data = json.dumps(self._browsers)
+        path = _remembered_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            partial = path.with_suffix(".json.partial")
+            partial.write_text(data, encoding="utf-8")
+            with contextlib.suppress(OSError):
+                os.chmod(partial, 0o600)
+            paths.replace(partial, path)
+        except OSError:
+            pass
 
     def hand_over(self) -> None:
         """Leave all this where the restarted Flash will look for it."""
@@ -384,45 +779,107 @@ class Access:
             given.encode("utf-8", "replace"), self.token.encode()
         )
 
-    def browser(self, key: str, address: str) -> Optional[dict]:
-        """The signed-in browser holding KEY, now marked as seen."""
+    def browser(self, key: str, address: str,
+                user_agent: str = "") -> Optional[dict]:
+        """The signed-in browser holding KEY, now marked as seen. A paired
+        device that never said what it is (paired before Flash asked) says
+        it now, from USER_AGENT."""
 
         if not key:
             return None
         with self._lock:
-            found = self._browsers.get(key)
+            found = self._browsers.get(_hashed(key))
             if found is not None:
                 found["seen"] = time.time()
                 found["address"] = address
+                if (not found.get("product") and DEVICE_AGENT in user_agent
+                        and DEVICE_AGENT in found.get("agent", "")):
+                    found["product"] = device_product(user_agent)
             return found
+
+    def about(self, key: str) -> dict:
+        """The signed-in browser holding KEY, as a copy ({} for none)."""
+
+        if not key:
+            return {}
+        with self._lock:
+            return dict(self._browsers.get(_hashed(key)) or {})
 
     def signed_out(self, key: str) -> bool:
         with self._lock:
-            return key in self._gone
+            return bool(key) and _hashed(key) in self._gone
 
-    def sign_in(self, address: str, agent: str) -> str:
-        """Sign a browser in, and give back the key for its cookie."""
+    def sign_in(self, address: str, agent: str, product: str = "") -> str:
+        """Sign a browser in, and give back the key for its cookie.
+        PRODUCT: what a paired device says it is ("watchOS", "FlashBot/0.1")."""
 
         key = secrets.token_urlsafe(24)
         now = time.time()
         with self._lock:
-            self._browsers[key] = {
+            self._browsers[_hashed(key)] = {
                 "id": secrets.token_hex(4),
                 "agent": agent[:AGENT_CHARS],
                 "address": address,
                 "since": now,
                 "seen": now,
+                **({"product": product[:AGENT_CHARS]} if product else {}),
             }
             while len(self._browsers) > MAX_BROWSERS:
                 stalest = min(
                     self._browsers, key=lambda k: self._browsers[k]["seen"]
                 )
                 self._drop(stalest)
+        self.remember()
         return key
 
     def _drop(self, key: str) -> None:
         del self._browsers[key]
         self._gone.add(key)
+
+    def rename(self, browser_id: str, name: str) -> bool:
+        """Give the browser the page knows as BROWSER_ID a name of the
+        user's own, or its own description back when NAME is empty."""
+
+        name = " ".join(str(name or "").split())[:DEVICE_NAME_CHARS]
+        with self._lock:
+            found = [b for b in self._browsers.values()
+                     if b["id"] == browser_id]
+            for b in found:
+                if name:
+                    b["name"] = name
+                else:
+                    b.pop("name", None)
+        if found:
+            self.remember()
+        return bool(found)
+
+    def set_desk(self, browser_id: str, on: bool) -> bool:
+        """The paired device BROWSER_ID is the one on the user's desk (ON),
+        or not: voice mode on this computer talks through that one of its
+        kind (a robot), so asking at the desk doesn't answer in another
+        room. One of each kind at most."""
+
+        with self._lock:
+            found = [b for b in self._browsers.values() if b["id"] == browser_id]
+            if not found:
+                return False
+            kind = device_kind(found[0].get("product", ""))
+            for b in self._browsers.values():
+                if device_kind(b.get("product", "")) == kind:
+                    b.pop("desk", None)
+            if on:
+                found[0]["desk"] = True
+        self.remember()
+        return True
+
+    def desk(self, kind: str = "") -> str:
+        """The id of the device of KIND on the user's desk, or ""."""
+
+        with self._lock:
+            for b in self._browsers.values():
+                if b.get("desk") and (not kind or device_kind(b.get("product", "")) == kind):
+                    return b["id"]
+        return ""
 
     def sign_out(self, browser_id: str) -> list[str]:
         """Sign out the browser the page knows as BROWSER_ID."""
@@ -433,6 +890,7 @@ class Access:
             ]
             for key in keys:
                 self._drop(key)
+        self.remember()
         return keys
 
     def sign_out_others(self, keep: str) -> list[str]:
@@ -442,11 +900,13 @@ class Access:
         it again. The one asking stays signed in by its cookie.
         """
 
+        mine = _hashed(keep) if keep else ""
         with self._lock:
-            keys = [k for k in self._browsers if k != keep]
+            keys = [k for k in self._browsers if k != mine]
             for key in keys:
                 self._drop(key)
             self.token = secrets.token_urlsafe(24)
+        self.remember()
         return keys
 
     def new_token(self) -> str:
@@ -461,17 +921,26 @@ class Access:
 
         with self._lock:
             items = list(self._browsers.items())
+        mine = _hashed(current) if current else ""
+        live = {_hashed(w) for w in watching if w}
         shown = [
             {
                 "id": b["id"],
-                "device": describe_agent(b.get("agent", "")),
+                "device": b.get("name") or describe_agent(b.get("agent", "")),
+                "named": bool(b.get("name")),
+                "kind": describe_agent(b.get("agent", "")),
                 "phone": _is_phone(b.get("agent", "")),
+                "paired": DEVICE_AGENT in b.get("agent", ""),
+                # What a paired device is: "watch", "robot", or "device".
+                "product": device_kind(b.get("product", ""))
+                if DEVICE_AGENT in b.get("agent", "") else "",
                 "address": b.get("address", ""),
                 "here": _is_loopback(b.get("address", "")),
                 "since": b.get("since", 0),
                 "seen": b.get("seen", 0),
-                "current": key == current,
-                "active": key in watching,
+                "current": key == mine,
+                "active": key in live,
+                "desk": bool(b.get("desk")),
             }
             for key, b in items
         ]
@@ -480,6 +949,100 @@ class Access:
 
 
 # Checked in order: several browsers name the ones they are built on.
+# The longest name the user can give a signed-in device.
+DEVICE_NAME_CHARS = 40
+# How long a pairing code lasts, and how many wrong tries end it.
+PAIR_SECONDS = 300
+PAIR_TRIES = 5
+# Where a device listens to find Flash on its network while it pairs.
+PAIR_BEACON_PORT = 7435
+# What a paired device's requests say they are, so the list of
+# signed-in devices can name it.
+DEVICE_AGENT = "FlashDevice/"
+
+
+class Pairing:
+    """A short code a device types in to be signed in, like a browser.
+
+    A device with no camera for the QR code, and no good way to type a
+    long link, gets six digits to type instead. One code at a
+    time: it ends when it is used, after five minutes, or after five
+    wrong tries, which leaves a guesser one chance in two hundred
+    thousand.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.code = ""
+        self.until = 0.0
+        self.tries = 0
+        self._announcing = False
+
+    def waiting(self) -> bool:
+        """Whether a code is out and still good."""
+
+        with self._lock:
+            return bool(self.code) and time.time() <= self.until
+
+    def announce(self, port: int) -> None:
+        """While a code is waiting, say once a second, to this network
+        only, that Flash is here and on which port, so a device being
+        set up (a robot with no phone to type an address on) can find
+        it. Says nothing else: the code is still typed in by hand."""
+
+        with self._lock:
+            if self._announcing:
+                return
+            self._announcing = True
+
+        def say() -> None:
+            message = f"FLASH-PAIR {port}".encode()
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as out:
+                    out.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    while self.waiting():
+                        try:
+                            out.sendto(message, ("255.255.255.255",
+                                                 PAIR_BEACON_PORT))
+                        except OSError:
+                            pass  # no network for now: try again in a second
+                        time.sleep(1)
+            except OSError:
+                pass
+            finally:
+                with self._lock:
+                    self._announcing = False
+
+        threading.Thread(target=say, name="pair-beacon", daemon=True).start()
+
+    def start(self) -> dict:
+        with self._lock:
+            self.code = f"{secrets.randbelow(10 ** 6):06d}"
+            self.until = time.time() + PAIR_SECONDS
+            self.tries = 0
+            return {"code": self.code, "expires": self.until}
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.code = ""
+
+    def take(self, given: str) -> bool:
+        """Whether GIVEN is the code, which is then used up."""
+
+        given = "".join(ch for ch in str(given) if ch.isdigit())
+        with self._lock:
+            if not self.code or time.time() > self.until:
+                self.code = ""
+                return False
+            if secrets.compare_digest(given.encode(), self.code.encode()):
+                self.code = ""
+                return True
+            self.tries += 1
+            if self.tries >= PAIR_TRIES:
+                self.code = ""
+            return False
+
+
 _BROWSER_NAMES = (
     ("Edg/", "Edge"), ("OPR/", "Opera"), ("Vivaldi/", "Vivaldi"),
     ("SamsungBrowser/", "Samsung Internet"), ("Firefox/", "Firefox"),
@@ -493,9 +1056,32 @@ _SYSTEM_NAMES = (
 )
 
 
+def device_product(user_agent: str) -> str:
+    """What a paired device says it is, after "FlashDevice/1.0": "watchOS",
+    "FlashBot/0.1"."""
+
+    return user_agent.split(DEVICE_AGENT, 1)[1].partition(" ")[2].strip() \
+        if DEVICE_AGENT in user_agent else ""
+
+
+def device_kind(product: str) -> str:
+    """"watch", "robot" or "device", from what a paired device says it is,
+    so each extension lists only its own (a robot is no watch)."""
+
+    said = product.lower()
+    if "watchos" in said or "watch" in said:
+        return "watch"
+    if "flashbot" in said or "robot" in said:
+        return "robot"
+    return "device"
+
+
 def describe_agent(agent: str) -> str:
     """ "Firefox on Windows", from what a browser says it is."""
 
+    if DEVICE_AGENT in agent:
+        named = agent.split(DEVICE_AGENT, 1)[1].partition(" ")[2].strip()
+        return named or "Paired device"
     name = next((n for mark, n in _BROWSER_NAMES if mark in agent), "")
     system = next((n for mark, n in _SYSTEM_NAMES if mark in agent), "")
     if name and system:
@@ -648,15 +1234,38 @@ class Session:
         # turn: chat id -> the paths, told to the model with its next
         # message so it reads them again rather than writing over them.
         self.edited: dict[str, list[str]] = {}
+        # What the page's music player plays: {"id", "title", "playing"}.
+        self.music: dict = {}
+        # An agent's edit to a file shown as a document reaches the page
+        # as it lands.
+        livedocs.listen(self.document_changed)
         # The voice models are being downloaded for the page: the first
         # use's pair, or one model picked in Settings, (kind, name).
         self.voice_setup = False
         self.voice_job: Optional[tuple[str, str]] = None
         # Set to call off whichever of those is running.
         self.voice_stop = threading.Event()
+        # "Hey Flash" heard on this computer's own microphone, with no
+        # page open, when switched on. Started with the server.
+        self.always = heyflash.Listener(self)
+        # How the user sounds in voice mode, against how they usually do.
+        self.ear = humanvoice.Ear()
+        # What a spoken turn's model hears with it and the user never
+        # sees: how they sounded, what was said to them already.
+        self.voice_notes: dict[str, str] = {}
+        # A package Flash needs, installed from a button in the page, its
+        # lines sent to every page as they come.
+        # Meetings being recorded, a piece at a time from the page.
+        self.meetings = meeting.Meetings()
+        self.installer = installer.Installer(
+            lambda said: self.hub.publish({"type": "install", **said})
+        )
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
+        self.hub.device_of = self._device_id
+        # The code a device types in to sign in (see Pairing).
+        self.pairing = Pairing()
         # Tells whoever started Flash its new link, once the old one is
         # ended. Set by whatever runs the server (see _attach).
         self.relink: Optional[Callable[[], None]] = None
@@ -671,6 +1280,13 @@ class Session:
         # Opens the server again listening on the network, or not. Set
         # by whatever runs the server (see _attach).
         self.switch_lan: Optional[Callable[[bool], None]] = None
+        # Flash on a public address, through a tunnel service, while the
+        # user has it on; and the port it forwards to (see _attach).
+        self.tunnel = tunnel.Tunnel()
+        self.port = 0
+        # What /tunnel-check/ answers to while Flash makes sure it can be
+        # reached through a new tunnel; "" the rest of the time.
+        self.tunnel_nonce = ""
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -682,15 +1298,55 @@ class Session:
         # each chat has been woken for one, with no message in between.
         self.agents: dict[str, str] = {}
         self.wakes: dict[str, int] = {}
+        # Chats another chat started or messaged (start_chat,
+        # message_chat): which chat to tell when each answers, and how
+        # much of its log that chat has been told of.
+        self.handoffs: dict[str, str] = {}
+        self.handoff_seen: dict[str, int] = {}
+        # Debates being argued now, by id: their chat, how to stop it,
+        # and what the user has said to steer it, not yet taken in.
+        self.debating: dict[str, dict] = {}
+        # A canvas op waiting for the page's answer, by its nonce: set
+        # when the answer is in ("done"), and the answer ("out").
+        self.canvas_waits: dict[str, dict] = {}
+        # Each running turn's message: where it is in the chat's log, and
+        # what the model was given, so a turn that fails can be taken
+        # back out and tried again.
+        self.started: dict[str, int] = {}
+        self.asked: dict[str, dict] = {}
         self._watching: Optional[threading.Thread] = None
+        # What each extension's waiting update asks for more, once said.
+        self.update_asked: dict[str, list] = {}
+        # One at a time, so a report is never posted twice.
+        self._posting = threading.Lock()
         self._stop_watching = threading.Event()
+        # Waits being checked now, on threads of their own.
+        self._checking: set[str] = set()
+        # Waits set before a restart carry on.
+        if waits.waiting():
+            self.ensure_watching()
 
     # Chats ---------------------------------------------------------
 
-    def new_chat(self, project: str = "") -> Chat:
+
+    def _device_id(self, key: str) -> str:
+        """The id of the paired device holding KEY, or "" for a page."""
+
+        found = self.access.about(key)
+        return found.get("id", "") if DEVICE_AGENT in found.get("agent", "") else ""
+    def new_chat(self, project: str = "", spark: str = "") -> Chat:
         if project and workspace.project(project) is None:
             raise KeyError(project)
-        chat = Chat(id=uuid.uuid4().hex[:8], project=project)
+        if spark:
+            found = sparks.find(spark)
+            if found is None:
+                raise ValueError("That spark is not here any more.")
+            spark = found.id
+            # A chat with a spark starts in the spark's project, if it
+            # has one, unless it was asked to start in another.
+            if not project and sparks.project_of(found) is not None:
+                project = found.project
+        chat = Chat(id=uuid.uuid4().hex[:8], project=project, spark=spark)
         with self._lock:
             self.chats[chat.id] = chat
         self.emit(chat, {"type": "chats"})
@@ -706,7 +1362,13 @@ class Session:
         chat = self.chats.pop(chat_id, None)
         if chat is not None:
             chat.stop.set()
+            keep_usage_of(chat)
+        # What it waited for goes with it.
+        for wait in waits.for_chat(chat_id):
+            if wait.status == waits.WAITING:
+                waits.end(wait.id, waits.CANCELLED, "Its chat was deleted.")
         workspace.delete_chat(chat_id)
+        worknotes.clear(chat_id)
         self.hub.publish({"type": "chats", "chat": chat_id})
 
     def save(self, chat: Chat) -> None:
@@ -719,18 +1381,145 @@ class Session:
 
     def clear_chat(self, chat: Chat) -> None:
         chat.stop.set()
+        keep_usage_of(chat)
         self.unqueue(chat)
         chat.messages.clear()
         chat.log.clear()
+        chat.branches.clear()
+        chat.forks.clear()
+        chat.fork = ""
         chat.partial = chat.thinking = ""
         workspace.delete_chat(chat.id)
         self.emit(chat, {"type": "cleared"})
 
+    def _chat_job(self, chat: Chat, job: Callable[[], None]) -> None:
+        """Run JOB for CHAT on a thread of its own, its tool output in
+        the chat, as a turn's would be. The chat is busy meanwhile, so a
+        message sent while it works waits its turn, and runs after."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish first.")
+            chat.busy = True
+        self.emit(chat, {"type": "busy", "busy": True})
+
+        def work() -> None:
+            following = None
+            try:
+                found = (workspace.project(chat.project)
+                         if chat.project else None)
+                with self.turn_lock, \
+                        capture_tool_output(_sink(self, chat)), \
+                        inside(where(chat, found)), \
+                        _tools().running_as(chat.id):
+                    job()
+            except Exception as exc:  # noqa: BLE001
+                self.emit(chat, {
+                    "type": "error",
+                    "text": f"{exc.__class__.__name__}: {exc}",
+                })
+            finally:
+                self.save(chat)
+                with self._lock:
+                    following = self._take_next(chat)
+                    chat.busy = False
+                self.emit(chat, {"type": "busy", "busy": False})
+                self.hub.publish({"type": "status"})
+            if following is not None:
+                self._publish_pending(chat)
+                self._begin(
+                    chat, following["text"], bool(following.get("note")),
+                    following.get("files") or [],
+                    note=following.get("note") or "",
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def compact_chat(self, chat: Chat) -> None:
+        """/compact: CHAT so far, summarized, in place of its messages,
+        to free up room."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import tools as flash_tools
+
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish, then compact.")
+        if not chat.messages:
+            raise ValueError("There is nothing to compact yet.")
+        if not chat_model(chat):
+            raise ValueError("No model is set. Pick one with Alt+M.")
+
+        def job() -> None:
+            flash_tools.tool_line(f"Compact({len(chat.messages)} messages)")
+            was = context.total_tokens(chat.messages)
+            summary = ai._summarize(
+                ai.console, ai._client(), list(chat.messages))
+            if summary is None:
+                flash_tools.tool_result(
+                    "The model returned no summary; the chat is kept as "
+                    "it was.", style=WARN)
+                return
+            chat.messages[:] = [context.summary_message(
+                worknotes.with_notes(summary, chat.id))]
+            flash_tools.tool_result(
+                f"{was} tokens of history down to "
+                f"{context.total_tokens(chat.messages)}")
+
+        self._chat_job(chat, job)
+
+    def review_chat(self, chat: Chat, target: str = "") -> None:
+        """/review: the change TARGET names (the uncommitted one by
+        default), reviewed for bugs in CHAT, in its project's folder.
+        What it found joins the conversation, as Flash's answer to
+        being asked, so "fix them" is the obvious next message."""
+
+        from . import tools as flash_tools
+
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish, then review.")
+        model = chat_model(chat)
+        if not model:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        target = " ".join(str(target or "").split())
+
+        def job() -> None:
+            said = flash_tools.review_code(target, model=model)
+            if said.startswith("Error:"):
+                return
+            asked = "Review " + (f"{target}" if target
+                                 else "my uncommitted changes") \
+                + " for bugs."
+            chat.messages += [
+                {"role": "user", "content": asked},
+                {"role": "assistant", "content": said},
+            ]
+
+        self._chat_job(chat, job)
+
     def emit(self, chat: Chat, event: dict) -> dict:
         event = {**event, "chat": chat.id}
+        if event["type"] == "ask":
+            self.hub.note("ask", chat.title, str(event.get("question") or "")
+                          .split("\n")[0], chat.id)
         if event["type"] in KEPT:
             chat.log.append({k: v for k, v in event.items() if k != "chat"})
         return self.hub.publish(event)
+
+    def addresses(self) -> list[str]:
+        """Where another device can reach this Flash: the tunnel's
+        public address while it is on, and this machine on the network
+        while that is on."""
+
+        found = []
+        if self.tunnel.host:
+            found.append(f"https://{self.tunnel.host}")
+        if self.lan and self.port:
+            found += [f"http://{ip}:{self.port}"
+                      for ip in lan_addresses(every=True)]
+            host = socket.gethostname().split(".")[0]
+            if host and host != "localhost":
+                found.append(f"http://{host}.local:{self.port}")
+        return found
 
     def state(self, lite: bool = False) -> dict:
         """Everything a page needs to draw, from scratch or to catch up.
@@ -758,10 +1547,33 @@ class Session:
             "scene": None if lite else scene_data(ai.Config.background or ""),
             # The words the loader cycles through, the terminal's own.
             "words": [s["now"] for s in ai._load_thinking_states()],
+            # What :name in the message box offers, the terminal's list.
+            "emojis": None if lite else EMOJIS,
+            # Enough of each spark to draw its badge on a chat with it,
+            # and its place in the sidebar's roster: face, name, title,
+            # and what it is doing.
+            "sparks": [
+                {"id": s.id, "name": s.name, "handle": s.handle,
+                 "title": s.title, "colour": s.colour,
+                 "status": s.status, "paused": s.paused,
+                 "waiting": s.waiting, "answering": s.answering,
+                 "unread": s.unread, "activity": s.activity,
+                 "next_run": s.next_run, "waiting_on": s.waiting_on,
+                 "pending": {k: s.pending[k] for k in ("label", "detail")
+                             if k in s.pending},
+                 "project": s.project if sparks.project_of(s) else "",
+                 "project_ids": [p.id for p in sparks.projects_of(s)]}
+                for s in sparks.all_sparks()
+            ],
             "status": {
                 **status(ai), "lan": self.lan,
+                "tunnel": self.tunnel.status(),
                 "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
+                "wake_always": self.always.snapshot(),
+                # Cards the last briefing did not show: a dot by it.
+                "briefing_new": briefing.new_waiting(
+                    self, lambda: self.hub.publish({"type": "status"})),
             },
         }
 
@@ -867,9 +1679,103 @@ class Session:
         for agent_id in agent_ids:
             self.agents[agent_id] = chat.id
         self.hub.publish({"type": "status"})
+        self.ensure_watching()
+
+    def ensure_watching(self) -> None:
+        """Start the watch on sub-agents and waits, once."""
+
         if self._watching is None:
             self._watching = threading.Thread(target=self._watch, daemon=True)
             self._watching.start()
+
+    def sparks_changed(self) -> None:
+        """A spark started, finished, or was changed: the page redraws."""
+
+        self.hub.publish({"type": "sparks"})
+        self.post_spark_reports()
+
+    def post_spark_reports(self) -> None:
+        """Put each report of a job given in a chat into that chat: as
+        the spark's, and, for whoever the chat is with, as a note that
+        it came. A chat mid-turn gets it once the turn is over."""
+
+        from . import ai  # deferred: ai imports half of Flash
+
+        # Marking one posted is a change to the spark, which calls this
+        # again from inside itself: that call, or one on another thread
+        # meanwhile, leaves it to the one already posting, and the next
+        # look picks up anything it missed.
+        if not self._posting.acquire(blocking=False):
+            return
+        try:
+            self._post_spark_reports(ai)
+        finally:
+            self._posting.release()
+
+    def _post_spark_reports(self, ai) -> None:
+        for spark, report, chat_id in sparks.to_post():
+            chat = self.chats.get(chat_id)
+            if chat is None:
+                # Gone, unless another Flash has it open to post it in.
+                if not workspace.chat_saved(chat_id):
+                    sparks.posted(spark.id, report.at, chat_id)
+                continue
+            if chat.busy or chat.queued:
+                continue
+            self.emit(chat, {
+                "type": "assistant", "text": report.text,
+                "thinking": "", "spark": spark.id, "shift": True,
+            })
+            chat.messages.append(ai._message(
+                "system", sparks.called_note(
+                    spark, report.text, [], shift=True,
+                ),
+            ))
+            self.save(chat)
+            sparks.posted(spark.id, report.at, chat_id)
+
+    def tell_handoffs(self) -> None:
+        """Wake each chat that started or messaged another, once that one
+        has answered and is done (not mid-reply, nothing waiting)."""
+
+        for child_id, parent_id in list(self.handoffs.items()):
+            child = self.chats.get(child_id)
+            parent = self.chats.get(parent_id)
+            if child is None or parent is None:
+                self.handoffs.pop(child_id, None)
+                continue
+            if child.busy or child.queued or child.pending:
+                continue
+            seen = self.handoff_seen.get(child_id, 0)
+            new = [e for e in child.log[seen:]
+                   if e.get("type") == "assistant" and e.get("text")]
+            if not new:
+                continue
+            if parent.busy or parent.queued:
+                continue  # told once it is free
+            if self.wakes.get(parent_id, 0) >= MAX_WAKES_IN_A_ROW:
+                continue
+            self.handoff_seen[child_id] = len(child.log)
+            self.wakes[parent_id] = self.wakes.get(parent_id, 0) + 1
+            said = [str(e.get("text")) for e in new][-2:]
+            self.send(parent, handoff_note(child, said), wake=True,
+                      note=f"{child.title} answered.",
+                      note_card=chat_message_entry("from", child, said[-1]))
+
+    def keep_extensions_updated(self) -> None:
+        """Extensions brought up to date by themselves: a few minutes
+        after Flash opens, then every UPDATE_CHECK_SECONDS, while the
+        setting is on (Settings, Extensions)."""
+
+        def run() -> None:
+            wait = 300
+            while not self._stop_watching.wait(wait):
+                wait = UPDATE_CHECK_SECONDS
+                if extensions.updates_on():
+                    _quietly(lambda: update_extensions(self))
+
+        threading.Thread(target=run, name="extension-updates",
+                         daemon=True).start()
 
     def owned(self, chat_id: str) -> set:
         return {a for a, c in list(self.agents.items()) if c == chat_id}
@@ -883,25 +1789,159 @@ class Session:
         """
 
         running = None
+        ticks = 0
         while not self._stop_watching.wait(WATCH_SECONDS):
+            ticks += 1
+            if ticks % SPARK_POST_TICKS == 0:
+                # A report filed by the keeper in another Flash, which
+                # this one hears of by looking.
+                self.post_spark_reports()
+            self.tick_waits()
             now = subagents.running_count()
             if now != running:
                 running = now
                 self.hub.publish({"type": "status"})
 
-            for chat_id in set(self.agents.values()):
+            from . import bgtasks
+
+            self.tell_handoffs()
+            ended = {t.owner for t in bgtasks.unseen()}
+            for chat_id in set(self.agents.values()) | ended:
                 chat = self.chats.get(chat_id)
                 if chat is None or chat.busy or chat.queued:
                     continue
-                if not subagents.unseen(self.owned(chat_id)):
+                if not (subagents.unseen(self.owned(chat_id)) or chat_id in ended):
                     continue
                 if self.wakes.get(chat_id, 0) >= MAX_WAKES_IN_A_ROW:
                     continue
                 self.wakes[chat_id] = self.wakes.get(chat_id, 0) + 1
                 self.send(chat, ai_wake_note(), wake=True)
 
+    # Waits ---------------------------------------------------------
+
+    def tick_waits(self) -> None:
+        """Each wait whose time, or next look, has come: over, or looked
+        at, on a thread of its own."""
+
+        now = time.time()
+        for wait in waits.due(now):
+            if wait.id in self._checking:
+                continue
+            chat = self.chats.get(wait.chat)
+            if chat is None:
+                self.wait_changed(waits.end(
+                    wait.id, waits.CANCELLED, "Its chat is gone.",
+                ))
+            elif wait.give_up is not None and now >= wait.give_up:
+                self.end_wait(chat, wait, gave_up=True)
+            elif wait.found or not (wait.check or wait.command
+                                    or wait.events):
+                # Its time came, or a look already found it so: over, as
+                # soon as the chat is free to hear it.
+                self.end_wait(chat, wait)
+            else:
+                self._checking.add(wait.id)
+                threading.Thread(
+                    target=self._check_wait, args=(wait,), daemon=True,
+                ).start()
+
+    def _check_wait(self, wait: "waits.Wait") -> None:
+        try:
+            ready, said = waits.check(wait)
+        except Exception as exc:  # noqa: BLE001
+            ready, said = False, f"{exc.__class__.__name__}: {exc}"
+        now = waits.find(wait.id)
+        if now is None or now.status != waits.WAITING:
+            self._checking.discard(wait.id)
+            return
+        later = waits.EVENT_SECONDS if now.events else now.every * 60
+        changed = waits.update(
+            wait.id, checks=now.checks + 1, found=ready,
+            next=now.next if ready else time.time() + later,
+            # An event wait keeps what came in until its chat hears it.
+            **({"said": said[:waits.SAID_CHARS]}
+               if ready or not now.events else {}),
+        )
+        self._checking.discard(wait.id)
+        self.wait_changed(changed)
+
+    def end_wait(
+        self, chat: Chat, wait: "waits.Wait", gave_up: bool = False,
+    ) -> None:
+        """WAIT is over: its chat takes up the task again, with a turn
+        nobody typed. Left for the next look while the chat is busy."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                return
+        if wait.keep and not gave_up:
+            # It goes on waiting: the chat hears this one, and the next
+            # look starts from here.
+            kept = waits.update(wait.id, found=False,
+                                next=time.time() + waits.EVENT_SECONDS)
+            self.wait_changed(kept)
+            self.send(chat, (
+                f"Something came in for your wait ({wait.what}):\n"
+                f"{wait.said}\n\nNow, as you planned: {wait.then}\n"
+                f"You go on waiting for more (wait id {wait.id}); "
+                "cancel_wait stops it."
+            ), wake=True, note=f"New for: {wait.what}")
+            return
+        ended = waits.end(wait.id, waits.GAVE_UP if gave_up else waits.DONE,
+                          wait.said)
+        if ended is None:
+            return
+        self.wait_changed(ended)
+        if gave_up:
+            hours = round(((ended.give_up or 0) - (ended.at or ended.created))
+                          / 3600, 1)
+            told = (
+                f"You stopped waiting: {ended.what} was still not so after "
+                f"{hours:g} hours."
+                + (f" The last look found: {ended.said}" if ended.said
+                   else "")
+                + f"\nOnce it happened, you had planned: {ended.then}\n"
+                "Tell the user, and what they could do now."
+            )
+            note = f"Stopped waiting: {ended.what}"
+        else:
+            why = (
+                f"It is {waits.when(ended)}, the time you were waiting for."
+                if not (ended.check or ended.command or ended.events)
+                else f"It came in:\n{ended.said}" if ended.events
+                else "What you were waiting for is so."
+                + (f" What the look found: {ended.said}" if ended.said
+                   else "")
+            )
+            told = (
+                f"Your wait is over: {ended.what}. {why}\n"
+                f"Now, as you planned: {ended.then}"
+            )
+            note = f"Done waiting: {ended.what}"
+        self.send(chat, told, wake=True, note=note)
+
+    def wait_changed(self, wait: Optional["waits.Wait"],
+                     was: str = "") -> None:
+        """Its card, in its chat and on every page, brought up to date.
+        WAS: what it waited for before an edit, to take off the list."""
+
+        if wait is None:
+            return
+        card = wait.card()
+        chat = self.chats.get(wait.chat)
+        if chat is not None:
+            for entry in chat.log:
+                if entry.get("type") == "wait" and entry.get("id") == wait.id:
+                    entry.update(card)
+                    self.save(chat)
+                    break
+        self.hub.publish({"type": "wait-state", "chat": wait.chat, **card,
+                          **({"was": was} if was else {})})
+
     def close(self) -> None:
         self._stop_watching.set()
+        self.always.stop()
+        self.tunnel.stop()
 
     def reopen(self) -> None:
         """Carry on under a new server after a LAN switch."""
@@ -925,6 +1965,86 @@ class Session:
             for entry in subagents.list_all()
             if entry.id in owned
         ]
+
+    # Background ----------------------------------------------------
+
+    def background(self) -> dict:
+        """Everything working on its own, in any chat: sub-agents, chats
+        mid-turn, spark shifts, commands running, and waits. For the
+        Background panel and its bar."""
+
+        titles = {c.id: c.title for c in list(self.chats.values())}
+        agents = [
+            {
+                "id": entry.id, "task": entry.task,
+                "activity": entry.activity,
+                "seconds": round(entry.elapsed),
+                "chat": self.agents.get(entry.id, ""),
+                "chat_title": titles.get(self.agents.get(entry.id, ""), ""),
+            }
+            for entry in subagents.list_all()
+            if entry.status == subagents.RUNNING
+        ]
+        chats = [
+            {"id": c.id, "title": c.title}
+            for c in list(self.chats.values()) if c.busy or c.queued
+        ]
+        working = [
+            {"id": sp.id, "name": sp.name}
+            for sp in sparks.all_sparks() if sp.status == sparks.WORKING
+        ]
+        shells = []
+        for row in _tools().running_shells():
+            owner = row["owner"]
+            kind, _, key = owner.partition(":")
+            if kind == "agent":
+                found = next((a for a in agents if a["id"] == key), None)
+                by = f"Sub-agent: {found['task']}" if found else "A sub-agent"
+            elif kind == "spark":
+                found = sparks.find(key)
+                by = found.name if found else "A spark"
+            else:
+                by = titles.get(owner, "Flash")
+            shells.append({**row, "by": by[:80]})
+        waiting = [
+            {"id": w.id, "what": w.what, "chat": w.chat,
+             "chat_title": titles.get(w.chat, ""), "when": waits.when(w)}
+            for w in waits.waiting()
+        ]
+        return {"agents": agents, "chats": chats, "sparks": working,
+                "shells": shells, "waits": waiting}
+
+    def stop_background(self, what: str) -> int:
+        """Stop one thing the Background panel lists, named
+        "kind:key" (agent, chat, spark, shell), or everything working
+        for "all". Waits are left: they are cancelled one by one. How
+        many were stopped."""
+
+        kind, _, key = what.partition(":")
+        stopped = 0
+        now = self.background()
+        if kind in ("agent", "all"):
+            for a in now["agents"]:
+                if kind == "all" or a["id"] == key:
+                    stopped += subagents.stop(a["id"])
+        if kind in ("chat", "all"):
+            for c in now["chats"]:
+                if kind == "all" or c["id"] == key:
+                    self.halt(self.chat(c["id"]))
+                    stopped += 1
+        if kind in ("spark", "all"):
+            for sp in now["sparks"]:
+                if kind == "all" or sp["id"] == key:
+                    with contextlib.suppress(sparks.SparkError):
+                        sparks.stop(sp["id"])
+                        stopped += 1
+        if kind in ("shell", "all"):
+            for row in now["shells"]:
+                if kind == "all" or str(row["pid"]) == key:
+                    stopped += _tools().stop_shell(row["pid"])
+        if stopped:
+            self.hub.publish({"type": "status"})
+        return stopped
 
     # Search --------------------------------------------------------
 
@@ -997,10 +2117,13 @@ class Session:
         def ask(question: str) -> str:
             entry = Ask(id=uuid.uuid4().hex[:8], chat=chat.id,
                         question=question)
+            proposal = livedocs.take_proposal()
             self.asks[entry.id] = entry
             self.emit(chat, {
                 "type": "ask", "id": entry.id, "question": question,
             })
+            if proposal is not None:
+                self.document_proposed(entry.id, *proposal)
 
             while not entry.done.wait(ASK_POLL_SECONDS):
                 if chat.stop.is_set():
@@ -1011,31 +2134,88 @@ class Session:
             answer = entry.answer or "n"
             self.emit(chat, {
                 "type": "answered", "id": entry.id, "answer": answer,
+                **({"why": entry.why} if entry.why else {}),
             })
-            return answer
+            # The reason, on a line of its own after the answer.
+            return f"{answer}\n{entry.why}" if entry.why else answer
 
         return ask
 
-    def answer(self, ask_id: str, answer: str) -> bool:
+    def answer(self, ask_id: str, answer: str, why: str = "") -> bool:
         entry = self.asks.get(ask_id)
         if entry is None:
             return False
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
+        if entry.answer == "n":
+            entry.why = " ".join(str(why or "").split())[:500]
         entry.done.set()
         return True
+
+    # Documents -----------------------------------------------------
+
+    def document_changed(self, path: str, text: str) -> None:
+        """An agent wrote PATH: each document shown from it is brought up
+        to date, and an open panel shows the change going in."""
+
+        for file_id in workspace.documents_from(path):
+            size = workspace.refresh_document(file_id, text)
+            if size is not None:
+                self.hub.publish({
+                    "type": "doc-changed", "id": file_id, "text": text,
+                    "size": size,
+                })
+
+    def document_saved(
+        self, chat: Chat, path: str, before: str, text: str,
+    ) -> None:
+        """The user saved a document in CHAT's side panel, from BEFORE to
+        TEXT: Flash wakes to read it and do whatever they left for it.
+        A save while a turn runs is read once that turn is done, with
+        any other saves since as one change."""
+
+        if before == text:
+            return
+        saved = {
+            "path": path, "name": Path(path).name, "before": before,
+            "text": text,
+        }
+        with self._lock:
+            if chat.busy or chat.queued:
+                was = chat.saved_doc
+                if was is not None and was["path"] == path:
+                    saved["before"] = was["before"]
+                chat.saved_doc = saved
+                return
+        turn = _saved_turn(saved)
+        self.send(chat, turn["text"], wake=True, note=turn["note"],
+                  quiet=turn["quiet"])
+
+    def document_proposed(self, ask_id: str, path: str, text: str) -> None:
+        """The question ASK_ID is whether PATH may become TEXT: a panel
+        showing it shows the change, to allow or deny there."""
+
+        ids = workspace.documents_from(path)
+        if ids:
+            self.hub.publish({
+                "type": "doc-proposal", "ask": ask_id, "ids": ids,
+                "text": text,
+            })
 
     # Turns ---------------------------------------------------------
 
     def send(
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
         files: Optional[list] = None, heard: bool = False,
+        note: str = "", quiet: str = "", deep: bool = False,
+        asked_from: Optional[dict] = None, note_card: Optional[dict] = None,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
         While one is already running, the message waits in the chat's
         pending list instead: MODE "steer" hands it to the model at the
-        running turn's next step, and anything else makes it the next
-        turn. WAKE is a turn nobody typed: a sub-agent finished, and the
+        running turn's next step, "now" stops the running turn and makes
+        it the next one, and anything else makes it the next turn after
+        those already waiting. WAKE is a turn nobody typed: a sub-agent finished, and the
         model is woken to report back. It never waits in line.
         """
 
@@ -1043,6 +2223,16 @@ class Session:
         attached = attachments(files)
         if not text and not attached:
             return {}
+        if not wake:
+            # A key pasted in goes to the vault; the message, kept and
+            # sent, has only its name.
+            text, kept = _capture(text)
+            if kept:
+                from . import vault
+
+                self.hub.publish({"type": "notify", "chat": chat.id,
+                                  "title": "Kept in your vault",
+                                  "text": vault.note(kept)})
 
         with self._lock:
             if chat.busy or chat.queued:
@@ -1053,49 +2243,594 @@ class Session:
                     "text": text,
                     "mode": "steer" if mode == "steer" else "queue",
                     "files": attached,
+                    # Only when asked, so a plain one stays as it was.
+                    **({"deep": True} if deep else {}),
                 }
-                chat.pending.append(item)
+                # Where it was asked from, kept beside it (not shown).
+                extensions.turn_from[f"{chat.id}:{item['id']}"] = \
+                    dict(asked_from or {})
+                if mode == "now":
+                    chat.pending.insert(0, item)
+                else:
+                    chat.pending.append(item)
                 waiting = True
             else:
                 chat.stop.clear()
                 chat.queued = True
                 chat.heard = heard
+                # Where the person asked from, for extension tools (a robot
+                # may only be used when asked from one, or by voice): none
+                # for a turn nobody typed or said.
+                extensions.turn_from[chat.id] = dict(asked_from or {})
+                chat.voice_ended = False
                 waiting = False
 
         if waiting:
             self._publish_pending(chat)
+            if mode == "now":
+                self.halt(chat)
             return {"pending": item["id"]}
 
-        self._begin(chat, text, wake, attached)
+        self._begin(chat, text, wake, attached, note=note, note_card=note_card)
         threading.Thread(
-            target=self._run, args=(chat, text, attached), daemon=True
+            target=self._run, args=(chat, text, attached, quiet, deep),
+            daemon=True,
         ).start()
         return {}
 
     def _begin(
         self, chat: Chat, text: str, wake: bool = False,
-        files: Optional[list] = None,
+        files: Optional[list] = None, version: Optional[dict] = None,
+        note: str = "", note_card: Optional[dict] = None,
     ) -> None:
-        """Put a turn's message in the chat, as its turn starts."""
+        """Put a turn's message in the chat, as its turn starts. An
+        edited one says which of its versions it is. One nobody typed
+        shows as NOTE, a line saying why it began."""
 
         if wake:
-            self.emit(chat, {"type": "note", "text": WAKE_TEXT})
+            self.started.pop(chat.id, None)
+            self.emit(chat, note_card or {"type": "note", "text": note or WAKE_TEXT})
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
-            named = text or (files[0]["name"] if files else "")
+            # Untyped, a recording names its chat for what it is, not by
+            # its file's name.
+            first = files[0] if files else {}
+            named = text or (
+                "Screen recording" if first.get("kind") == "video"
+                else first.get("name", "")
+            )
             chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
+            chat.auto_title = chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
-        event: dict = {"type": "user", "text": text}
+        event: dict = {
+            "type": "user", "text": text, "turn": uuid.uuid4().hex[:8],
+            **(version or {}),
+        }
         if files:
             event["files"] = files
         self.emit(chat, event)
+        self.started[chat.id] = len(chat.log) - 1
+
+    # Side questions ------------------------------------------------
+
+    def btw(self, chat: Chat, question: str) -> str:
+        """Answer QUESTION on the side, from what CHAT holds, without
+        tools and without joining the conversation; a turn running in
+        it carries on. The answer streams to the page as "btw" events,
+        none of them kept in the chat."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import btw as side
+
+        question = question.strip()
+        if not question:
+            raise ValueError(side.USAGE)
+        spark = sparks.find(chat.spark) if chat.spark else None
+        model = (
+            sparks.model_of(spark, chat_model(chat)) if spark
+            else chat_model(chat)
+        )
+        if not model:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        asked_id = uuid.uuid4().hex[:8]
+        working_on = ""
+        if chat.busy or chat.queued:
+            working_on = next(
+                (e.get("text", "") for e in reversed(chat.log)
+                 if e["type"] == "user"),
+                "",
+            )
+        messages = side.context(
+            list(chat.messages), question, working_on, chat.partial,
+        )
+
+        def say(**event: Any) -> None:
+            self.hub.publish({
+                "type": "btw", "chat": chat.id, "id": asked_id, **event,
+            })
+
+        def answer() -> None:
+            try:
+                said = side.ask(
+                    ai._client(), model, messages, ai._chat_options(),
+                    on_text=lambda piece: say(text=piece),
+                )
+            except Exception as exc:  # noqa: BLE001
+                say(done=True, error=f"{exc.__class__.__name__}: {exc}")
+                return
+            say(done=True)
+            # The working model hears of it: at its next step while a turn runs, else with the next message.
+            with self._lock:
+                if chat.busy or chat.queued:
+                    chat.asides.append((question, said))
+                else:
+                    chat.messages.append(ai._message("user", side.aside(question, said)))
+
+        say(question=question)
+        threading.Thread(target=answer, daemon=True).start()
+        return asked_id
+
+    def stop_debate(self, debate_id: str = "", chat: str = "") -> int:
+        """Stop the debate DEBATE_ID, or every one in CHAT: what was said
+        so far is kept. How many were stopped."""
+
+        stopped = 0
+        for key, going in list(self.debating.items()):
+            if key == debate_id or (chat and going["chat"] == chat):
+                going["stop"].set()
+                stopped += 1
+        return stopped
+
+    def steer_debate(self, debate_id: str, text: str) -> None:
+        """Steer DEBATE_ID: both sides take TEXT in from their next turn,
+        and so does the summary."""
+
+        text = " ".join(str(text or "").split())[:1000]
+        going = self.debating.get(debate_id)
+        if going is None:
+            raise ValueError("That debate is over. Keep debating to go on.")
+        if not text:
+            raise ValueError("Say how to steer it.")
+        going["steers"].append(text)
+
+    def debate(self, chat: Chat, text: str = "", continues: str = "",
+               steer: str = "", models: Optional[list] = None,
+               rounds: int = 0, until: "bool | str" = False) -> str:
+        """Argue a question out (debate.py), in CHAT, on a thread of its
+        own: each side's words stream to the page as "debate-live"
+        events, and the whole debate is kept in the chat at the end, its
+        summary in what the model sees, to go on from. CONTINUES is a
+        debate kept in the chat to keep going, from where it got to;
+        STEER, what the user wants it to turn to."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import debate as argue
+
+        before: Optional[dict] = None
+        if continues:
+            before = next((e for e in reversed(chat.log)
+                           if e.get("type") == "debate"
+                           and e.get("id") == continues), None)
+            if before is None:
+                raise ValueError("That debate is gone.")
+            question, models = before["question"], before.get("models", [])
+            until = until or argue.until_mode(before.get("until"))
+        else:
+            asked = argue.parse_full(text)
+            question = asked["question"]
+            # Picked in the page's form, or named in the text.
+            models = [str(m) for m in models or [] if str(m).strip()][:2] \
+                or asked["models"]
+            rounds = rounds or asked["rounds"]
+            until = argue.until_mode(until) or asked["until"]
+        if not question:
+            raise ValueError(argue.USAGE)
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish first.")
+        if any(g["chat"] == chat.id for g in self.debating.values()):
+            raise ValueError("A debate is going on in this chat already.")
+        judge = chat_model(chat)
+        if not judge:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        # Auto is not a model: the one it picks for the question argues and
+        # judges (a new chat starts on Auto, and "auto" on its own reached the
+        # model server as a name it did not know)
+        from . import modelchain
+        asked_for = [{"role": "user", "content": question}]
+        judge, _ = modelchain.resolve(ai.Config.host, judge, asked_for,
+                                      ai.Config.model)
+        if modelchain.is_auto(judge) or not judge:
+            raise ValueError("Auto has no models to pick from: pin one, or "
+                             "pick a model with Alt+M.")
+        models = [modelchain.resolve(ai.Config.host, m, asked_for, judge)[0]
+                  for m in models]
+        debate_id = uuid.uuid4().hex[:8]
+        going = {"chat": chat.id, "stop": threading.Event(),
+                 "steers": [steer] if steer.strip() else []}
+        self.debating[debate_id] = going
+
+        def say(event: dict) -> None:
+            self.hub.publish({"type": "debate-live", "chat": chat.id,
+                              "id": debate_id, **event})
+
+        def steers() -> list[str]:
+            taken, going["steers"] = going["steers"], []
+            return taken
+
+        def go() -> None:
+            try:
+                done = argue.run(
+                    question, ai._client(), models, judge,
+                    history=list(chat.messages),
+                    options=ai._chat_options(), say=say,
+                    stopped=going["stop"].is_set,
+                    turns=(before or {}).get("turns"), steers=steers,
+                    rounds=int(rounds or argue.ROUNDS), until=until,
+                )
+            except Exception as exc:  # noqa: BLE001
+                say({"done": True, "error": f"{exc.__class__.__name__}: "
+                     f"{exc}"})
+                return
+            finally:
+                self.debating.pop(debate_id, None)
+            grew = len(done["turns"]) > len((before or {}).get("turns", []))
+            if grew:
+                chat.messages.extend(argue.note(done))
+                self.emit(chat, {"type": "debate", "id": debate_id, **done,
+                                 **({"continues": continues}
+                                    if continues else {})})
+                self.save(chat)
+            say({"done": True, "stopped": done["stopped"],
+                 "empty": not grew})
+
+        say({"question": question, "sides": argue.SIDES,
+             "turns": (before or {}).get("turns", []),
+             "names": (before or {}).get("sides", []),
+             "continues": continues})
+        threading.Thread(target=go, daemon=True).start()
+        return debate_id
+
+    # Editing -------------------------------------------------------
+
+    def _cut(self, chat: Chat, at: int) -> int:
+        """Where, in what the model sees, the turn the message at AT in
+        the log began: everything from there on came after it.
+
+        Each turn's message carries the turn it began. A chat from
+        before that is matched by counting turns back from the end.
+        """
+
+        entry = chat.log[at]
+        if entry.get("turn"):
+            later = [
+                e["turn"] for e in chat.log[at:]
+                if e["type"] == "user" and e.get("turn")
+            ]
+            for turn in later:
+                for index, message in enumerate(chat.messages):
+                    if message.get("turn") == turn:
+                        return index
+        else:
+            turns = sum(
+                1 for e in chat.log[at:]
+                if e["type"] == "user" and not e.get("steer")
+                or e["type"] == "note" and e.get("text") == WAKE_TEXT
+            )
+            for index in range(len(chat.messages) - 1, -1, -1):
+                message = chat.messages[index]
+                if (
+                    message.get("role") == "user"
+                    and not context.is_summary(message)
+                    and not str(message.get("content") or "")
+                    .startswith(STEER_NOTE)
+                ):
+                    turns -= 1
+                    if turns == 0:
+                        return index
+        # None of it is in what the model sees: those turns failed, or
+        # were summarized to make room, and a summary can't be undone.
+        if any(context.is_summary(m) for m in chat.messages):
+            raise ValueError(
+                "That part of the chat was summarized to make room, "
+                "so it can't be changed."
+            )
+        return len(chat.messages)
+
+    def _message_at(self, chat: Chat, at: int) -> dict:
+        if not 0 <= at < len(chat.log):
+            raise ValueError("That message is not in the chat any more.")
+        entry = chat.log[at]
+        if entry["type"] != "user" or entry.get("steer"):
+            raise ValueError("Only a message you sent can be edited.")
+        return entry
+
+    def edit(
+        self, chat: Chat, at: int, text: str,
+        files: Optional[list] = None,
+    ) -> None:
+        """Send the message at AT in the log again, as TEXT.
+
+        The chat goes back to just before it and the turn runs again.
+        What came after is kept as the message's earlier version, to
+        go back to.
+        """
+
+        text = text.strip()
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            entry = self._message_at(chat, at)
+            if files is None:
+                files = entry.get("files") or []
+            if not text and not files:
+                raise ValueError("The message is empty.")
+            cut = self._cut(chat, at)
+            group = entry.get("group") or entry.get("turn") \
+                or uuid.uuid4().hex[:8]
+            versions = chat.branches.setdefault(group, [None])
+            versions[int(entry.get("version") or 0)] = {
+                "log": chat.log[at:], "messages": chat.messages[cut:],
+            }
+            versions.append(None)
+            del chat.log[at:]
+            del chat.messages[cut:]
+            chat.stop.clear()
+            chat.queued = True
+            chat.heard = False
+        self.hub.publish({
+            "type": "rewound", "chat": chat.id, "keep": at, "tail": [],
+        })
+        self._begin(chat, text, False, files, {
+            "group": group, "version": len(versions) - 1,
+            "versions": len(versions),
+        })
+        threading.Thread(
+            target=self._run, args=(chat, text, files), daemon=True,
+        ).start()
+
+    def show_version(self, chat: Chat, at: int, version: int) -> None:
+        """Show another version of the edited message at AT, and the
+        chat as it went on from that version."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            entry = self._message_at(chat, at)
+            group = str(entry.get("group") or "")
+            versions = chat.branches.get(group)
+            now = int(entry.get("version") or 0)
+            if not versions or not 0 <= version < len(versions) \
+                    or versions[version] is None:
+                raise ValueError("That version is not here.")
+            if version == now:
+                return
+            cut = self._cut(chat, at)
+            versions[now] = {
+                "log": chat.log[at:], "messages": chat.messages[cut:],
+            }
+            shown, versions[version] = versions[version], None
+            tail = list(shown["log"])
+            tail[0] = {
+                **tail[0], "group": group, "version": version,
+                "versions": len(versions),
+            }
+            chat.log[at:] = tail
+            chat.messages[cut:] = shown["messages"]
+        self.save(chat)
+        self.hub.publish({
+            "type": "rewound", "chat": chat.id, "keep": at, "tail": tail,
+        })
+
+    # Forks --------------------------------------------------------
+
+    def fork(self, chat: Chat, at: int) -> str:
+        """Fork CHAT after the turn whose reply is at AT in its log: the
+        chat goes on from there as a new fork, and the way it went before
+        is kept as the fork it was. The same chat; only what it shows
+        changes. Returns the new fork's id."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            if not 0 <= at < len(chat.log):
+                raise ValueError("That message is not in the chat any more.")
+            # The whole of that turn: up to the next message sent.
+            after = next((
+                i for i in range(at + 1, len(chat.log))
+                if chat.log[i]["type"] == "user"
+                and not chat.log[i].get("steer")
+            ), None)
+            keep = len(chat.log) if after is None else after
+            cut = len(chat.messages) if after is None \
+                else self._cut(chat, after)
+            if not chat.forks:
+                chat.forks["main"] = {
+                    "id": "main", "parent": "", "at": -1,
+                    "label": chat.title, "created": chat.created,
+                }
+                chat.fork = "main"
+            self._park(chat)
+            made = uuid.uuid4().hex[:8]
+            said = next((
+                str(e.get("text") or "") for e in reversed(chat.log[:keep])
+                if e["type"] in ("assistant", "user")
+                and str(e.get("text") or "").strip()
+            ), "")
+            chat.forks[made] = {
+                "id": made, "parent": chat.fork, "at": keep - 1,
+                "label": " ".join(said.split())[:80] or "Fork",
+                "created": time.time(),
+            }
+            del chat.log[keep:]
+            del chat.messages[cut:]
+            chat.branches = json.loads(json.dumps(chat.branches))
+            chat.fork = made
+        self._forked(chat)
+        return made
+
+    def _park(self, chat: Chat) -> None:
+        """Keep the fork showing aside, as it is now."""
+
+        chat.forks[chat.fork].update(
+            log=list(chat.log), messages=list(chat.messages),
+            branches=chat.branches,
+        )
+
+    def switch_fork(self, chat: Chat, fork_id: str) -> None:
+        """Show fork FORK_ID of CHAT, keeping the one showing aside."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            found = chat.forks.get(fork_id)
+            if found is None:
+                raise ValueError("That fork is not in this chat.")
+            if fork_id == chat.fork:
+                return
+            self._park(chat)
+            chat.log = list(found.pop("log", None) or [])
+            chat.messages = list(found.pop("messages", None) or [])
+            chat.branches = found.pop("branches", None) or {}
+            chat.fork = fork_id
+        self._forked(chat)
+
+    def delete_fork(self, chat: Chat, fork_id: str) -> None:
+        """Let fork FORK_ID of CHAT go. Its own forks move up to the one it
+        came from (or, for the first fork, under the oldest of them). The
+        one showing goes to where it came from first; with one fork left,
+        the chat has no forks at all."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            gone = chat.forks.get(fork_id)
+            if gone is None:
+                raise ValueError("That fork is not in this chat.")
+            parent = gone.get("parent", "")
+            kids = sorted(
+                (f for f in chat.forks.values()
+                 if f.get("parent") == fork_id),
+                key=lambda f: f.get("created", 0),
+            )
+            if not parent and kids:
+                parent = kids[0]["id"]
+                kids[0]["parent"] = ""
+            for kid in kids:
+                if kid["id"] != parent:
+                    kid["parent"] = parent
+            if fork_id == chat.fork:
+                showing = parent if parent in chat.forks else next(
+                    f for f in chat.forks if f != fork_id)
+                found = chat.forks[showing]
+                chat.log = list(found.pop("log", None) or [])
+                chat.messages = list(found.pop("messages", None) or [])
+                chat.branches = found.pop("branches", None) or {}
+                chat.fork = showing
+            del chat.forks[fork_id]
+            if len(chat.forks) < 2:
+                chat.forks.clear()
+                chat.fork = ""
+        self._forked(chat)
+
+    def _forked(self, chat: Chat) -> None:
+        self.save(chat)
+        self.hub.publish({"type": "forked", "chat": chat.id,
+                          "log": chat.log, "forks": len(chat.forks)})
+        self.hub.publish({"type": "chats", "chat": chat.id})
+
+    def fork_tree(self, chat: Chat) -> list[dict]:
+        """CHAT's forks for the graph: each with where it came from, how
+        long it is, and its last words, the one showing marked."""
+
+        found = []
+        for fork in chat.forks.values():
+            showing = fork["id"] == chat.fork
+            log = chat.log if showing else fork.get("log") or []
+            said = [e for e in log if e.get("type") in ("user", "assistant")
+                    and str(e.get("text") or "").strip()]
+            last = " ".join(str(said[-1]["text"]).split())[:90] \
+                if said else ""
+            found.append({
+                "id": fork["id"], "parent": fork.get("parent", ""),
+                "label": fork.get("label", ""), "created":
+                fork.get("created", 0), "messages": len(said),
+                "last": last, "current": showing,
+            })
+        return found
+
+    def retry(self, chat: Chat) -> None:
+        """Run a turn that failed again, from its message.
+
+        The error and whatever the turn showed before it leave the chat,
+        and a steer sent during it waits to be read again.
+        """
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            if not chat.log or not chat.log[-1].get("retry"):
+                raise ValueError("Nothing to retry.")
+            at = next((
+                i for i in range(len(chat.log) - 1, -1, -1)
+                if chat.log[i]["type"] == "user"
+                and not chat.log[i].get("steer")
+            ), None)
+            if at is None:
+                raise ValueError("Nothing to retry.")
+            entry = chat.log[at]
+            steers = [
+                {
+                    "id": uuid.uuid4().hex[:8],
+                    "text": e.get("text", ""),
+                    "mode": "steer",
+                    "files": e.get("files") or [],
+                }
+                for e in chat.log[at + 1:]
+                if e["type"] == "user" and e.get("steer")
+            ]
+            del chat.log[at + 1:]
+            chat.pending[:0] = steers
+            chat.stop.clear()
+            chat.queued = True
+            self.started[chat.id] = at
+        self.hub.publish({"type": "retrying", "chat": chat.id, "keep": at + 1})
+        if steers:
+            self._publish_pending(chat)
+        threading.Thread(
+            target=self._run,
+            args=(chat, entry.get("text", ""), entry.get("files") or []),
+            daemon=True,
+        ).start()
+
+    def _take_back(self, chat: Chat) -> bool:
+        """Take a failed turn's message back out of what the model sees,
+        as the terminal does, so it is not left there unanswered. True
+        when the turn had a message of its own to try again."""
+
+        asked = self.asked.pop(chat.id, None)
+        for at, message in enumerate(chat.messages):
+            if message is asked:
+                del chat.messages[at:]
+                break
+        at = self.started.pop(chat.id, None)
+        return (
+            at is not None and at < len(chat.log)
+            and chat.log[at]["type"] == "user"
+        )
 
     def _publish_pending(self, chat: Chat) -> None:
         self.hub.publish({
             "type": "pending", "chat": chat.id,
             "pending": [dict(p) for p in chat.pending],
         })
+
+    def take_asides(self, chat: Chat) -> list:
+        """Side questions answered since the model's last step, taken off the list."""
+
+        with self._lock:
+            taken, chat.asides = chat.asides, []
+        return taken
 
     def take_steers(self, chat: Chat) -> list[dict]:
         """The steering messages waiting for this turn, taken off the
@@ -1115,6 +2850,51 @@ class Session:
             self.emit(chat, event)
         return steers
 
+    def _title(self, chat: Chat) -> None:
+        """After a chat's first turn: the model names it, when the user
+        has that on, on a thread of its own. Not over a name they gave
+        it meanwhile, and only once."""
+
+        from . import ai  # deferred: ai imports half of Flash
+
+        was, chat.auto_title = chat.auto_title, ""
+        if not titles.enabled() or chat.title != was:
+            return
+        asked = next(
+            (e.get("text", "") for e in chat.log if e["type"] == "user"), "",
+        )
+        answered = humanvoice.strip(next(
+            (e.get("text", "") for e in chat.log
+             if e["type"] == "assistant" and (e.get("text") or "").strip()),
+            "",
+        ))
+        spark = sparks.find(chat.spark) if chat.spark else None
+        model = (
+            sparks.model_of(spark, chat_model(chat)) if spark
+            else chat_model(chat)
+        )
+        if not asked.strip() or not model:
+            return
+
+        def name() -> None:
+            try:
+                said = titles.write(
+                    ai._client(), model, asked, answered, TITLE_CHARS,
+                    ai._chat_options(),
+                )
+            except Exception:  # noqa: BLE001
+                return  # its first message still names it
+            if said and chat.title == was and chat.id in self.chats:
+                chat.title = said
+                self.save(chat)
+                self.hub.publish({
+                    "type": "retitle", "chat": chat.id, "from": was,
+                    "title": said,
+                })
+                self.hub.publish({"type": "chats", "chat": chat.id})
+
+        threading.Thread(target=name, daemon=True).start()
+
     def _take_next(self, chat: Chat) -> Optional[dict]:
         """The next waiting message to run as a turn, if any. A steer
         the turn ended before it could read comes first: it is older.
@@ -1122,11 +2902,44 @@ class Session:
         and runs. Called with the lock held."""
 
         if not chat.pending:
-            return None
+            if chat.saved_doc is None:
+                return None
+            saved, chat.saved_doc = chat.saved_doc, None
+            chat.queued = True
+            chat.stop.clear()
+            return _saved_turn(saved)
         item = chat.pending.pop(0)
         chat.queued = True
         chat.stop.clear()
+        # The turn it starts was asked from where it was.
+        extensions.turn_from[chat.id] = extensions.turn_from.pop(
+            f"{chat.id}:{item.get('id', '')}", {})
         return item
+
+    def halt(self, chat: Chat) -> None:
+        """Stop the turn CHAT is running, leaving what waits to run."""
+
+        chat.stop.set()
+        # A command it is running ends now, not when it would have.
+        _tools().stop_commands(chat.id)
+        # A call Flash is on stops mid-word, and the Mac gets its own
+        # microphone and speakers back.
+        calls.halt(chat.id)
+
+    def send_now(self, chat: Chat, item_id: str) -> None:
+        """Stop the running turn and run the waiting message ITEM_ID next,
+        ahead of the rest."""
+
+        with self._lock:
+            found = next((p for p in chat.pending if p["id"] == item_id), None)
+            if found is None:
+                raise ValueError("That message has already been sent.")
+            chat.pending.remove(found)
+            found["mode"] = "queue"
+            chat.pending.insert(0, found)
+        self._publish_pending(chat)
+        if chat.busy:
+            self.halt(chat)
 
     def unqueue(self, chat: Chat) -> list[dict]:
         """Drop every waiting message, handing back the messages."""
@@ -1139,6 +2952,7 @@ class Session:
 
     def _run(
         self, chat: Chat, text: str, files: Optional[list] = None,
+        quiet: str = "", deep: bool = False,
     ) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
@@ -1147,13 +2961,21 @@ class Session:
         # One runner per chat, so its waiting messages go in the order
         # they were sent. The lock is let go between turns, so another
         # chat is not held up behind a long queue.
-        following: Optional[dict] = {"text": text, "files": files or []}
+        following: Optional[dict] = {
+            "text": text, "files": files or [], "quiet": quiet,
+            "deep": deep,
+        }
         while following is not None:
             text, files = following["text"], following.get("files") or []
             with self.turn_lock:
                 chat.queued = False
                 chat.busy = True
+                chat.quiet = following.get("quiet") or ""
+                chat.deep = bool(following.get("deep"))
                 self.emit(chat, {"type": "busy", "busy": True})
+                # Followed by any extension that asked to be.
+                progress.begin("web", chat.id, chat.title, text)
+                begun = len(chat.log)
                 try:
                     found = (
                         workspace.project(chat.project)
@@ -1162,30 +2984,69 @@ class Session:
                     if chat.stop.is_set():
                         self.emit(chat, {"type": "note", "text": "Stopped."})
                     else:
-                        with inside(found.path if found else None):
+                        # Its commands are this chat's, for Stop to end.
+                        with inside(where(chat, found)), \
+                                _tools().running_as(chat.id):
                             run_turn(self, chat, text, found, files)
+                    progress.end(*_outcome(chat, begun))
                 except Exception as exc:  # noqa: BLE001
-                    self.emit(chat, {
+                    progress.failed(f"{exc.__class__.__name__}: {exc}")
+                    failed: dict = {
                         "type": "error",
                         "text": f"{exc.__class__.__name__}: {exc}",
-                    })
+                    }
+                    if self._take_back(chat):
+                        failed["retry"] = True
+                    self.emit(chat, failed)
                 finally:
+                    chat.quiet = ""
+                    progress.end(False)
+                    self.asked.pop(chat.id, None)
+                    self.started.pop(chat.id, None)
+                    said = humanvoice.strip(_reply_since(chat, begun))
+                    if said:
+                        self.hub.note("reply", chat.title, said, chat.id)
+                    # Saved before it is done: whatever looks once it is
+                    # done finds the reply on disk too.
+                    chat.partial = chat.thinking = ""
+                    self.save(chat)
                     with self._lock:
                         following = self._take_next(chat)
                         chat.busy = False
-                    chat.partial = chat.thinking = ""
-                    self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
+            if chat.auto_title:
+                self._title(chat)
+            # A spark's report that came in while the turn ran.
+            if following is None:
+                self.post_spark_reports()
             if following is not None:
                 self._publish_pending(chat)
                 self._begin(
-                    chat, following["text"], False,
+                    chat, following["text"], bool(following.get("note")),
                     following.get("files") or [],
+                    note=following.get("note") or "",
                 )
 
 
 # --- A turn --------------------------------------------------------------
+
+
+def _outcome(chat: Chat, begun: int) -> tuple[bool, str, str]:
+    """How the turn that began at BEGUN in CHAT's log went, for
+    progress.end: done, its reply's first words, or what stopped it."""
+
+    added = chat.log[begun:]
+    errors = [e.get("text", "") for e in added if e["type"] == "error"]
+    if errors:
+        return False, "", errors[-1]
+    if chat.stop.is_set():
+        return False, "", "Stopped."
+    replies = [
+        e.get("text", "") for e in added
+        if e["type"] == "assistant" and (e.get("text") or "").strip()
+    ]
+    return True, replies[-1] if replies else "", ""
 
 
 @dataclass
@@ -1196,6 +3057,839 @@ class Streamed:
     stopped: bool = False
     tokens: int = 0
     seconds: float = 0.0
+    # A woken turn's word that it found nothing to do: never shown.
+    quiet: bool = False
+
+
+# Tools the model has in a chat in the browser, for the chat itself.
+# Chats working with chats: one starts another for a piece of work that
+# wants its own conversation (another model, another project, a long
+# job the user can watch and join in the sidebar), sends it more, and
+# reads what it said. The chat that sent is woken when it answers.
+HANDOFF_PREVIEW = 1500   # characters of an answer carried in the wake note
+HANDOFF_READ = 6000      # characters read_chat gives back, at most
+
+START_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "start_chat",
+        "description": (
+            "Start a new chat of its own for a piece of work, give it the "
+            "task, and return at once with its id. It shows in the "
+            "user's sidebar, where they can watch it and join in. Use it "
+            "when the work wants its own conversation: on another model, "
+            "in another project, or long enough to follow separately, "
+            "and when you will want to send it more afterwards "
+            "(message_chat). For a one-off you only need the answer to, "
+            "use agent instead. You are woken with its answer when it "
+            "finishes each reply; end your turn after starting it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": (
+                        "Everything the new chat needs to do the work "
+                        "with no other context: what, where, what to "
+                        "report back."
+                    ),
+                },
+                "title": {
+                    "type": "string",
+                    "description": "A few words for the sidebar.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "The model it runs on, when the user named one "
+                        "or the work needs a different one. Leave it out "
+                        "for this chat's."
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "The user's project it works in, by name, if not "
+                        "this chat's."
+                    ),
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
+
+MESSAGE_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "message_chat",
+        "description": (
+            "Send a message to another of the user's chats (one you "
+            "started, or one the user named) as from this chat: a follow-"
+            "up, an answer to its question, more work. It replies in "
+            "that chat on its own, and you are woken with what it says. "
+            "If it is busy, the message waits for its turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "description": "Its id, or its title.",
+                },
+                "text": {"type": "string", "description": "The message."},
+            },
+            "required": ["chat", "text"],
+        },
+    },
+}
+
+READ_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_chat",
+        "description": (
+            "Read another of the user's chats: whether it is working, "
+            "and its latest replies. With no chat, the chats this one "
+            "started or messaged, and how each stands."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "description": "Its id, or its title.",
+                },
+                "last": {
+                    "type": "integer",
+                    "description": (
+                        "How many of its latest replies (1 to 5, "
+                        "default 2)."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+TITLE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "title_chat",
+        "description": (
+            "Give this chat a new title when the one it has no longer says "
+            "what it is about: it was named from a message you misread, "
+            "or the talk has moved on to something else. A few words, "
+            "like a heading. Not for every turn: only when the title is "
+            "wrong."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The new title: a few words, no quotes.",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+}
+
+END_VOICE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "end_conversation",
+        "description": (
+            "End this spoken conversation once your reply has been said: "
+            "when the user is done (they said goodbye, or that is all), or "
+            "it has come to a natural end. Voice mode turns off after your "
+            "reply. Still answer them as usual."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+# The most marks one step of a guide may put on a photo, and the most
+# words of a label on one.
+GUIDE_MARKS = 6
+GUIDE_LABEL_CHARS = 40
+
+GUIDE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "guide_step",
+        "description": (
+            "Walk the user through something hands-on with their camera, "
+            "one step at a time: show this step on the photo you just "
+            "got, circling or pointing at what to touch, turn, press or "
+            "look at. For when they want to be shown how to do it (fix, "
+            "set up, assemble, find, use). One step per call, then say "
+            "the step in a sentence or two and stop: their next message "
+            "brings a new photo, so check the step was done before you "
+            "show the next one. Positions are fractions of the photo: x "
+            "from its left edge, y from its top, 0 to 1."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "step": {"type": "integer",
+                         "description": "This step's number, from 1."},
+                "of": {"type": "integer",
+                       "description": "How many steps, as best you know."},
+                "say": {"type": "string",
+                        "description": "The step, short: what to do."},
+                "marks": {
+                    "type": "array",
+                    "description": "Up to 6 things to point out.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                            "size": {
+                                "type": "number",
+                                "description": "Its width, as a fraction "
+                                "of the photo's: 0.05 for a button, 0.3 "
+                                "for a whole panel.",
+                            },
+                            "label": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["circle", "arrow"],
+                                "description": "circle (the default) "
+                                "rings it; arrow points at it.",
+                            },
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+                "done": {
+                    "type": "boolean",
+                    "description": "True on the last call, once it is all "
+                    "done: the guide closes.",
+                },
+            },
+            "required": ["say"],
+        },
+    },
+}
+
+
+WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "wait_for",
+        "description": (
+            "Set this task aside until something happens, then carry on "
+            "in this chat, knowing all you did: a time comes (\"in two "
+            "hours, check the download\"), a command succeeds (\"when CI "
+            "is green, deploy\": `gh pr checks 12`), or something you look "
+            "for with your tools is so (\"their reply is in my inbox\"), "
+            "or something comes in: a new email, a new iMessage, a change "
+            "in a connected app (events, looked for without the model). "
+            "With events and keep, you wake up for each one that comes in "
+            "and go on waiting: \"wait for new messages and answer "
+            "them\". It outlasts Flash restarting. Set it, tell the user "
+            "what you are waiting for, and end your turn: you are woken "
+            "when it is over, or told when you gave up. Give at or "
+            "in_minutes for a "
+            "time, command or check for a condition, or a time and a "
+            "condition to start looking then."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string", "description": (
+                    "What you are waiting for, in a few words, as the "
+                    "user will see it."
+                )},
+                "then": {"type": "string", "description": (
+                    "What to do once it happens: written for yourself, "
+                    "with what you will need."
+                )},
+                "at": {"type": "string", "description": (
+                    "A local date and time, ISO 8601: 2026-10-23T09:00."
+                )},
+                "in_minutes": {"type": "number", "description": (
+                    "Or minutes from now. With events or a condition, "
+                    "this is when looking starts, not how long: to watch "
+                    "for the next 5 minutes, leave it out and give "
+                    "give_up_after_hours."
+                )},
+                "command": {"type": "string", "description": (
+                    "A shell command that succeeds (exit 0) once it is "
+                    "so, run every so often here. The user says yes to "
+                    "it once."
+                )},
+                "check": {"type": "string", "description": (
+                    "Or, in words, what has to be so: looked for with "
+                    "your tools every so often, changing nothing."
+                )},
+                "events": {"type": "string", "description": (
+                    "Or what coming in ends the wait, space-separated: "
+                    "email (a new email), imessage (a new iMessage, on a "
+                    "Mac), call (a call ringing, from anyone, on a Mac), "
+                    "call:<name> (a call from that person), mcp:<server> "
+                    "(a change in a connected MCP "
+                    "server). You are told what came in. Watching starts "
+                    "now unless at or in_minutes is given."
+                )},
+                "keep": {"type": "boolean", "description": (
+                    "With events: wake for each one and go on waiting, "
+                    "until cancel_wait or the user stops it. Defaults to "
+                    "true when events has a call event; false otherwise."
+                )},
+                "every_minutes": {"type": "number", "description": (
+                    f"How often to look. Default {waits.DEFAULT_EVERY}."
+                )},
+                "give_up_after_hours": {"type": "number", "description": (
+                    "Stop looking after this long. Default "
+                    f"{waits.DEFAULT_GIVE_UP_HOURS}."
+                )},
+            },
+            "required": ["what", "then"],
+        },
+    },
+}
+
+CANCEL_WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "cancel_wait",
+        "description": (
+            "Stop waiting for something you set with wait_for, by its id: "
+            "it is no longer needed, or the user asked."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
+}
+
+
+EDIT_WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "edit_wait",
+        "description": (
+            "Change something you are waiting for with wait_for, by its "
+            "id, in place: the same wait and card, now waiting for what "
+            "you say. Give only what changes, as wait_for takes it (what, "
+            "then, at or in_minutes, command, check, events, keep, "
+            "every_minutes, give_up_after_hours); \"\" takes one away. A "
+            "new command is put to the user again."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                **WAIT_TOOL["function"]["parameters"]["properties"],
+            },
+            "required": ["id"],
+        },
+    },
+}
+
+
+def _tools():
+    from . import tools  # deferred: tools imports a lot
+
+    return tools
+
+
+def _reply_since(chat: Chat, begun: int) -> str:
+    """The last reply a turn wrote, from log entry BEGUN on: "" if none."""
+
+    for entry in reversed(chat.log[begun:]):
+        text = str(entry.get("text") or "").strip()
+        if entry.get("type") == "assistant" and text:
+            return str(entry["text"]).strip()
+    return ""
+
+
+SWITCH_MODEL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "switch_model",
+        "description": (
+            "Carry on this chat on another model, from your next step: when "
+            "the user asks (\"switch to X, write the code, then go back to Y "
+            "and do the rest\"), or a part of the work wants one. Say the "
+            "model by its name as the model menu shows it. The user is asked "
+            "first unless UltraAuto is on. Switch back the same way when that "
+            "part is done, if they asked you to."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "The model, as named in the model menu (\"Fable 5.2\")."},
+                "why": {"type": "string", "description": "A few words: what it is for."},
+            },
+            "required": ["model"],
+        },
+    },
+}
+
+
+def _model_key(name: str) -> str:
+    """NAME as compared: lower case, letters and digits only."""
+
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def find_model(asked: str, listed: list[str]) -> str:
+    """The model in LISTED that ASKED names ("Fable 5.2", "fable-5-2",
+    "claude-fable-5-2:latest"), or ""."""
+
+    want = _model_key(asked)
+    if not want:
+        return ""
+    keys = {name: _model_key(name.split(":")[0].split("/")[-1].removeprefix("@")) for name in listed}
+    for name, key in keys.items():
+        if key == want or _model_key(name) == want:
+            return name
+    found = [name for name, key in keys.items() if want in key]
+    return min(found, key=len) if found else ""
+
+
+def switch_model(session: "Session", chat: Chat, args: dict, ai_mod) -> str:
+    """switch_model: CHAT carries on, from the next step, on another model."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    asked = str(args.get("model") or "").strip()
+    if not asked:
+        return "Error: say the model."
+    listed = list_models(ai_mod) or []
+    model = find_model(asked, listed)
+    if not model:
+        shown = ", ".join(listed[:20]) or "none could be listed"
+        return f"Error: no model called {asked!r} here. The models: {shown}."
+    if model == chat_model(chat):
+        return f"Already on {model}."
+    why = " ".join(str(args.get("why") or "").split())[:120]
+    if not flash_tools.ultra_auto() and not flash_tools._user_allows(
+            f"Switch this chat to {model}" + (f" ({why})" if why else "") + "?"):
+        return f"The user said no: this chat stays on {chat_model(chat) or 'its model'}."
+    before = chat_model(chat)
+    chat.model = model
+    session.emit(chat, {"type": "note", "text": f"Switched to {model}" + (f": {why}" if why else "") + "."})
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    session.save(chat)
+    return (f"Switched from {before or 'the default'} to {model}. Your next step runs on it. "
+            "Switch back with switch_model when that part is done, if the user asked.")
+
+
+def chat_tools(chat: Chat) -> list[dict]:
+    """The tools for CHAT itself: retitling it, waiting for something,
+    working with other chats, and in a spoken conversation, ending
+    that."""
+
+    return [TITLE_TOOL, WAIT_TOOL, EDIT_WAIT_TOOL, CANCEL_WAIT_TOOL,
+            START_CHAT_TOOL, MESSAGE_CHAT_TOOL, READ_CHAT_TOOL,
+            *([] if chat.spark else [SWITCH_MODEL_TOOL]),
+            *([END_VOICE_TOOL] if chat.heard else []),
+            *([GUIDE_TOOL] if latest_photo(chat) else [])]
+
+
+def latest_photo(chat: Chat) -> str:
+    """The id of the photo with the user's latest message, if it came
+    with one: what the camera saw as they spoke, or a picture they sent.
+    """
+
+    for entry in reversed(chat.log):
+        if entry.get("type") != "user":
+            continue
+        photos = [f for f in entry.get("files") or []
+                  if isinstance(f, dict) and f.get("kind") == "image"]
+        return str(photos[-1].get("id") or "") if photos else ""
+    return ""
+
+
+def _fraction(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:  # NaN
+        return default
+    return min(1.0, max(0.0, number))
+
+
+def guide_step(session: "Session", chat: Chat, args: dict) -> str:
+    """guide_step: one step of a hands-on task, shown on the photo the
+    user just sent, with what to touch or turn marked on it."""
+
+    photo = latest_photo(chat)
+    if not photo:
+        return ("Error: there is no photo with their latest message to "
+                "mark. Ask them to point the camera at it.")
+    say = " ".join(str(args.get("say") or "").split())
+    if not say:
+        return "Error: say what this step is."
+    marks = []
+    for given in (args.get("marks") or [])[:GUIDE_MARKS]:
+        if not isinstance(given, dict):
+            continue
+        marks.append({
+            "x": _fraction(given.get("x")),
+            "y": _fraction(given.get("y")),
+            "size": max(0.02, _fraction(given.get("size"), 0.08)),
+            "label": " ".join(str(given.get("label") or "").split())[
+                :GUIDE_LABEL_CHARS],
+            "kind": "arrow" if given.get("kind") == "arrow" else "circle",
+        })
+    try:
+        step = max(1, int(args.get("step") or 1))
+        of = max(step, int(args.get("of") or step))
+    except (TypeError, ValueError):
+        step, of = 1, 1
+    done = bool(args.get("done"))
+    session.emit(chat, {
+        "type": "guide", "image": photo, "step": step, "of": of,
+        "text": say, "marks": marks, "done": done,
+    })
+    if done:
+        return "Shown. The guide closes: tell them they are done."
+    return (f"Shown as step {step} of {of}. Now say it, briefly, and stop "
+            "for them to do it.")
+
+
+def _command_allowed(wait: "waits.Wait") -> bool:
+    """Whether WAIT's command may run again and again with nobody
+    watching: the user says yes to it once, unless autonomous."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
+    return not wait.command or flash_tools.NO_COMMAND_CONFIRMATION or \
+        flash_tools.ultra_auto() or flash_tools._user_allows(
+            f"Wait for this, running it {every} until it succeeds?\n"
+            f"{wait.command}"
+        )
+
+
+def _waiting_words(wait: "waits.Wait") -> str:
+    """What WAIT waits for, for the model."""
+
+    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
+    hours = f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g}"
+    if wait.events:
+        from . import triggers
+
+        return (
+            f"Waiting (id {wait.id}) for "
+            + " or ".join(triggers.words(e) for e in wait.events)
+            + (", waking for each one that comes in" if wait.keep else "")
+            + f", for at most {hours} hours."
+        )
+    if wait.command or wait.check:
+        how = (f"running `{wait.command}`" if wait.command
+               else f"looking for: {wait.check}")
+        start = (f" from {waits.when(wait)}" if wait.at else "")
+        return (f"Waiting (id {wait.id}): {how}, {every}{start}, until it "
+                f"is so, or for at most {hours} hours.")
+    return f"Waiting (id {wait.id}) until {waits.when(wait)}."
+
+
+def wait_for(session: "Session", chat: Chat, args: dict) -> str:
+    """wait_for: CHAT's task, set aside until something happens."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    try:
+        wait = waits.make(chat.id, args, cwd=os.getcwd())
+    except waits.WaitError as exc:
+        return f"Error: {exc}"
+    flash_tools.tool_line(f"WaitFor({wait.what})")
+    # Run again and again with nobody watching: the user says yes once.
+    if not _command_allowed(wait):
+        return "Blocked by user: no wait was set."
+    waits.add(wait)
+    session.emit(chat, {"type": "wait", **wait.card()})
+    session.ensure_watching()
+    said = _waiting_words(wait)
+    flash_tools.tool_result(said)
+    return (
+        f"{said} Tell the user, in a sentence, what you are waiting for "
+        "and what you will do then, and end your turn. You are woken here "
+        "when it is over."
+    )
+
+
+def edit_wait(session: "Session", chat: Chat, args: dict) -> str:
+    """edit_wait: one of CHAT's waits, changed where it is."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    wait_id = str(args.get("id") or "").strip()
+    found = waits.find(wait_id)
+    flash_tools.tool_line(f"EditWait({found.what if found else wait_id})")
+    if "command" in args and found is not None and found.chat == chat.id \
+            and str(args.get("command") or "").strip() not in ("",
+                                                               found.command):
+        # A new command is asked about before anything changes, as
+        # wait_for asks; one that fails to check is not asked about.
+        try:
+            trial = waits.make(chat.id, {**waits._as_args(found), **{
+                k: args[k] for k in waits.EDITABLE if k in args}},
+                found.cwd, counted=False)
+        except waits.WaitError:
+            trial = None
+        if trial is not None and not _command_allowed(trial):
+            return "Blocked by user: the wait was not changed."
+    try:
+        before, wait = waits.edit(wait_id, chat.id, args)
+    except waits.WaitError as exc:
+        flash_tools.tool_result(str(exc), style=flash_tools.ERROR)
+        return f"Error: {exc}"
+    session.wait_changed(wait, was=before.what)
+    session.ensure_watching()
+    said = _waiting_words(wait)
+    flash_tools.tool_result(said)
+    return f"Changed. {said} Tell the user, in a sentence, what changed."
+
+
+def cancel_wait(session: "Session", chat: Chat, args: dict) -> str:
+    try:
+        wait = waits.cancel(str(args.get("id") or ""), chat.id)
+    except waits.WaitError as exc:
+        return f"Error: {exc}"
+    session.wait_changed(wait)
+    return f"Stopped waiting for {wait.what}."
+
+
+def find_chat(session: "Session", key: str) -> Optional[Chat]:
+    """A chat by its id, or else its title (exactly, then the newest
+    whose title contains KEY), ignoring case."""
+
+    key = " ".join(str(key or "").split())
+    if not key:
+        return None
+    chats = sorted(session.chats.values(), key=lambda c: c.updated,
+                   reverse=True)
+    for c in chats:
+        if c.id == key:
+            return c
+    low = key.lower()
+    for c in chats:
+        if c.title.lower() == low:
+            return c
+    return next((c for c in chats if low in c.title.lower()), None)
+
+
+def chat_state(chat: Chat) -> str:
+    return "working" if chat.busy else "waiting to start" if chat.queued \
+        else "idle"
+
+
+def replies(chat: Chat, last: int = 2,
+            chars: int = HANDOFF_READ) -> list[str]:
+    """CHAT's latest LAST replies, oldest first, cut to CHARS in all."""
+
+    said = [str(e.get("text") or "") for e in chat.log
+            if e.get("type") == "assistant" and e.get("text")]
+    picked = said[-max(1, min(5, last)):]
+    out, room = [], chars
+    for text in reversed(picked):
+        if room <= 0:
+            break
+        out.insert(0, text if len(text) <= room else text[-room:])
+        room -= len(text)
+    return out
+
+
+def start_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """start_chat: a new chat for a piece of work, started on it."""
+
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return "Error: say the task."
+    project = str(args.get("project") or "").strip() or chat.project
+    try:
+        child = session.new_chat(project=project)
+    except KeyError:
+        return f"Error: there is no project called {project!r}."
+    title = " ".join(str(args.get("title") or "").split())
+    # Named for its work, not for the note that hands it over.
+    child.title = (title or " ".join(task.split())[:TITLE_CHARS])[:TITLE_CHARS]
+    child.named = bool(title)
+    model = str(args.get("model") or "").strip()
+    child.model = model or chat.model
+    child.worktree = chat.worktree if child.project == chat.project else ""
+    session.handoffs[child.id] = chat.id
+    session.handoff_seen[child.id] = 0
+    session.ensure_watching()
+    session.send(child, handoff_text(chat, task))
+    session.emit(chat, chat_message_entry("to", child, task, started=True))
+    session.save(child)
+    session.hub.publish({"type": "chats", "chat": child.id})
+    return (
+        f"Started the chat {child.title!r} (id {child.id})"
+        + (f" on {child.model}" if child.model else "")
+        + (f" in {child.project}" if child.project else "")
+        + ". It is working now; you are woken with its answer. End your "
+        "turn unless there is other work to do meanwhile."
+    )
+
+
+def handoff_text(sender: Chat, text: str) -> str:
+    # The page shows it as a message from that chat (with a way back to
+    # it), not as something the user typed.
+    return (
+        f"[From the chat {sender.title!r} (id {sender.id}), not typed by "
+        "the user. Do the work it asks; your reply is passed back to "
+        "it.]\n\n" + text
+    )
+
+
+def chat_message_entry(direction: str, other: Chat, text: str, **more) -> dict:
+    """A message between chats, as the page draws it: DIRECTION "to"
+    (this chat sent it to OTHER) or "from" (OTHER's reply)."""
+
+    # "other", not "chat": every event already names the chat it is in.
+    return {"type": "chatmsg", "dir": direction, "other": other.id,
+            "title": other.title, "text": text[:HANDOFF_PREVIEW], **more}
+
+
+def message_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """message_chat: a message to another chat, as from CHAT."""
+
+    target = find_chat(session, str(args.get("chat") or ""))
+    text = str(args.get("text") or "").strip()
+    if target is None:
+        return ("Error: no chat by that id or title. read_chat lists "
+                "the ones you started.")
+    if target.id == chat.id:
+        return "Error: that is this chat."
+    if not text:
+        return "Error: say the message."
+    if target.spark:
+        return (f"Error: {target.title!r} is a chat with a spark: use "
+                "give_spark or ask_spark for sparks.")
+    session.handoffs[target.id] = chat.id
+    session.handoff_seen.setdefault(target.id, len(target.log))
+    session.ensure_watching()
+    queued = bool(session.send(target, handoff_text(chat, text)))
+    session.emit(chat, chat_message_entry("to", target, text, waits=queued))
+    return (f"Sent to {target.title!r}"
+            + (" (it is busy: the message waits for its turn)"
+               if queued else "")
+            + ". You are woken with its answer.")
+
+
+def read_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """read_chat: another chat's state and latest replies, or the chats
+    this one works with."""
+
+    key = str(args.get("chat") or "").strip()
+    if not key:
+        mine = [session.chats[c] for c, p in session.handoffs.items()
+                if p == chat.id and c in session.chats]
+        if not mine:
+            return "This chat hasn't started or messaged any other chat."
+        return "\n".join(f"- {c.title!r} (id {c.id}): {chat_state(c)}"
+                         for c in mine)
+    target = find_chat(session, key)
+    if target is None:
+        return "Error: no chat by that id or title."
+    try:
+        last = int(args.get("last") or 2)
+    except (TypeError, ValueError):
+        last = 2
+    said = replies(target, last)
+    head = f"{target.title!r} (id {target.id}) is {chat_state(target)}."
+    if not said:
+        return head + " It hasn't replied yet."
+    return head + "\n\n" + "\n\n---\n\n".join(said)
+
+
+def handoff_note(child: Chat, said: list[str]) -> str:
+    """For the chat that started or messaged CHILD: what it answered."""
+
+    text = "\n\n".join(said)
+    if len(text) > HANDOFF_PREVIEW:
+        text = text[:HANDOFF_PREVIEW] + (
+            f"\n[... cut short: read_chat {child.id!r} for all of it]")
+    return (
+        f"[The chat {child.title!r} (id {child.id}) answered. Carry on "
+        "with your work using it, tell the user what matters, or send it "
+        f"more with message_chat.]\n\n{text}"
+    )
+
+
+def retitle(session: "Session", chat: Chat, args: dict) -> str:
+    """title_chat: CHAT's new title, from the model."""
+
+    title = " ".join(str(args.get("title") or "").split()).strip("\"'")
+    if not title:
+        return "Error: say the new title."
+    if chat.named:
+        return (
+            "Not renamed: the user gave this chat its title themselves, "
+            "so it stays."
+        )
+    was = chat.title
+    chat.title = title[:TITLE_CHARS]
+    # Settled: a title written after the first turn does not replace it.
+    chat.auto_title = ""
+    session.save(chat)
+    # The page types it in over the old one, then catches up.
+    session.hub.publish({
+        "type": "retitle", "chat": chat.id, "from": was, "title": chat.title,
+    })
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    return f"Renamed this chat to {chat.title!r}."
+
+
+def end_voice(session: "Session", chat: Chat) -> str:
+    """end_conversation: voice mode goes off once the reply is said."""
+
+    if not chat.heard:
+        return "Error: this is not a spoken conversation."
+    chat.voice_ended = True
+    session.hub.publish({"type": "voice-end", "chat": chat.id})
+    return "Voice mode ends once your reply is said. Say a short goodbye."
+
+
+# Asked to think harder: what the model is told, on top of reasoning
+# longer where it can.
+THINK_HARDER_PROMPT = """=== Think harder ===
+The user asked you to think harder about this message. Before you
+answer, work through it carefully: what is really being asked, what
+could go wrong, the alternatives, and a check of your reasoning, any
+numbers and any code. Take the time it needs, then answer."""
+
+
+def tools_think_auto() -> bool:
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    return flash_tools.think_auto()
+
+
+def think_harder(model: str) -> Any:
+    """What to ask MODEL for, to reason longer: the most it offers, or
+    None for one that cannot reason apart from its answer."""
+
+    from . import ai  # deferred: ai imports half of Flash
+    from .sysprompt import level_from
+
+    return level_from(_show_model(ai.Config.host, model), model)
+
+
+def _show_model(host: str, model: str) -> dict:
+    from .sysprompt import _show
+
+    try:
+        found = _show(host, model)
+    except Exception:  # noqa: BLE001
+        return {}
+    return found if isinstance(found, dict) else {}
 
 
 def stream_reply(
@@ -1204,24 +3898,49 @@ def stream_reply(
     client: Any,
     messages: list,
     tools_arg: Optional[list],
+    model: str = "",
 ) -> Streamed:
-    """One model call, sent to the page a token at a time."""
+    """One model call, sent to the page a token at a time. MODEL is
+    Flash's unless given: a spark answers on its own. A chat asked to
+    think harder has the model reason longer, where it can."""
 
     from . import ai  # deferred: ai imports half of Flash
 
     out = Streamed()
     # The prompt asks for no dashes; this makes sure of it, a
     # token at a time.
-    content = DashGuard()
+    content = OutGuard()
     thinking: list[str] = []
+    # A turn a save woke may answer with only QUIET_WORD: what could
+    # still be that word is held back, not shown, until it is not.
+    held: Optional[str] = "" if chat.quiet else None
 
+    def show(text: str) -> None:
+        nonlocal held
+        if held is not None:
+            held += text
+            if QUIET_WORD.startswith(held.strip().rstrip(".").upper()):
+                return
+            text, held = held, None
+        chat.partial += text
+        session.emit(chat, {"type": "token", "text": text})
+
+    asked: dict = {}
+    if chat.deep or chat.thought_harder:
+        think = think_harder(model or ai.Config.model or "")
+        if think is not None:
+            asked["think"] = think
     parts = client.chat(
-        model=ai.Config.model,
+        model=model or ai.Config.model,
         messages=messages,
         tools=tools_arg,
         options=ai._chat_options(),
         stream=True,
+        **asked,
     )
+    # Auto's pick, or a model that failed and the one that took over.
+    for said in modelchain.notes(client):
+        session.emit(chat, {"type": "note", "text": said})
 
     try:
         for part in parts:
@@ -1241,8 +3960,7 @@ def stream_reply(
                 session.emit(chat, {"type": "thinking", "text": thought})
             text = content.feed(text) if text else ""
             if text:
-                chat.partial += text
-                session.emit(chat, {"type": "token", "text": text})
+                show(text)
 
             out.calls.extend(getattr(message, "tool_calls", None) or [])
 
@@ -1258,18 +3976,209 @@ def stream_reply(
 
     rest = content.flush()
     if rest:
-        chat.partial += rest
-        session.emit(chat, {"type": "token", "text": rest})
+        show(rest)
     out.content = content.text()
+    if held is not None:
+        if out.content.strip().rstrip(".").upper() == QUIET_WORD:
+            out.quiet = True
+        elif held:
+            chat.partial += held
+            session.emit(chat, {"type": "token", "text": held})
     out.thinking = "".join(thinking)
     return out
+
+
+# How long a canvas op waits for the page showing the canvas to answer.
+CANVAS_WAIT = 10.0
+# Patches kept with a canvas, made again when it is drawn after a reload.
+CANVAS_KEPT_PATCHES = 200
+
+
+def _kept_canvas(chat: Chat, cid: str) -> Optional[dict]:
+    """The canvas CID's entry in CHAT's log, if it was shown there."""
+
+    for event in chat.log:
+        if isinstance(event, dict) and event.get("type") == "canvas" \
+                and event.get("id") == cid:
+            return event
+    return None
+
+
+def _canvas_op(session: Session, chat: Chat, asked: dict) -> dict:
+    """A patch, run, read or look on a live canvas: sent to the pages,
+    and the first answer from one showing it returned. Patches are kept
+    with the canvas too, so it is drawn changed when the chat is opened
+    again."""
+
+    cid = str(asked.get("id") or "")
+    kept = _kept_canvas(chat, cid)
+    if kept is None:
+        return {"error": f"There is no canvas {cid} in this chat."}
+    op = str(asked.get("op") or "")
+    if op != "show" and kept.get("format") != "html":
+        return {"error": "Only an HTML canvas is live; show it again with "
+                         "the whole new content."}
+    if op == "patch":
+        kept["patches"] = (list(kept.get("patches") or [])
+                           + list(asked.get("patches") or []))[
+                               -CANVAS_KEPT_PATCHES:]
+        session.save(chat)
+    if not session.hub.watched():
+        if op == "patch":
+            return {"later": True}
+        return {"error": "No page has Flash open: the user needs the chat "
+                         "open in the web app."}
+    nonce = uuid.uuid4().hex
+    waiting = {"done": threading.Event(), "out": None}
+    session.canvas_waits[nonce] = waiting
+    try:
+        session.hub.publish({"type": "canvas-op", "chat": chat.id,
+                             "nonce": nonce, **asked})
+        if not waiting["done"].wait(CANVAS_WAIT):
+            if op == "patch":
+                return {"later": True}
+            return {"error": "No open page is showing this chat's canvas "
+                             "now: the user needs the chat open."}
+    finally:
+        session.canvas_waits.pop(nonce, None)
+    out = waiting["out"]
+    return out if isinstance(out, dict) else {"error": "The page's answer "
+                                              "made no sense."}
 
 
 def _sink(session: Session, chat: Chat):
     """Where a tool's output goes: to the page, as it happens."""
 
-    def sink(kind: str, text: str, style: str) -> None:
-        if kind == "line":
+    def sink(kind: str, text: str, style: str) -> Optional[bool]:
+        if kind == "notify":
+            if not session.hub.watched():
+                # No page open to pop it up: the desktop, then, and the
+                # notes a device asks for.
+                shown = json.loads(text)
+                session.hub.note("notify", str(shown.get("title") or "Flash"),
+                                 str(shown.get("message") or ""), chat.id)
+                return False
+            shown = json.loads(text)
+            session.emit(chat, {
+                "type": "notify", "title": str(shown.get("title") or ""),
+                "text": str(shown.get("message") or ""),
+            })
+            return True
+        if kind == "debate":
+            # A debate the agent started: live on the page as it goes,
+            # stopped and steered as one the user starts, and kept in the
+            # chat once it is done.
+            event = json.loads(text)
+            kept = event.pop("kept", None)
+            if "question" in event and not event.get("done"):
+                session.debating[event["id"]] = {
+                    "chat": chat.id, "stop": threading.Event(),
+                    "steers": []}
+            if event.get("done"):
+                session.debating.pop(event["id"], None)
+            if kept and kept.get("turns"):
+                session.emit(chat, {"type": "debate", "id": event["id"],
+                                    "by": "flash", **kept})
+            session.hub.publish({"type": "debate-live", "chat": chat.id,
+                                 **event})
+            return True
+        if kind == "call":
+            # A turn of the call Flash is on, drawn as it is said, and
+            # its start and end, which bring the mic button and take it
+            # away.
+            session.emit(chat, {"type": "call", **json.loads(text)})
+            return True
+        if kind == "music":
+            # The page's player: one for all the pages, as the music is.
+            asked = json.loads(text)
+            action = asked.get("action")
+            now = session.music
+            if action == "play":
+                session.music = {"id": asked["id"], "title": asked["title"],
+                                 "playing": True}
+            elif not now:
+                return None
+            elif action == "stop":
+                session.music = {}
+            elif action in ("pause", "resume"):
+                now["playing"] = action == "resume"
+            session.hub.publish({"type": "music", **asked})
+            if action == "play":
+                return f"Playing {asked['title']} in Flash's own player."
+            return {"pause": "Paused.", "resume": "Playing again.",
+                    "stop": "Stopped.", "volume": "Volume set.",
+                    "next": "One song plays at a time: play another."}.get(
+                        action, "Done.")
+        if kind == "course":
+            # A subject the agent teaches: its course, once in the chat,
+            # and every card showing it brought up to date.
+            from . import tutor
+
+            key = tutor._key(json.loads(text).get("subject"))
+            if not key:
+                return False
+            if not any(e.get("type") == "course" and e.get("subject") == key
+                       for e in chat.log if isinstance(e, dict)):
+                session.emit(chat, {"type": "course", "subject": key})
+            session.hub.publish({"type": "course-changed", "subject": key})
+            return True
+        if kind == "chess":
+            # A lesson: a board in the chat, stepped through there.
+            lesson = json.loads(text)
+            session.emit(chat, {"type": "chess", "id": uuid.uuid4().hex[:12],
+                                **lesson})
+            return True
+        if kind == "canvas":
+            # The canvas as it is now: one card in the chat per canvas,
+            # brought up to date in place, and the panel redrawn live.
+            # Kept once in the chat's log, where it was first shown,
+            # with the patches made since it was last drawn whole.
+            state = json.loads(text)
+            kept = _kept_canvas(chat, str(state.get("id") or ""))
+            if kept is None:
+                session.emit(chat, {"type": "canvas", **state})
+            else:
+                kept.clear()
+                kept.update({"type": "canvas", **state})
+                session.save(chat)
+                session.hub.publish({"type": "canvas", "chat": chat.id,
+                                     **state})
+            return True
+        if kind == "canvas-op":
+            return _canvas_op(session, chat, json.loads(text))
+        if kind == "chess-move":
+            # Flash's move in a game with the user, checked and shown.
+            from . import chess
+
+            asked = json.loads(text)
+            try:
+                return _chess_play(session, chat, str(asked.get("id") or ""),
+                                   str(asked.get("move") or ""), "flash")
+            except (chess.ChessError, ValueError) as exc:
+                return {"error": str(exc)}
+        if kind == "project":
+            # "Make this a project": made, and this chat moved into it.
+            asked = json.loads(text)
+            made = workspace.create_project(
+                str(asked.get("name") or ""), str(asked.get("path") or ""),
+                str(asked.get("instructions") or ""))
+            chat.project = made.id
+            session.save(chat)
+            session.hub.publish({"type": "projects"})
+            session.hub.publish({"type": "chats", "chat": chat.id})
+            return {"id": made.id, "name": made.name, "path": made.path}
+        if kind == "debate-poll":
+            asked = json.loads(text)
+            going = session.debating.get(asked["id"]) or {}
+            steers: list = []
+            if asked.get("take") and going:
+                steers, going["steers"] = going["steers"], []
+            stop = going.get("stop")
+            return {"stopped": chat.stop.is_set()
+                    or bool(stop and stop.is_set()), "steers": steers}
+        if kind == "say":
+            session.emit(chat, {"type": "note", "text": text})
+        elif kind == "line":
             session.emit(chat, {"type": "tool", "label": text})
         elif kind == "result":
             session.emit(chat, {
@@ -1295,12 +4204,16 @@ def _sink(session: Session, chat: Chat):
                 "title": str(shown.get("title") or ""),
                 "note": str(shown.get("note") or ""),
             })
-        elif kind in ("file", "document"):
-            shown = json.loads(text) if kind == "document" else {"path": text}
+        elif kind in ("file", "document", "audio"):
+            shown = json.loads(text) if kind != "file" else {"path": text}
             try:
                 kept = workspace.keep_file(shown["path"])
                 if shown.get("comments"):
                     kept["comments"] = shown["comments"]
+                if shown.get("play"):
+                    # Played as it arrives; not again when the chat is
+                    # opened later.
+                    kept["play"] = True
                 session.emit(chat, {"type": "file", **kept})
             except (workspace.WorkspaceError, OSError) as exc:
                 session.emit(chat, {
@@ -1311,15 +4224,68 @@ def _sink(session: Session, chat: Chat):
     return sink
 
 
-def _finish_reply(session: Session, chat: Chat, reply: Streamed) -> None:
-    """Record a reply the page has watched stream in."""
+def _capture(text: str) -> tuple[str, list[str]]:
+    """TEXT with any key in it kept in the vault (vault.capture)."""
+
+    from . import vault
+
+    try:
+        return vault.capture(text)
+    except Exception:  # noqa: BLE001  (no vault: the text as it was)
+        return text, []
+
+
+# The start of each kind of image a tool hands the model, for the name
+# its copy is kept under.
+_IMAGE_STARTS = ((b"\x89PNG", ".png"), (b"\xff\xd8", ".jpg"),
+                 (b"GIF8", ".gif"), (b"RIFF", ".webp"), (b"BM", ".bmp"))
+
+
+def _show_seen(session: Session, chat: Chat, images: list) -> None:
+    """What a tool showed the model (Computer Use's screenshots, a page's,
+    an image it viewed), shown to the user too, under that tool."""
+
+    import tempfile
+
+    kept = []
+    with tempfile.TemporaryDirectory(prefix="flash-seen-") as folder:
+        for n, image in enumerate(images):
+            data = image
+            if isinstance(image, str):
+                try:
+                    data = base64.b64decode(image)
+                except ValueError:
+                    continue
+            if not isinstance(data, (bytes, bytearray)):
+                continue
+            suffix = next((ext for start, ext in _IMAGE_STARTS
+                           if data.startswith(start)), "")
+            if not suffix:
+                continue
+            path = os.path.join(folder, f"seen-{n + 1}{suffix}")
+            with open(path, "wb") as out:
+                out.write(data)
+            with contextlib.suppress(workspace.WorkspaceError, OSError):
+                kept.append(workspace.keep_file(path))
+    if kept:
+        session.emit(chat, {"type": "seen", "images": kept})
+
+
+def _finish_reply(
+    session: Session, chat: Chat, reply: Streamed,
+    spark: "Optional[sparks.Spark]" = None,
+) -> None:
+    """Record a reply the page has watched stream in, and whose it is."""
 
     chat.partial = chat.thinking = ""
-    session.emit(chat, {
+    event = {
         "type": "assistant",
         "text": reply.content,
         "thinking": reply.thinking,
-    })
+    }
+    if spark is not None:
+        event["spark"] = spark.id
+    session.emit(chat, event)
 
 
 def _snippet(flat: str, at: int) -> str:
@@ -1339,6 +4305,15 @@ def _snippet(flat: str, at: int) -> str:
         + flat[start:end]
         + ("…" if end < len(flat) else "")
     )
+
+
+def where(chat: "Chat", found: Optional["workspace.Project"]) -> Optional[str]:
+    """The folder CHAT's turns run in: its worktree when it has one that
+    is still there, else its project's folder."""
+
+    if chat.worktree and os.path.isdir(chat.worktree):
+        return chat.worktree
+    return found.path if found else None
 
 
 @contextmanager
@@ -1368,14 +4343,74 @@ def inside(folder: Optional[str]):
         os.chdir(before)
 
 
+# Where a chat in the browser is, for what the prompt says differs from
+# the terminal: there is no ! here to run a command with.
+WEB_PROMPT = (
+    "=== Where you are ===\n"
+    "This chat is in Flash's web UI, in a browser, not Flash's terminal. "
+    "There is no `!` here: a command for the user to run themselves goes "
+    "in a code block, for them to paste into their own terminal."
+)
+
+
 def project_prompt(found: "workspace.Project") -> str:
     lines = [
         f"=== Project: {found.name} ===",
         f"You are working in {found.path}; relative paths start there.",
     ]
+    if found.folders:
+        lines.append(
+            "The project also takes in these folders; work in them by "
+            "their full paths:\n"
+            + "\n".join(f"- {folder}" for folder in found.folders)
+        )
     if found.instructions:
         lines += ["", found.instructions]
+    kept = memory.list_memory(memory.project_path(found.id))
+    lines += ["", "What you remember about this project (remember with "
+              "project true adds to it, and every chat in the project "
+              "sees it):"]
+    lines += [f"- {entry}" for entry in kept] or ["(nothing yet)"]
     return "\n".join(lines)
+
+
+def _saved_turn(saved: dict) -> dict:
+    """The turn a save starts: what Flash is told, and the line the chat
+    shows for it."""
+
+    import difflib
+
+    from . import livedocs
+
+    diff = "".join(difflib.unified_diff(
+        saved["before"].splitlines(keepends=True),
+        saved["text"].splitlines(keepends=True),
+        fromfile="before", tofile="saved", n=3,
+    ))
+    if len(diff) > SAVED_DIFF_CHARS:
+        diff = diff[:SAVED_DIFF_CHARS] + "\n[the rest of the change is cut]"
+    gaps = livedocs.placeholders(saved["text"])
+    listed = (
+        "\n\nGaps still in it: " + "; ".join(gaps[:20]) if gaps else ""
+    )
+    text = (
+        f"[The user saved {saved['path']} in the side panel. You were "
+        "woken to read it; they have not written to you otherwise. What "
+        f"changed:\n\n```diff\n{diff.rstrip()}\n```{listed}\n\n"
+        "Look at what they changed and at what is around it. If they "
+        "left anything for you (a placeholder to fill in, a note or "
+        "instruction meant for you, a question, a sentence or section "
+        "they started and left unfinished, a list to finish, a TODO), "
+        "do it now: find out what you need, then edit the file in place, "
+        "one change at a time, while they watch. Their version is the one "
+        "that counts: build on it and never undo what they wrote. Say in "
+        "a line or two what you did. If nothing in it asks anything of "
+        f"you, answer with only the word {QUIET_WORD}.]"
+    )
+    return {
+        "text": text, "note": f"You saved {saved['name']}.",
+        "quiet": saved["path"],
+    }
 
 
 def edited_note(paths: list[str]) -> str:
@@ -1387,6 +4422,93 @@ def edited_note(paths: list[str]) -> str:
         "it again before you change it: their version is the one that "
         "counts.]"
     )
+
+
+# How many files the picker for another chat's files offers at most.
+MOST_CHAT_FILES = 80
+
+
+def chat_files(session: "Session") -> list[dict]:
+    """Every file in every chat, to attach again elsewhere: those the
+    user attached and those the agent showed, the latest first, each
+    once, with the chat it is in."""
+
+    found: dict[str, dict] = {}
+    for chat in sorted(session.chats.values(), key=lambda c: c.updated,
+                       reverse=True):
+        for entry in reversed(chat.log):
+            kind = entry.get("type")
+            given = [entry] if kind == "file" else (
+                entry.get("files") or [] if kind == "user" else [])
+            for item in given:
+                file_id = str(item.get("id") or "")
+                if not file_id or file_id in found:
+                    continue
+                found[file_id] = {
+                    "id": file_id, "name": str(item.get("name") or ""),
+                    "kind": str(item.get("kind") or "file"),
+                    "size": item.get("size") or 0,
+                    "by": "agent" if kind == "file" else "you",
+                    "chat": chat.id, "chat_title": chat.title,
+                }
+    return list(found.values())[:MOST_CHAT_FILES]
+
+
+# How many things the Made page shows at most.
+MOST_MADE = 500
+
+
+def byte_range(header: str, size: int):
+    """The part of a SIZE-byte file a Range header asks for, as (first,
+    last) bytes; None for the whole file; "bad" for a part past its end."""
+
+    m = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    if m.group(1):
+        start = int(m.group(1))
+        end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    else:   # the last N bytes
+        start, end = max(0, size - int(m.group(2))), size - 1
+    if start >= size or start > end:
+        return "bad"
+    return start, end
+
+
+def made_files(session: "Session") -> list[dict]:
+    """Everything Flash made, in every chat, newest first: each file it
+    showed, once, with the chat it is in and its place in that chat's
+    log, so the page can open the chat at it."""
+
+    found: dict[str, dict] = {}
+    for chat in list(session.chats.values()):
+        for index, entry in enumerate(chat.log):
+            if entry.get("type") != "file":
+                continue
+            file_id = str(entry.get("id") or "")
+            if not file_id or file_id in found:
+                continue
+            kept = workspace.kept_file(file_id)
+            if kept is None:
+                continue
+            try:
+                made = os.path.getmtime(kept[0])
+            except OSError:
+                continue
+            kind = str(entry.get("kind") or "file")
+            # Kept before videos had a kind of their own, a recording was
+            # filed as a picture: its type says what it is.
+            if kind in ("image", "file") and str(kept[1]).startswith("video/"):
+                kind = "video"
+            found[file_id] = {
+                "id": file_id, "name": str(entry.get("name") or kept[0].name),
+                "kind": kind,
+                "mime": kept[1], "size": entry.get("size") or 0,
+                "made": made, "chat": chat.id, "chat_title": chat.title,
+                "index": index,
+                **({"path": entry["path"]} if entry.get("path") else {}),
+            }
+    return sorted(found.values(), key=lambda f: -f["made"])[:MOST_MADE]
 
 
 def attachments(files: Optional[list]) -> list[dict]:
@@ -1402,22 +4524,70 @@ def attachments(files: Optional[list]) -> list[dict]:
     return found
 
 
+def recording_stills(body: dict) -> tuple[list[dict], str]:
+    """A screen recording's stills from the page, each with what the
+    user said from its moment to the next one's, when they narrated and
+    the listening model is there to hear it; and, when it is not, why
+    their words could not be heard."""
+
+    stills = []
+    for still in (body.get("stills") or [])[:workspace.MAX_STILLS]:
+        try:
+            jpeg = base64.b64decode(str(still.get("data") or ""),
+                                    validate=True)
+            at = max(0.0, float(still.get("at") or 0))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if jpeg:
+            stills.append({"jpeg": jpeg, "at": at, "said": ""})
+    try:
+        pcm = base64.b64decode(str(body.get("narration") or ""),
+                               validate=True)[:MAX_NARRATION_BYTES]
+    except (ValueError, TypeError):
+        pcm = b""
+    # No listening model: the stills go without the words.
+    return stills, demo.said_over(stills, pcm, voice.transcribe)
+
+
+def recording_note(info: dict) -> str:
+    """What the model is told of a screen recording it is shown the
+    stills of."""
+
+    return demo.note(info["path"], workspace.recording_stills(info["id"]))
+
+
 def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
     """What the model gets for a message with attachments: its images
-    alongside it, and any other file named by path, for its tools to
-    open."""
+    alongside it, a screen recording's stills with what was said over
+    them, and any other file named by path, for its tools to open."""
 
     images: list[str] = []
     notes: list[str] = []
+    recorded = False
+    met = False
     for meta in files or []:
         info = workspace.upload_info(meta.get("id", ""))
         if info is None:
             continue
-        if info["kind"] == "image":
+        if info.get("meeting"):
+            # A meeting's transcript: the write-up is what it is for.
+            met = True
+            notes.append(meeting.note(info))
+        elif info["kind"] == "image":
             images.append(info["path"])
+        elif info["kind"] == "video" and info.get("stills"):
+            recorded = True
+            images.extend(
+                s["path"] for s in workspace.recording_stills(info["id"])
+            )
+            notes.append(recording_note(info))
         else:
             notes.append(f"Attached file: {info['path']}")
-    asked = text or (ai.DEFAULT_IMAGE_PROMPT if images else "")
+    asked = text or (
+        RECORDING_PROMPT if recorded
+        else meeting.PROMPT if met
+        else ai.DEFAULT_IMAGE_PROMPT if images else ""
+    )
     content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
     return content, images
 
@@ -1437,164 +4607,406 @@ def run_turn(
     """
 
     from . import ai  # deferred: ai imports half of Flash
-    from . import tools as flash_tools
 
-    if not ai.Config.model:
+    # Who answers: a spark the message @mentions, each in turn, or else
+    # the chat's own, a spark or Flash.
+    own = sparks.find(chat.spark) if chat.spark else None
+    if chat.spark and own is None:
+        session.emit(chat, {
+            "type": "error",
+            "text": "That spark is not here any more, so nobody can answer.",
+        })
+        return
+    speakers: list = sparks.mentioned(text, everyone=True) or [own]
+
+    # Each needs a model to answer on: Flash its own, a spark the one it
+    # was given, or Flash's.
+    if not all(
+        sparks.model_of(s, chat_model(chat)) if s is not None
+        else chat_model(chat)
+        for s in speakers
+    ):
+        # Tried again once one is picked.
         session.emit(chat, {
             "type": "error",
             "text": "No model is set. Pick one with Alt+M or /model.",
+            "retry": chat.id in session.started,
         })
         return
 
-    client = ollama.Client(host=ai.Config.host)
-    started = time.monotonic()
-    tokens = 0
-    generating = 0.0
+    client = ai._client()
 
     # What this chat's sub-agents have done since, carried in the same
     # message the way the terminal carries it, so the model hears about
     # its own sub-agents and never another chat's.
     owned = session.owned(chat.id)
     news, delivered = subagents.notices(owned) if owned else ("", [])
+    from . import bgtasks
+
+    task_news, task_ids = bgtasks.notices(chat.id)
+    news = "\n\n".join(p for p in (news, task_news) if p)
     edited = session.edited.pop(chat.id, [])
     if edited:
         news = "\n\n".join(
             part for part in (news, edited_note(edited)) if part
         )
     said, images = outgoing(ai, text, files)
-    if images and not model_sees_images(ai.Config.host, ai.Config.model):
+    if images and not model_sees_images(ai.Config.host, chat_model(chat)):
         session.emit(chat, {"type": "note", "text": (
-            f"{ai.Config.model} reports no vision support; the image is "
+            f"{chat_model(chat)} reports no vision support; the image is "
             "sent anyway, but expect an error."
         )})
-    content = "\n\n".join(part for part in (news, said) if part)
-    chat.messages.append(ai._message("user", content, images or None))
+    # Heard, not typed: how they sounded, and what was said to them at
+    # once, for the model alone.
+    spoken = session.voice_notes.pop(chat.id, "") if chat.heard else ""
+    # A meeting going on in this chat: what it is, and what was said.
+    live = session.meetings.in_chat(chat.id)
+    happening = live.context() if live is not None else ""
+    content = "\n\n".join(part for part in (happening, news, said, spoken) if part)
+    asked = ai._message("user", content, images or None)
+    # Which turn it began, so editing the message finds where to cut.
+    at = session.started.get(chat.id)
+    if at is not None and at < len(chat.log) and chat.log[at].get("turn"):
+        asked["turn"] = chat.log[at]["turn"]
+    chat.messages.append(asked)
+    session.asked[chat.id] = asked
+
+    stopped = False
+    flash_spoke = False
+    tools_ran = 0
+    try:
+        # In a project, its memory is the tools' to reach.
+        with memory.in_project(found.id if found is not None else ""), \
+                worknotes.in_chat(chat.id):
+            for number, spark in enumerate(speakers):
+                if chat.stop.is_set():
+                    break
+                stopped, tools_ran = _respond(
+                    session, chat, client, text, found, spark,
+                    guest=spark is not None and spark.id != chat.spark,
+                    first=number == 0,
+                )
+                flash_spoke = flash_spoke or spark is None
+                if stopped:
+                    break
+    finally:
+        # A yes to Computer Use lasts the one reply.
+        computeruse.end(chat.id)
+
+    if delivered and not stopped:
+        subagents.mark_delivered(delivered)
+    if task_ids and not stopped:
+        bgtasks.mark_delivered(task_ids)
+
+    if flash_spoke and not stopped:
+        learning.after_turn(
+            chat.messages, tools_ran,
+            host=ai.Config.host, model=ai.Config.model or "",
+            project=found.id if found is not None else "",
+        )
+
+
+def _respond(
+    session: Session,
+    chat: Chat,
+    client: Any,
+    text: str,
+    found: "Optional[workspace.Project]",
+    spark: "Optional[sparks.Spark]",
+    guest: bool = False,
+    first: bool = True,
+) -> tuple[bool, int]:
+    """One answer to the message just put in CHAT: Flash's, or SPARK's
+    in its own voice and with its own tools, keeping what it learns. A
+    GUEST spark was @mentioned into someone else's chat: its reply is
+    marked as its own. Only the FIRST of a turn's answers marks where
+    /undo goes back to, so it takes back the whole turn. Whether it was
+    stopped, and how many tools ran.
+    """
+
+    from . import ai  # deferred: ai imports half of Flash
+    from . import tools as flash_tools
+
+    kit = sparks.ChatKit(spark, chat.id) if spark is not None else None
+    # Whose chat it is: Flash's, or the spark it is with.
+    owner = sparks.find(chat.spark) if chat.spark else None
+    host_name = owner.name if owner else "Flash"
+    # The tools a guest used, for the note the chat keeps.
+    used: list[str] = []
+    # A spark answers on its own model, the one it was given.
+    model = (
+        sparks.model_of(spark, chat_model(chat)) if spark is not None
+        else chat_model(chat)
+    ) or ""
+    started = time.monotonic()
+    tokens = 0
+    generating = 0.0
+    # Who is answering, for the page to put a name on what streams in.
+    session.emit(chat, {"type": "speaker", "spark": spark.id if spark else ""})
+
+    if spark is not None and sparks.over_budget(spark):
+        # Its month's tokens are spent: it says so, and asks nothing of
+        # the model.
+        reply = Streamed(content=sparks.out_of_budget(spark))
+        _finish_reply(session, chat, reply, spark)
+        chat.messages.append(ai._message(
+            "system" if guest else "assistant",
+            sparks.called_note(spark, reply.content, []) if guest
+            else reply.content,
+        ))
+        return False, 0
+
+    # What System One holds this turn's tool calls up against.
+    systemone.set_request(text)
 
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
-        prompt = ai._session_system_prompt(heard=chat.heard)
+        if spark is not None:
+            # The chat's project, not the spark's, is added below, and
+            # the turn runs in its folder.
+            prompt = sparks.chat_prompt(
+                spark, ai.Config.host, model,
+                flash_tools.CURRENT_DATE_PROMPT, project=False,
+            )
+            if guest:
+                prompt += "\n\n" + sparks.MENTIONED_PROMPT.format(
+                    host=host_name,
+                )
+        else:
+            prompt = ai._session_system_prompt(heard=chat.heard) \
+                + "\n\n" + WEB_PROMPT
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
-        system = ai._message("system", prompt)
-        checkpoint.start_turn(ai._turn_label(text))
+        if chat.worktree and os.path.isdir(chat.worktree):
+            from . import worktrees
 
+            prompt = f"{prompt}\n\n{worktrees.describe(chat.worktree)}"
+        if chat.deep:
+            prompt = f"{prompt}\n\n{THINK_HARDER_PROMPT}"
+        system = ai._message("system", prompt)
+        if first:
+            checkpoint.start_turn(ai._turn_label(text))
+
+        # Flash may turn its own thinking on, for a reply that needs it.
+        chat.thought_harder = False
+        can_think = spark is None and not chat.deep \
+            and flash_tools.think_auto() \
+            and think_harder(model or "") is not None
         offered = flash_tools.turn_tools()
-        convo = [system, *chat.messages]
+        if kit is not None:
+            offered = kit.offer(offered)
+        offered = offered + chat_tools(chat) \
+            + flash_tools.think_tools(can_think)
+        if guest:
+            # A bit of the conversation, not all of it, and as a
+            # transcript: whose words are whose stays plain, and a small
+            # model is not asked to read a long chat that is not its own.
+            asked = next(
+                (m for m in reversed(chat.messages) if m["role"] == "user"),
+                {},
+            )
+            convo = [system, {
+                **asked, "role": "user",
+                "content": sparks.guest_view(chat.messages, host_name),
+            }]
+        else:
+            convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
-        nudged = 0
-        reply = Streamed()
 
-        for _round in range(ai.Config.max_tool_rounds):
-            reply = stream_reply(session, chat, client, convo, offered)
-            tokens += reply.tokens
-            generating += reply.seconds
+        def ask(messages: list, with_tools: bool) -> loop.Reply:
+            nonlocal tokens, generating
+            # switch_model may have moved this chat to another model mid-turn.
+            streamed = stream_reply(
+                session, chat, client, messages,
+                offered if with_tools else None,
+                (chat_model(chat) or model) if spark is None else model,
+            )
+            tokens += streamed.tokens
+            generating += streamed.seconds
+            said = loop.Reply(
+                content=streamed.content, stopped=streamed.stopped,
+                calls=[ai._tool_call_name_args(c) for c in streamed.calls],
+            )
+            said.streamed = streamed
+            return said
 
-            if reply.stopped:
-                break
-            if not reply.calls:
-                # It said what it would do next and stopped short of
-                # doing it: keep what it said, and tell it to go on.
-                if (offered and nudged < ai.MAX_PROMISE_NUDGES
-                        and ai.unkept_promise(reply.content)):
-                    nudged += 1
-                    _finish_reply(session, chat, reply)
-                    convo.append(ai._message("assistant", reply.content))
-                    convo.append(ai.promise_nudge())
-                    continue
-                break
+        def shown(said: loop.Reply) -> None:
+            _finish_reply(session, chat, said.streamed, spark)
 
-            _finish_reply(session, chat, reply)
-
-            named = [ai._tool_call_name_args(call) for call in reply.calls]
-            convo.append({
-                "role": "assistant",
-                "content": reply.content,
-                "tool_calls": [
-                    {"function": {"name": name, "arguments": args}}
-                    for name, args in named
-                ],
-            })
-
-            for name, args in named:
-                if chat.stop.is_set():
-                    output = "Stopped by the user before this ran."
-                elif name == "reason":
-                    # It prints straight to the terminal, which is not
-                    # where anyone is looking.
-                    session.emit(chat, {
-                        "type": "thought",
-                        "text": str(args.get("thought", "")).strip(),
-                    })
-                    output = "(noted)"
-                else:
-                    before = {e.id for e in subagents.list_all()}
-                    output = flash_tools.run_tool((name, args))
-                    if name == "agent":
-                        after = {e.id for e in subagents.list_all()}
-                        session.adopt(chat, after - before)
-                    tool_count += 1
-                convo.append({
-                    "role": "tool",
-                    "content": flash_tools.trim_tool_output(output, name),
-                    "tool_name": name,
+        def call(name: str, args: dict) -> str:
+            nonlocal tool_count
+            if name != "reason":
+                used.append(name)
+            if chat.stop.is_set():
+                output = "Stopped by the user before this ran."
+            elif name == "reason":
+                # It prints straight to the terminal, which is not
+                # where anyone is looking.
+                session.emit(chat, {
+                    "type": "thought",
+                    "text": str(args.get("thought", "")).strip(),
                 })
+                output = "(noted)"
+            elif name == "think_harder" and can_think:
+                # Every step after this one thinks first.
+                chat.thought_harder = True
+                session.emit(chat, {
+                    "type": "thought",
+                    "text": "Thinking harder: "
+                    + str(args.get("why", "")).strip(),
+                })
+                output = flash_tools.THOUGHT_HARDER
+            elif name == "title_chat":
+                output = retitle(session, chat, args)
+            elif name == "start_chat":
+                output = start_chat(session, chat, args)
+            elif name == "message_chat":
+                output = message_chat(session, chat, args)
+            elif name == "read_chat":
+                output = read_chat(session, chat, args)
+            elif name == "switch_model":
+                output = switch_model(session, chat, args, ai)
+            elif name == "end_conversation":
+                output = end_voice(session, chat)
+            elif name == "guide_step":
+                output = guide_step(session, chat, args)
+            elif name == "wait_for":
+                output = wait_for(session, chat, args)
+            elif name == "cancel_wait":
+                output = cancel_wait(session, chat, args)
+            elif name == "edit_wait":
+                output = edit_wait(session, chat, args)
+            elif name == "computer_use":
+                # This chat's: the stop keys stop this reply.
+                with flash_tools.computer_user(chat.id, chat.stop.set):
+                    output = flash_tools.run_tool((name, args))
+                tool_count += 1
+            elif kit is not None and name in kit.tools:
+                output = kit.tools[name](args)
+                tool_count += 1
+            elif kit is not None and name not in sparks.chat_tool_names() \
+                    and flash_tools.connectors.find(name) is None:
+                output = f"Unknown tool: {name}."
+            elif name == "give_spark":
+                # Its report comes back to this chat, not only to
+                # the spark's reports.
+                output = flash_tools.give_spark(
+                    str(args.get("spark", "")), str(args.get("job", "")),
+                    chat.id,
+                )
+                tool_count += 1
+            else:
+                before = {e.id for e in subagents.list_all()}
+                output = flash_tools.run_tool((name, args))
+                if name == "agent":
+                    after = {e.id for e in subagents.list_all()}
+                    session.adopt(chat, after - before)
+                tool_count += 1
+            if spark is not None and name != "reason":
+                sparks.log(spark.id, "tool", tool=name, args=args,
+                           result=str(output), during="chat")
+            return output
+
+        def after(messages: list, calls: list) -> None:
+            nonlocal offered
+            if any(name == "refresh_tools" for name, _ in calls):
+                # New tools from the connected apps, from the next step.
+                offered = flash_tools.turn_tools()
+                if kit is not None:
+                    offered = kit.offer(offered)
+                offered = offered + chat_tools(chat) + flash_tools \
+                    .think_tools(can_think, chat.thought_harder)
+            if chat.thought_harder:
+                # On already: not offered again.
+                offered = [t for t in offered
+                           if t["function"]["name"] != "think_harder"]
 
             images = flash_tools.take_pending_images()
             if images:
-                convo.append(
+                _show_seen(session, chat, images)
+                messages.append(
                     ai._message("user", ai.TOOL_IMAGE_NOTE, images)
                 )
 
             # Whatever the user sent to steer this turn, read before the
             # model decides its next step.
             for steer in session.take_steers(chat):
-                said, shown = outgoing(ai, steer["text"], steer.get("files"))
-                convo.append(ai._message(
-                    "user", f"{STEER_NOTE}\n{said}", shown or None,
+                said, shown_files = outgoing(ai, steer["text"],
+                                             steer.get("files"))
+                messages.append(ai._message(
+                    "user", f"{STEER_NOTE}\n{said}", shown_files or None,
                 ))
+            # And what they asked on the side meanwhile, with the answer they got.
+            for question, said in session.take_asides(chat):
+                messages.append(ai._message("user", btw_side.aside(question, said)))
 
-            if chat.stop.is_set():
-                reply = Streamed(stopped=True)
-                break
-        else:
-            # Out of tool rounds: one more call, with no tools, for the
-            # answer from what the tools found.
-            convo.append(ai._tool_limit_message())
-            reply = stream_reply(session, chat, client, convo, None)
-            tokens += reply.tokens
-            generating += reply.seconds
+        # The one agent loop (loop.py): an empty reply is asked for
+        # again, changed code is checked, and at the round limit the
+        # steps asked for still run before the answer.
+        done = loop.run(
+            convo, ask=ask, call=call, on_reply=shown, after_round=after,
+            stopping=chat.stop.is_set,
+            trim=flash_tools.trim_tool_output,
+        )
+        reply = getattr(done.reply, "streamed", None) or Streamed(stopped=True)
 
+    # Woken by a save that asked nothing of it: nothing to show, and
+    # nothing kept but that the file changed, for the next message.
+    nothing = reply.quiet and not tool_count
     if reply.stopped and not reply.content:
         chat.partial = chat.thinking = ""
         session.emit(chat, {"type": "note", "text": "Stopped."})
+    elif nothing:
+        chat.partial = chat.thinking = ""
     else:
-        _finish_reply(session, chat, reply)
+        _finish_reply(session, chat, reply, spark)
 
-    chat.messages.extend(ai._worth_keeping(convo, keep_from))
-    if reply.content:
-        chat.messages.append(ai._message("assistant", reply.content))
+    if nothing:
+        asked = session.asked.get(chat.id)
+        if asked is not None and asked in chat.messages:
+            chat.messages.remove(asked)
+        listed = session.edited.setdefault(chat.id, [])
+        if chat.quiet and chat.quiet not in listed:
+            listed.append(chat.quiet)
+    elif guest:
+        # Whoever the chat is with sees a spark was called, and what it
+        # said and did, as a note: not as a reply of its own, and not
+        # with the spark's tool calls in its history.
+        if reply.content:
+            chat.messages.append(ai._message(
+                "system", sparks.called_note(spark, reply.content, used),
+            ))
+    else:
+        chat.messages.extend(ai._worth_keeping(convo, keep_from))
+        if reply.content:
+            chat.messages.append(ai._message("assistant", reply.content))
+    # Side questions answered after the turn's last step: kept for the next one.
+    for question, said in session.take_asides(chat):
+        chat.messages.append(ai._message("user", btw_side.aside(question, said)))
 
-    session.emit(chat, {
-        "type": "stats",
-        # When, and on what: the settings page counts days and models.
-        "at": round(time.time()),
-        "model": ai.Config.model or "",
-        "tokens": tokens,
-        "rate": round(tokens / generating, 1) if generating else 0,
-        "seconds": round(time.monotonic() - started, 1),
-        "tools": tool_count,
-    })
+    if not nothing:
+        session.emit(chat, {
+            "type": "stats",
+            # When, and on what: the settings page counts days and models.
+            "at": round(time.time()),
+            "model": model,
+            "tokens": tokens,
+            "rate": round(tokens / generating, 1) if generating else 0,
+            "seconds": round(time.monotonic() - started, 1),
+            "tools": tool_count,
+        })
+    # Counted with the terminal's replies, for Settings > Usage.
+    showcase.record(ai.Config.host, model, tokens, tool_count)
+    if spark is not None:
+        # And against the spark's own month, when it has a budget.
+        sparks.spend(spark.id, tokens)
 
-    if delivered and not reply.stopped:
-        subagents.mark_delivered(delivered)
-
-    if not reply.stopped:
-        learning.after_turn(
-            chat.messages, tool_count,
-            host=ai.Config.host, model=ai.Config.model or "",
-        )
+    if kit is not None:
+        # What it learned, and any goal or schedule it was given.
+        kit.apply()
+    return reply.stopped, tool_count
 
 
 # --- Status and commands -------------------------------------------------
@@ -1627,60 +5039,120 @@ def _streaks(days: set, today: date) -> tuple[int, int]:
     return current, longest
 
 
-def usage(chats, today: Optional[date] = None) -> dict:
-    """What the settings page's dashboard shows, counted from the
-    saved web chats.
+# On unless switched off: a deleted (or cleared) chat's turns still count
+# on the usage dashboard.
+KEEP_USAGE_SETTING = "WEB_KEEP_DELETED_USAGE"
+_keeping = threading.Lock()
+
+
+def keeping_usage() -> bool:
+    return os.environ.get(KEEP_USAGE_SETTING, "").strip().lower() not in (
+        "0", "false", "off", "no",
+    )
+
+
+def _tally() -> dict:
+    return {"chats": 0, "messages": 0, "turns": 0, "tokens": 0, "tools": 0,
+            "seconds": 0.0, "generating": 0.0, "days": Counter(),
+            "models": Counter()}
+
+
+def _usage_of(chat: "Chat") -> dict:
+    """What one chat adds to the dashboard.
 
     Newer turns record when they ran and on which model;
     an older one counts on the day its chat was last used.
     """
 
-    today = today or datetime.now(timezone.utc).astimezone().date()
-    per_day: Counter = Counter()
-    models: Counter = Counter()
-    messages = turns = tokens = tools = 0
-    seconds = generating = 0.0
-    used = 0
+    tally = _tally()
+    log = list(chat.log)
+    tally["chats"] = 1 if log else 0
+    for entry in log:
+        if entry.get("type") == "user":
+            tally["messages"] += 1
+        if entry.get("type") != "stats":
+            continue
+        tally["turns"] += 1
+        at = entry.get("at") or chat.updated
+        # Days as this computer's clock has them, like the page's.
+        day = datetime.fromtimestamp(at, timezone.utc).astimezone()
+        tally["days"][day.date().isoformat()] += 1
+        if entry.get("model"):
+            tally["models"][entry["model"]] += 1
+        count = int(entry.get("tokens") or 0)
+        rate = float(entry.get("rate") or 0)
+        tally["tokens"] += count
+        tally["tools"] += int(entry.get("tools") or 0)
+        tally["seconds"] += float(entry.get("seconds") or 0)
+        if rate > 0:
+            tally["generating"] += count / rate
+    return tally
 
+
+def _add(into: dict, more: dict) -> dict:
+    for key, value in more.items():
+        if key in ("days", "models"):
+            into[key].update({
+                str(k): int(n) for k, n in dict(value).items()
+                if isinstance(n, (int, float))
+            })
+        elif key in into and isinstance(value, (int, float)):
+            into[key] += value
+    return into
+
+
+def keep_usage_of(chat: "Chat") -> None:
+    """Add CHAT's turns to what deleted chats left behind, before it goes
+    (when keeping them is on), so the dashboard does not lose them."""
+
+    if not keeping_usage():
+        return
+    gone = _usage_of(chat)
+    if not gone["chats"]:
+        return
+    with _keeping:
+        kept = _add(_add(_tally(), workspace.kept_usage()), gone)
+        workspace.keep_usage({
+            **kept, "days": dict(kept["days"]), "models": dict(kept["models"]),
+        })
+
+
+def usage(chats, today: Optional[date] = None) -> dict:
+    """What the settings page's dashboard shows, counted from the
+    saved web chats, and from deleted ones when they are kept."""
+
+    today = today or datetime.now(timezone.utc).astimezone().date()
+    total = _tally()
     for chat in chats:
-        log = list(chat.log)
-        if log:
-            used += 1
-        for entry in log:
-            if entry.get("type") == "user":
-                messages += 1
-            if entry.get("type") != "stats":
-                continue
-            turns += 1
-            at = entry.get("at") or chat.updated
-            # Days as this computer's clock has them, like the page's.
-            day = datetime.fromtimestamp(at, timezone.utc).astimezone()
-            per_day[day.date()] += 1
-            if entry.get("model"):
-                models[entry["model"]] += 1
-            count = int(entry.get("tokens") or 0)
-            rate = float(entry.get("rate") or 0)
-            tokens += count
-            tools += int(entry.get("tools") or 0)
-            seconds += float(entry.get("seconds") or 0)
-            if rate > 0:
-                generating += count / rate
+        _add(total, _usage_of(chat))
+    deleted = 0
+    if keeping_usage():
+        kept = workspace.kept_usage()
+        deleted = int(kept.get("chats") or 0)
+        _add(total, kept)
+    per_day: Counter = Counter()
+    for day, n in total["days"].items():
+        with contextlib.suppress(ValueError):
+            per_day[date.fromisoformat(day)] += n
+    tokens, generating = total["tokens"], total["generating"]
 
     current, longest = _streaks(set(per_day), today)
 
     return {
-        "chats": used,
-        "messages": messages,
-        "turns": turns,
+        "chats": total["chats"],
+        "deleted": deleted,
+        "keep_deleted": keeping_usage(),
+        "messages": total["messages"],
+        "turns": total["turns"],
         "tokens": tokens,
-        "tools": tools,
-        "seconds": round(seconds),
+        "tools": total["tools"],
+        "seconds": round(total["seconds"]),
         "rate": round(tokens / generating, 1) if generating else 0,
         "days": {day.isoformat(): n for day, n in sorted(per_day.items())},
         "active_days": len(per_day),
         "streak": current,
         "longest_streak": longest,
-        "models": models.most_common(),
+        "models": total["models"].most_common(),
         "today": today.isoformat(),
         "memories": len(memory.list_memory()),
         "skills": len(skills.all_skills()),
@@ -1700,13 +5172,51 @@ def status(ai) -> dict:
     return {
         "version": __version__,
         "model": ai.Config.model or "",
+        # Extensions' slash commands, for the box to offer and run.
+        "ext_commands": [
+            {"slash": f"/{c.name}", "label": c.description or e.name,
+             "ext": e.name}
+            for e, c in extensions.commands()
+        ],
         "host": host,
         # The entry in the host list that is in use, by the URL the list
         # gives it: 127.0.0.1 is listed as This computer's localhost.
         "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
+        "mode": ai.mode(),
+        "ultra_allowed": bool(ai.Config.ultra_allowed),
+        "system_one": systemone.enabled(),
+        "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
+        "compact_amount": ai.Config.compact_amount,
+        "model_titles": titles.enabled(),
+        "computer": computer.enabled(),
+        **_computer_use(),
+        **_sandbox(),
+        **_awake_state(),
+        "spark_events": triggers.enabled(),
+        "spark_retry": sparks.retry_shifts(),
+        **_computer_kinds(),
+        "visuals": visuals.level(),
+        # What a new chat says hello with, for the page to pick from by
+        # the browser's clock.
+        "greetings": greetings.POOLS,
+        "voice_style": voice.voice_style(),
+        "voice_interrupt": voice.interrupt_how("voice"),
+        # Said at once, before an answer, and while the user talks on:
+        # made ahead by the page, so they cost no wait when said.
+        "voice_acks": sorted({a for kind in humanvoice._ACKS.values()
+                              for a in kind}),
+        "voice_backchannels": list(humanvoice.BACKCHANNELS),
+        "voice_fillers": list(humanvoice.FILLERS),
+        "voice_quiet": dict(humanvoice.QUIET),
+        "spark_calls": teamchat.calls_allowed(),
+        "extension_updates": extensions.updates_on(),
+        "call_interrupt": voice.interrupt_how("calls"),
+        "wake_sensitivity": voice.wake_sensitivity(),
+        "wake_voice": _wake_voice_taught(),
+        "wake_word": voice.wake_title(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
         "background": (
@@ -1719,6 +5229,29 @@ def status(ai) -> dict:
         "home": str(Path.home()),
         "learning": learning.running(),
         "agents": subagents.running_count(),
+        "sparks_unread": sparks.unread_total(),
+        # Shown under the box while a reply is on its way.
+        "tips": showcase.web_tips(),
+        # The animation beside "Thinking", the same one the terminal
+        # turns, and every one there is to pick from.
+        "loader": loaders.chosen(),
+        "loader_morph": loaders.morphing(),
+        "loader_eggs": loaders.eggs_on(),
+        "loader_tasks": loaders.tasks_shown(),
+        "think_auto": tools_think_auto(),
+        # Whether an extension follows voice mode: if none does, the page
+        # does not tell Flash of every moment of it.
+        "voice_hooks": voicehooks.wanted(),
+        "loaders": [loader.summary() for loader in loaders.all_loaders()],
+        # Colour themes from extensions, beside the page's own.
+        "themes": [t.summary() for t in themes.extension_themes()],
+        # What extensions change of the page, and their status lines.
+        "extension_ui": [e.ui.summary(e.name) for e in ext_ui.with_ui()],
+        "extension_status": [
+            {"name": name, "text": text,
+             "when_model": ext_ui.status_model(name)}
+            for name, text in ext_ui.status_lines()
+        ],
     }
 
 
@@ -1729,17 +5262,52 @@ def _normal(url: str) -> str:
         return url
 
 
-def context_share(ai, chat: Chat) -> int:
+def context_use(ai, chat: Chat) -> dict:
+    """How full CHAT's context is, for the bar under the composer: its
+    share of the history budget, and the counts behind it."""
+
     budget = ai._history_budget()
-    if not budget or not chat.messages:
-        return 0
-    return min(100, round(100 * context.total_tokens(chat.messages) / budget))
+    used = context.total_tokens(chat.messages) if chat.messages else 0
+    limit = ai._context_limit() or 0
+    share = min(100, round(100 * used / budget)) if budget and used else 0
+    return {"share": share, "used": used, "budget": budget, "window": limit}
 
 
 # How long the page waits for a host to list its models. One that has
 # not answered by then is reported as not answering, rather than
 # holding the model menu shut until the connection gives up.
 MODEL_LIST_SECONDS = 4.0
+
+
+def _spark_default(models: Optional[list[str]]) -> dict:
+    """The model new sparks are made on, for the page: whether it is
+    still on this computer (None when the host did not say), and the
+    one a new spark gets instead when it is not."""
+
+    from . import ai  # deferred: ai imports half of Flash
+
+    chosen = sparks.default_model()
+    here = None if models is None else {
+        full_name(m) for m in models
+    }
+    model, gone = sparks.model_for_new(
+        ai.Config.model or "", here, look=False,
+    )
+    return {
+        "spark_default": chosen,
+        "spark_default_here": sparks.is_here(chosen, here),
+        "spark_model": model, "spark_default_note": gone,
+    }
+
+
+MODEL_SIZES: dict[str, int] = {}
+
+
+def _quietly(job) -> None:
+    try:
+        job()
+    except Exception:  # noqa: BLE001  (a warm-up; the menu asks again)
+        pass
 
 
 def list_models(ai) -> Optional[list[str]]:
@@ -1749,7 +5317,7 @@ def list_models(ai) -> Optional[list[str]]:
 
     def ask() -> None:
         try:
-            found["listed"] = ollama.Client(host=ai.Config.host).list()
+            found["listed"] = providers.client(ai.Config.host).list()
         except Exception:  # noqa: BLE001
             found["failed"] = True
 
@@ -1762,10 +5330,65 @@ def list_models(ai) -> Optional[list[str]]:
         return None
 
     models = getattr(found["listed"], "models", None) or []
+    # Their sizes, for whether each fits this computer.
+    MODEL_SIZES.update({str(getattr(m, "model", "")): int(
+        getattr(m, "size", 0) or 0) for m in models})
+    # Extensions' models first, then Ollama's.
     return sorted(
-        str(getattr(m, "model", "") or "") for m in models
-        if getattr(m, "model", "")
+        (str(getattr(m, "model", "") or "") for m in models
+         if getattr(m, "model", "")),
+        key=lambda name: (not name.startswith("@"), name),
     )
+
+
+def system_one_state(ai, models: bool = False) -> dict:
+    """System One's settings and the server's version, for Settings
+    and the model menu. MODELS scans the server for System One models
+    too, which asks it about each model it has."""
+
+    state: dict[str, Any] = {
+        "on": systemone.enabled(),
+        # The model in use, "" for None.
+        "model": systemone.model() if systemone.enabled() else "",
+        "auto": bool(ai.Config.no_command_confirmation),
+        "mode": ai.mode(),
+        "ultra_allowed": bool(ai.Config.ultra_allowed),
+        "least": systemone.MIN_VERSION_TEXT,
+        "counts": systemone.counts(),
+        "version": "",
+        "problem": "",
+        "too_old": False,
+        "models": [],
+        # The ones that only judge and cannot chat, for the menu to
+        # leave out of the chat models.
+        "judge_only": [],
+    }
+    served = systemone.extension_models()
+    try:
+        state["version"] = systemone.check(ai.Config.host)
+        if models:
+            found = systemone.catalog(ai.Config.host)
+            state["models"] = sorted(
+                n for n, can in found.items() if systemone.CAPABILITY in can
+            )
+            state["judge_only"] = [
+                n for n in state["models"] if "completion" not in found[n]
+            ]
+            if not state["models"]:
+                state["problem"] = systemone.no_models(ai.Config.host)
+    except systemone.TooOld as exc:
+        state.update(version=exc.version, problem=str(exc), too_old=True)
+    except systemone.SystemOneError as exc:
+        state["problem"] = str(exc)
+    # An extension's models answer with no Ollama at all: there to pick
+    # whatever Ollama said, and nothing wrong while one is in use.
+    if models and served:
+        state["models"] = sorted({*state["models"], *served})
+        state["judge_only"] = sorted({*state["judge_only"], *served})
+    if systemone.is_extension(state["model"]) or (
+            models and served and not state["too_old"]):
+        state["problem"] = ""
+    return state
 
 
 def scene_data(name: str) -> Optional[dict]:
@@ -1815,24 +5438,56 @@ def voice_models(session: "Session") -> dict:
     """Every voice model Settings offers, and where each one stands."""
 
     def listed(kind: str) -> list[dict]:
-        offered, installed, setting, _ = VOICE_KINDS[kind]
+        _, installed, setting, _ = VOICE_KINDS[kind]
         in_use = getattr(voice, setting)()
         return [
             {
                 "name": c.name, "size": c.size, "label": c.label,
+                "engine": voice.engine_label(c.name),
+                # An extension's: nothing to download or delete.
+                "extension": voice.is_extension(c.name),
+                # This Mac's own (Siri's): the same.
+                "system": voice.siri.is_siri(c.name) or voice.apple_listen.is_apple(c.name),
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
+                # A Phonon or Kokoro voice or a Moonshine model, with
+                # what it runs on not installed.
+                "needs": voice.PHONON_HINT if (
+                    voice.is_phonon(c.name) and not phonon
+                ) else voice.KOKORO_HINT if (
+                    voice.is_kokoro(c.name) and not kokoro
+                ) else voice.MOONSHINE_HINT if (
+                    voice.is_moonshine(c.name) and not moonshine
+                ) else "",
             }
-            for c in getattr(voice, offered)
+            for c in voice.by_engine(voice.offered(kind))
         ]
+
+    kokoro = voice.kokoro_ready()
+    phonon = voice.phonon_ready()
+    moonshine = voice.moonshine_ready()
 
     job = session.voice_job
     return {
         "listening": listed("listening"),
         "speaking": listed("speaking"),
         "downloading": {"kind": job[0], "name": job[1]} if job else None,
+        # Why there are no Siri voices to pick, and how to get some.
+        "siri_note": voice.siri.note(),
         "missing": voice.web_missing(),
-        "install": voice.INSTALL_HINT,
+        "install": voice.install_hint(),
+        # How the voice delivers what it says.
+        "styles": [
+            {"name": name, "label": style.label,
+             "current": name == voice.voice_style()}
+            for name, style in voice.STYLES.items()
+        ],
+        # How often it thinks aloud: an um, a second thought.
+        "disfluency": [
+            {"name": name, "label": label,
+             "current": name == humanvoice.disfluency()}
+            for name, label in humanvoice.DISFLUENCIES.items()
+        ],
     }
 
 
@@ -1845,6 +5500,14 @@ def _extension_info(ext: "extensions.Extension") -> dict:
         "contents": ext.contents(),
         "commands": [f"/{c.name}" for c in ext.commands],
         "tools": [t.name for t in ext.tools],
+        # Its own settings panel: each choice, and what the user picked.
+        "settings": [s.summary() for s in ext.settings],
+        "values": extensions.shown_values(ext) if ext.settings else {},
+        # A device voice mode can speak through, while its switch is on.
+        **({"speaker": {"setting": ext.speaker.setting,
+                        "label": ext.speaker.label,
+                        "microphone": ext.speaker.microphone}}
+           if ext.speaker else {}),
     }
 
 
@@ -1904,7 +5567,92 @@ def _stage_extension(session: Session, spec: str) -> dict:
             else ""
         ),
         "runs_programs": bool(ext.commands or ext.tools),
+        # Where it comes from, when that is worth a line: a git bundle.
+        "note": extensions.source_note(spec),
     }
+
+
+def self_update(session: Session, name: str, quiet: bool = False) -> dict:
+    """Extension NAME pulled again from where it came from and, when it
+    asks for nothing more than the copy in place does (no new programs,
+    tools, services or reach), put in at once. An update asking for more
+    waits for the user, shown like an install. QUIET: from the
+    background check, so a copy already current says nothing."""
+
+    from .repl_input import RESERVED_COMMANDS
+    from .tools import FUNCTIONS
+
+    have = extensions.find(name)
+    if have is None:
+        raise ValueError(f"No extension called {name!r}.")
+    try:
+        spec = extensions.update_source(name)
+        checkout = extensions.fetch(spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(str(exc)) from None
+    try:
+        new = extensions.load(checkout)
+        if new.name != have.name:
+            raise extensions.ExtensionError(
+                f"it is now called {new.name!r}")
+        if extensions.tree_digest(checkout) == extensions.tree_digest(have.path):
+            extensions.discard(checkout)
+            return {"status": "current", "name": have.name,
+                    "version": have.version}
+        clashes = extensions.clashes(new, RESERVED_COMMANDS,
+                                     frozenset(FUNCTIONS))
+        if clashes:
+            raise extensions.ExtensionError("; ".join(clashes))
+        more = sorted(extensions.asks(new) - extensions.asks(have))
+    except extensions.ExtensionError as exc:
+        extensions.discard(checkout)
+        raise ValueError(f"Could not update {name}: {exc}") from None
+    if more:
+        # Asking for more than the user said yes to: their yes again first.
+        extensions.discard(checkout)
+        if quiet and session.update_asked.get(have.name) == more:
+            return {"status": "review", "name": have.name, "adds": more}
+        session.update_asked[have.name] = more  # said once, not every check
+        session.hub.publish({
+            "type": "notify", "title": f"{have.name} has an update",
+            "text": ("It asks for more than before (" + ", ".join(more)
+                     + "), so it waits for you: Settings, Extensions, "
+                     "Update."),
+        })
+        return {"status": "review", "name": have.name, "adds": more}
+    try:
+        ext = extensions.install(checkout, spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(f"Could not update {name}: {exc}") from None
+    finally:
+        extensions.discard(checkout)
+    session.hub.publish({"type": "status"})
+    session.hub.publish({"type": "extension-updated", "name": ext.name,
+                         "version": ext.version})
+    session.hub.publish({
+        "type": "notify", "title": f"{ext.name} updated",
+        "text": f"Now {ext.version or 'the newest version'}.",
+    })
+    return {"status": "updated", "name": ext.name, "version": ext.version}
+
+
+UPDATE_CHECK_SECONDS = 6 * 3600
+
+
+def update_extensions(session: Session) -> list[dict]:
+    """Every extension with a source, kept up to date by itself (the
+    background check, while the setting is on)."""
+
+    done = []
+    for ext in extensions.installed():
+        if not ext.source:
+            continue
+        try:
+            done.append(self_update(session, ext.name, quiet=True))
+        except ValueError as exc:
+            done.append({"status": "failed", "name": ext.name,
+                         "error": str(exc)})
+    return done
 
 
 def _install_staged(session: Session, staged_id: str) -> dict:
@@ -1923,6 +5671,80 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     return _extension_info(ext)
 
 
+def _chess_play(session: Session, chat: Any, game_id: str, move: str,
+                by: str) -> dict:
+    """A move in chess game GAME_ID in CHAT, by "user" or "flash": kept
+    in the chat's log, and every page showing it brought up to date."""
+
+    from . import chess
+
+    for n, event in enumerate(chat.log):
+        if isinstance(event, dict) and event.get("type") == "chess" \
+                and event.get("mode") == "play" and event.get("id") == game_id:
+            game = chess.play_move(event, move, by)
+            chat.log[n] = game
+            session.save(chat)
+            session.hub.publish({"type": "chess-changed", "chat": chat.id,
+                                 "game": game})
+            return game
+    raise ValueError("That chess game is not in this chat.")
+
+
+def _course_command(session: Session, name: str, subject: str,
+                    body: dict) -> dict:
+    """A course card's: what to show, and answers given on it, marked
+    without the model."""
+
+    from . import tutor
+
+    pid = str(body.get("id") or "")
+    if name == "course":
+        found = tutor.course(subject)
+        found["step"] = tutor.step(subject, pid or found["current"]) \
+            if pid or found["current"] else None
+        return found
+    if name == "course-answer":
+        said = tutor.answer(subject, pid, body.get(
+            "answer", body.get("choice")))
+    elif name == "course-run":
+        # Run because the user pressed Run on code they wrote.
+        said = tutor.check(subject, pid, str(body.get("code") or ""))
+    elif name == "course-read":
+        said = tutor.understood(subject, pid)
+    else:
+        raise ValueError(f"Not a course command: {name}.")
+    session.hub.publish({"type": "course-changed",
+                         "subject": tutor._key(subject)})
+    return said
+
+
+# What a small screen (the watch) keeps of each log entry, and how much
+# of any one text: a chat with screenshots and long tool output is
+# megabytes as it is, and the watch asks for it every second or two.
+SMALL_FIELDS = ("type", "text", "label", "id", "question", "answer", "what",
+                "name", "at", "versions")
+SMALL_TEXT = 4000
+
+
+def small_view(summary: dict) -> dict:
+    """SUMMARY (a chat's) with each log entry cut to what a small screen
+    shows: no tool output, no pictures, long texts shortened."""
+
+    def cut(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > SMALL_TEXT:
+            return value[:SMALL_TEXT] + "\u2026"
+        return value
+
+    out = dict(summary)
+    out["log"] = [
+        {k: cut(entry[k]) for k in SMALL_FIELDS if k in entry}
+        for entry in summary.get("log") or [] if isinstance(entry, dict)
+    ]
+    out["partial"] = cut(out.get("partial") or "")
+    out["thinking"] = cut(out.get("thinking") or "")
+    return out
+
+
 def command(session: Session, body: dict, browser: str = "") -> dict:
     """The page's commands: models, modes, chats, undo.
 
@@ -1936,32 +5758,508 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     chat_id = str(body.get("chat", "") or "")
 
     if name == "new":
-        return {"chat": session.new_chat(str(body.get("project") or "")).id}
+        chat = session.new_chat(
+            str(body.get("project") or ""), str(body.get("spark") or ""),
+        )
+        # Picked for it before it had a message.
+        if body.get("model"):
+            chat.model = str(body["model"]).strip()
+        return {"chat": chat.id, "model": chat.model}
 
     if name == "delete":
         session.delete_chat(chat_id)
         return {}
 
+    if name == "chess-step":
+        # Where the user is in a lesson, so the chat opens there again.
+        chat = session.chat(chat_id)
+        for event in chat.log:
+            if isinstance(event, dict) and event.get("type") == "chess" \
+                    and event.get("id") == arg:
+                event["at"] = max(0, int(body.get("at") or 0))
+                event["solved"] = sorted({
+                    int(n) for n in body.get("solved") or []
+                    if str(n).isdigit()})
+                session.save(chat)
+                return {}
+        raise ValueError("That lesson is not in this chat.")
+
+    if name == "canvas-result":
+        # A page's answer to a canvas op: the first one in is the one.
+        waiting = session.canvas_waits.get(arg)
+        result = body.get("result")
+        if waiting and not waiting["done"].is_set() \
+                and isinstance(result, dict):
+            waiting["out"] = result
+            waiting["done"].set()
+        return {}
+
+    if name == "chess-play":
+        # The user's move in a game with Flash, checked against the rules.
+        from . import chess
+
+        try:
+            return _chess_play(session, session.chat(chat_id), arg,
+                               str(body.get("move") or ""), "user")
+        except chess.ChessError as exc:
+            raise ValueError(str(exc)) from None
+
     if name == "rename":
         chat = session.chat(chat_id)
         chat.title = arg[:TITLE_CHARS] or chat.title
+        chat.named = bool(arg)
         session.save(chat)
         session.hub.publish({"type": "chats", "chat": chat.id})
         return {}
+
+    if name == "chat-files":
+        return {"files": chat_files(session)}
+
+    if name == "made":
+        return {"files": made_files(session)}
+
+    if name == "reuse-file":
+        try:
+            info = workspace.reuse_file(arg, str(body.get("file_name") or ""))
+        except workspace.WorkspaceError as exc:
+            raise ValueError(str(exc)) from None
+        return {"file": info}
+
+    if name == "fork":
+        chat = session.chat(chat_id)
+        made = session.fork(chat, int(arg))
+        return {"fork": made, "forks": session.fork_tree(chat)}
+
+    if name == "fork-switch":
+        chat = session.chat(chat_id)
+        session.switch_fork(chat, arg)
+        return {"forks": session.fork_tree(chat)}
+
+    if name == "fork-delete":
+        chat = session.chat(chat_id)
+        session.delete_fork(chat, arg)
+        return {"forks": session.fork_tree(chat)}
+
+    if name == "forks":
+        return {"forks": session.fork_tree(session.chat(chat_id))}
+
+    if name == "briefing":
+        # "open" when the page opens it: teams then count from the last
+        # one. A refresh counts from the same time again.
+        problems: list[str] = []
+        since = briefing.opened() if arg == "open" else None
+        shown = briefing.cards(session, problems=problems, since=since)
+        if arg == "open":
+            briefing.mark_seen(c["id"] for c in shown)
+            session.hub.publish({"type": "status"})
+        return {"cards": shown, "problems": problems}
+
+    if name == "clock":
+        # Timers and alarms, as they stand: what the page's clock panel
+        # and the watch show.
+        from . import clock
+
+        return clock.state()
+
+    if name == "clock-act":
+        # arg: timer, alarm, cancel, stop, snooze, pause, resume, add_time,
+        # on, off; the rest from the body ("length", "at", "days",
+        # "label", "id", "minutes").
+        from . import clock
+
+        try:
+            if arg == "timer":
+                clock.add_timer(body.get("length"), str(body.get("label") or ""))
+            elif arg == "alarm":
+                clock.add_alarm(body.get("at"), str(body.get("label") or ""), body.get("days") or "")
+            elif arg in ("cancel", "stop", "pause", "resume"):
+                getattr(clock, arg)(str(body.get("id") or ""))
+            elif arg == "snooze":
+                clock.snooze(str(body.get("id") or ""), float(body.get("minutes") or clock.SNOOZE_MINUTES))
+            elif arg == "add_time":
+                clock.add_time(str(body.get("id") or ""), clock.parse_length(body.get("length") or "1m"))
+            elif arg in ("on", "off"):
+                clock.toggle(str(body.get("id") or ""), arg == "on")
+            else:
+                raise ValueError(f"No clock action {arg!r}.")
+        except clock.ClockError as exc:
+            raise ValueError(str(exc)) from None
+        return clock.state()
+
+    if name == "briefing-dismiss":
+        # One card's id, or "all" with the ids in "cards".
+        ids = body.get("cards") if arg == "all" else [arg]
+        briefing.dismiss(i for i in ids or [] if isinstance(i, str))
+        return {}
+
+    if name == "rate":
+        # A reply rated good or bad (or the rating taken back), at "at"
+        # in the chat's log: kept on it, and learned from now.
+        chat = session.chat(chat_id)
+        try:
+            at = int(body.get("at"))
+            entry = chat.log[at]
+        except (TypeError, ValueError, IndexError):
+            raise ValueError("That reply is gone.") from None
+        if entry.get("type") != "assistant" or arg not in (
+                "good", "bad", "clear"):
+            raise ValueError("Only a reply can be rated good or bad.")
+        if arg == "clear":
+            entry.pop("rating", None)
+        else:
+            entry["rating"] = arg
+            learning.rated(
+                chat.messages, str(entry.get("text") or ""), arg == "good",
+                str(body.get("why") or ""), host=ai.Config.host,
+                model=ai.Config.model or "")
+        session.save(chat)
+        return {"rating": entry.get("rating", "")}
+
+    if name in ("secrets", "secret-set", "secret-delete"):
+        # The vault: names only ever come back, never a value.
+        from . import vault
+
+        try:
+            if name == "secret-set":
+                vault.set_secret(arg, str(body.get("value") or ""))
+                learning.refresh()
+            elif name == "secret-delete":
+                vault.delete(arg)
+                learning.refresh()
+        except vault.VaultError as exc:
+            raise ValueError(str(exc)) from None
+        return {"secrets": vault.names(), "kept_in": vault.where_kept()}
+
+    if name == "doctor":
+        from . import doctor
+
+        return {"checks": [c.to_dict() for c in doctor.run()]}
+
+    if name == "doctor-fix":
+        # The fix for the check named ARG, as the check now finds it, then
+        # every check again.
+        from . import doctor
+
+        found = next((c for c in doctor.run() if c.name == arg
+                      and c.fixable), None)
+        if found is None:
+            raise ValueError("That is fine now, or has no command to fix it.")
+        ok, said = doctor.run_fix(found)
+        return {"ok": ok, "said": said,
+                "checks": [c.to_dict() for c in doctor.run()]}
+
+    if name == "chat-seen":
+        # The page has the chat open, the reply in front of the user: not
+        # news for the briefing. Kept without counting as a change.
+        chat = session.chats.get(chat_id)
+        if chat is not None and chat.seen != len(chat.log):
+            chat.seen = len(chat.log)
+            if chat.log:
+                workspace.save_chat(chat.saved())
+            # Its card may have been all the briefing's dot was for.
+            briefing.stale()
+            if getattr(session, "hub", None) is not None:
+                session.hub.publish({"type": "status"})
+        return {}
+
+    if name == "briefing-mark-read":
+        # An iMessage card's conversation, by who it is with: marked read
+        # in Messages, and its cards ("cards") out of the feed.
+        try:
+            said = computer.mark_imessages_read(str(body.get("with") or ""))
+        except computer.ComputerError as exc:
+            raise ValueError(str(exc)) from None
+        marked = said.startswith("Marked read")
+        if marked:
+            ids = body.get("cards") or [arg]
+            briefing.dismiss(i for i in ids if isinstance(i, str))
+        return {"said": said, "marked": marked}
+
+    if name == "briefing-undo":
+        briefing.undismiss(arg)
+        return {}
+
+    if name == "compare":
+        from . import compare
+
+        if arg in ("board", "tally"):
+            return {"standings": compare.standings()}
+        try:
+            models, prompt = compare.parse(arg)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+        history = list(session.chat(chat_id).messages) if chat_id in session.chats else []
+        return compare.run(ai._client(), models, prompt, ai._chat_options(), history=history)
+
+    if name.startswith("course"):
+        return _course_command(session, name, arg, body)
+
+    if name == "compare-pick":
+        from . import compare
+
+        return compare.pick(arg, str(body.get("choice") or ""))
+
+    if name.startswith("worktree"):
+        return _worktree_command(session, name, arg, chat_id, body)
+
+    if name == "compare-keep":
+        # Carry on the chat from one side: its answer kept as the reply, and its model the chat's from now on.
+        from . import compare
+
+        prompt, answer, model = compare.keep(arg, str(body.get("side") or "a"))
+        chat = session.chat(chat_id)
+        chat.messages.append(ai._message("user", prompt))
+        chat.messages.append(ai._message("assistant", answer))
+        session.emit(chat, {"type": "user", "text": prompt})
+        session.emit(chat, {"type": "assistant", "text": answer})
+        chat.model = model
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"model": model}
+
+    if name == "music":
+        # Said by voice with no player on the page that heard it: the
+        # music another page plays, else an app's on this computer.
+        if arg == "stop":
+            session.music = {}
+            session.hub.publish({"type": "music", "action": "stop"})
+            return {"said": "Stopped."}
+        if session.music and arg in ("pause", "resume"):
+            session.music["playing"] = arg == "resume"
+            session.hub.publish({"type": "music", "action": arg})
+            return {"said": "Paused." if arg == "pause" else "Playing."}
+        wanted = {"pause": "pause", "resume": "play", "next": "next_track",
+                  "louder": "volume_up", "quieter": "volume_down"}.get(arg)
+        if not wanted:
+            raise ValueError(f"Not a thing to do to music: {arg!r}.")
+        try:
+            return {"said": computer.do(wanted)}
+        except computer.ComputerError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "calendar":
+        from . import calendars
+
+        problems: list[str] = []
+        found = calendars.events(problems=problems) if arg == "events" \
+            else []
+        return {"feeds": calendars.feeds(),
+                "google": calendars.google_connected(),
+                "apple": calendars.apple_connected(),
+                "apple_available": calendars.apple_available(),
+                "events": [e.summary() for e in found],
+                "problems": problems,
+                "redirect": f"http://127.0.0.1:{session.port}/oauth/google"
+                if session.port else ""}
+
+    if name == "calendar-feed":
+        from . import calendars
+
+        try:
+            if body.get("remove"):
+                calendars.remove_feed(arg)
+            else:
+                calendars.add_feed(arg, str(body.get("url") or ""))
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"feeds": calendars.feeds()}
+
+    if name == "calendar-apple":
+        from . import calendars
+
+        try:
+            calendars.apple_connect(arg != "off")
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"apple": calendars.apple_connected()}
+
+    if name == "calendar-google":
+        from . import calendars
+
+        if arg == "off":
+            calendars.google_sign_out()
+            return {"google": False}
+        if not session.port:
+            raise ValueError("This Flash has no web address to sign in at.")
+        try:
+            url, _ = calendars.google_sign_in_url(
+                str(body.get("client_id") or ""),
+                str(body.get("client_secret") or ""),
+                f"http://127.0.0.1:{session.port}/oauth/google")
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"url": url}
+
+    if name == "fallbacks":
+        # Every model's fallbacks, and ARG's, or the default's.
+        model = arg.strip() or ai.Config.model or ""
+        return {"chains": modelchain.all_fallbacks(), "model": model,
+                "chain": modelchain.fallbacks(model),
+                "auto": modelchain.auto_models(ai.Config.host,
+                                               ai.Config.model or "")}
+
+    if name == "fallbacks-set":
+        try:
+            chain = modelchain.set_fallbacks(
+                arg, [str(m) for m in body.get("chain") or []])
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+        return {"model": arg, "chain": chain}
+
+    if name == "ext-command":
+        # An extension's slash command, typed in the box: a prompt one
+        # comes back to be sent, a program's output to be shown.
+        found = extensions.find_command(arg.strip())
+        if found is None:
+            raise ValueError(f"No extension has {arg.split(' ', 1)[0]}.")
+        ext, command, rest = found
+        if command.prompt is not None:
+            return {"send": extensions.expand_prompt(command, rest)}
+        try:
+            words = shlex.split(rest) if rest else []
+        except ValueError as exc:
+            raise ValueError(f"Could not read its arguments: {exc}") from None
+        try:
+            done = subprocess.run(  # nosec B603  (its own program, no shell)
+                extensions.argv(ext, command.run or []) + words,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=command.timeout,
+                cwd=ext.path, env=extensions.environment(ext), check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"say": f"/{command.name} took longer than "
+                           f"{command.timeout} seconds."}
+        except OSError as exc:
+            return {"say": f"Could not start /{command.name}: {exc}"}
+        outputs = (done.stdout.strip(), done.stderr.strip())
+        said = "\n".join(p for p in outputs if p)
+        return {"say": said[:8000] or f"/{command.name} said nothing.",
+                "failed": done.returncode != 0}
+
+    if name == "chat-model":
+        # This chat's own model; "" to go back to the default.
+        chat = session.chat(chat_id)
+        chat.model = arg.strip()
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"model": chat.model, "default": ai.Config.model or ""}
+
+    if name == "pin":
+        # "on" or "off", or nothing to flip it.
+        chat = session.chat(chat_id)
+        chat.pinned = not chat.pinned if arg in ("", "toggle") else \
+            arg in ("on", "1", "true")
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"pinned": chat.pinned}
 
     if name == "clear":
         session.clear_chat(session.chat(chat_id))
         return {}
 
+    if name == "compact":
+        session.compact_chat(session.chat(chat_id))
+        return {}
+
+    if name == "review":
+        session.review_chat(session.chat(chat_id), arg)
+        return {}
+
+    if name == "smarthome":
+        from . import smarthome
+
+        found = {"connected": smarthome.connected(),
+                 "url": smarthome.address()}
+        if found["connected"] and arg == "check":
+            try:
+                found["said"] = smarthome.check()
+                found["devices"] = len(
+                    [x for x in smarthome.listing().splitlines() if x])
+            except smarthome.HomeError as exc:
+                found["error"] = str(exc)
+        return found
+
+    if name == "smarthome-connect":
+        from . import smarthome, vault
+
+        url = str(body.get("url") or "").strip().rstrip("/")
+        token = str(body.get("token") or "").strip()
+        if not url or not token:
+            raise ValueError("Give Home Assistant's address and a token.")
+        if not url.startswith(("http://", "https://")):
+            url = "http://" + url
+        was = (smarthome.address(), vault.get(smarthome.TOKEN))
+        ai.set_config_var(smarthome.URL_SETTING, url)
+        vault.set_secret(smarthome.TOKEN, token)
+        try:
+            said = smarthome.check()
+            count = len([x for x in smarthome.listing().splitlines() if x])
+        except smarthome.HomeError as exc:
+            # Not kept: what worked before stays.
+            ai.set_config_var(smarthome.URL_SETTING, was[0])
+            if was[1]:
+                vault.set_secret(smarthome.TOKEN, was[1])
+            else:
+                vault.delete(smarthome.TOKEN)
+            raise ValueError(str(exc)) from None
+        return {"connected": True, "url": url, "said": said,
+                "devices": count}
+
+    if name == "speakers":
+        from . import media
+
+        try:
+            names = media.speaker_names()
+        except Exception as exc:  # noqa: BLE001 (shown, not raised)
+            return {"names": [], "default": "", "error": str(exc)}
+        return {"names": names,
+                "default": os.environ.get(media.DEFAULT_DEVICE, "")}
+
+    if name == "speaker-default":
+        from . import media
+
+        ai.set_config_var(media.DEFAULT_DEVICE,
+                          str(arg or "").replace(" (AirPlay)", "").strip())
+        return {"default": os.environ.get(media.DEFAULT_DEVICE, "")}
+
+    if name == "smarthome-off":
+        from . import smarthome, vault
+
+        ai.set_config_var(smarthome.URL_SETTING, "")
+        vault.delete(smarthome.TOKEN)
+        return {"connected": False}
+    if name == "retry":
+        session.retry(session.chat(chat_id))
+        return {}
+
+    if name == "edit":
+        session.edit(
+            session.chat(chat_id), int(body.get("at", -1)), arg,
+            attachments(body["files"]) if "files" in body else None,
+        )
+        return {}
+
+    if name == "version":
+        session.show_version(
+            session.chat(chat_id), int(body.get("at", -1)),
+            int(body.get("version", -1)),
+        )
+        return {}
+
     if name == "stop":
         chat = session.chat(chat_id)
-        chat.stop.set()
+        session.halt(chat)
         # What was waiting goes back to the page, to send again or not.
         items = session.unqueue(chat)
         return {
             "restored": [item["text"] for item in items],
             "files": [f for item in items for f in item.get("files") or []],
         }
+
+    if name == "pending-mode" and body.get("mode") == "now":
+        chat = session.chat(chat_id)
+        session.send_now(chat, arg)
+        return {"pending": [dict(p) for p in chat.pending]}
 
     if name in ("pending-remove", "pending-mode"):
         chat = session.chat(chat_id)
@@ -2017,14 +6315,26 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"token": token}
 
     if name == "skills":
+        own = skills.all_skills()
+        mine = {s.name for s in own}
+        # The knowledge base after: the guides that come with Flash and
+        # its extensions, to read and use but not to change. One the
+        # user saved a skill of the same name over is theirs instead.
+        guides = [g for g in skills.knowledge() if g.name not in mine]
+        # How each of the user's own is going: its recent runs' score,
+        # and a new version being tried.
+        going = {s.name: skilltrials.report(s.name) for s in own}
         return {"skills": [
             {
                 "name": s.name,
                 "description": s.description,
                 "by": s.by,
+                "builtin": s.builtin,
                 "size": len(s.body),
+                "score": going.get(s.name, {}).get("score"),
+                "trial": going.get(s.name, {}).get("trial"),
             }
-            for s in skills.all_skills()
+            for s in (*own, *guides)
         ]}
 
     if name == "skill":
@@ -2033,8 +6343,49 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(f"No skill called {arg!r}.")
         return {
             "name": found.name, "description": found.description,
-            "by": found.by, "content": found.body,
+            "by": found.by, "builtin": found.builtin,
+            "content": found.body,
+            "trials": None if found.builtin else skilltrials.report(
+                found.name),
         }
+
+    if name in ("skill-improve", "skill-restore"):
+        # Rewritten from its runs and tried, or an earlier version back.
+        try:
+            if name == "skill-restore":
+                said = skilltrials.restore(arg, str(body.get("version")
+                                                    or ""))
+            else:
+                said = skilltrials.improve(arg, skilltrials._ask_model(
+                    ai.Config.host, ai.Config.model or ""), asked=True)
+        except (skilltrials.TrialError, skills.SkillError) as exc:
+            raise ValueError(str(exc)) from None
+        return {"said": said}
+
+    if name == "skill-code":
+        # The skill as a code, to give someone.
+        try:
+            return {"code": skills.share_code(arg)}
+        except skills.SkillError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "skill-add-code":
+        # A skill someone gave as a code, saved as one of the user's.
+        try:
+            message = skills.add_from_code(str(body.get("code") or ""), name=arg or "",
+                                           replace=bool(body.get("replace")))
+        except (skills.SkillError, OSError) as exc:
+            raise ValueError(str(exc)) from None
+        learning.refresh()
+        return {"message": message, "name": skills.read_code(str(body.get("code") or ""))["name"] if not arg else arg}
+
+    if name in ("skill-save", "skill-delete"):
+        found = skills.find(arg)
+        if found is not None and found.builtin:
+            raise ValueError(
+                f"{found.name} is built into "
+                f"{'Flash' if found.builtin == 'flash' else found.builtin}"
+                " and can't be changed. Make a skill of your own instead.")
 
     if name in ("skill-create", "skill-save", "skill-delete"):
         action = {
@@ -2054,11 +6405,327 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"message": message}
 
+    if name == "sparks-read-all":
+        # Every spark's new reports and every team chat, read at once.
+        marked = 0
+        for spark in sparks.all_sparks():
+            if spark.unread:
+                sparks.mark_read(spark.id)
+                marked += 1
+        for team in sparks.teams():
+            if teamchat.mark_read(team.id):
+                marked += 1
+        if marked:
+            briefing.stale()
+        return {"marked": marked}
+    if name == "sparks-refresh":
+        # Every spark's tools, as refresh_tools brings one's: here, and
+        # in the keeper running shifts, which may be another process.
+        from . import tools as flash_tools  # deferred: tools imports a lot
+
+        changes, found = flash_tools.refresh_all()
+        sparks.ask_refresh()
+        return {"changed": changes,
+                "servers": [s.name for s in found
+                            if s.state == connectors.READY]}
+
+    if name == "sparks":
+        return {
+            "sparks": [s.to_dict() for s in sparks.all_sparks()],
+            "teams": [team_info(t) for t in sparks.teams()],
+            "hires": [
+                {**h, "details": sparks.hire_details(h)}
+                for h in sparks.hires()
+            ],
+            "held": sparks.held_count(),
+            "always": keepalive.status(),
+            "trash": sparks.trash(),
+        }
+
+    if name == "sparks-pause-all":
+        return {"paused": len(sparks.pause_all())}
+    if name == "sparks-stop-all":
+        return sparks.stop_all()
+    if name == "sparks-resume-all":
+        return {"resumed": len(sparks.resume_all())}
+
+    if name == "flows" or name.startswith("flow-"):
+        return _flow_command(name, arg, body)
+
+    if name.startswith(("team-", "hire-")):
+        return _team_command(name, arg, body)
+
+    if name == "spark-rounds":
+        # No arg: only what it is, for the box in Settings. "limited"
+        # puts the limit back on at the number it had.
+        try:
+            if arg == "limited":
+                sparks.set_shift_rounds_unlimited(False)
+            elif arg:
+                sparks.set_shift_rounds(arg)
+        except sparks.SparkError as exc:
+            raise ValueError(str(exc)) from None
+        return {
+            "rounds": sparks.shift_rounds_number(),
+            "unlimited": sparks.shift_rounds_unlimited(),
+            "least": sparks.SHIFT_ROUNDS_MIN,
+            "most": sparks.SHIFT_ROUNDS_MAX,
+            "default": sparks.SHIFT_ROUNDS_DEFAULT,
+        }
+
+    if name == "install":
+        # A package Flash needs: "packages", or the one in arg.
+        wanted = body.get("packages") or [arg]
+        try:
+            return session.installer.start([str(p) for p in wanted])
+        except installer.InstallError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "install-status":
+        return session.installer.snapshot()
+
+    if name == "instructions":
+        # How every reply should be. With "text", replaces them.
+        if "text" in body:
+            instructions.save(str(body.get("text") or ""))
+        return {"text": instructions.read(), "max": instructions.MAX_CHARS}
+
+    if name == "wake-sensitivity":
+        # No arg: only what it is, for the slider in Settings.
+        if arg:
+            heyflash.set_sensitivity(arg)
+            session.hub.publish({"type": "status"})
+        return {"sensitivity": voice.wake_sensitivity()}
+
+    if name == "briefing-trash-email":
+        # on or off; no arg: only what it is, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError(f"{name} takes on or off")
+        if arg:
+            briefing.set_trash_dismissed_email(arg == "on")
+        return {"on": briefing.trash_dismissed_email()}
+
+    if name in ("remove-dashes", "remove-emojis"):
+        # on or off; no arg: only what they are, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError(f"{name} takes on or off")
+        if arg:
+            return tidy.set_setting(name.split("-")[1], arg == "on")
+        return tidy.settings()
+
+    if name == "call-monitor":
+        # on or off; no arg: only what it is, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("call-monitor takes on or off")
+        if arg:
+            return {**calls.set_monitor(on=arg == "on"),
+                    **calls.mic_settings(), **calls.silence_settings()}
+        return {**calls.monitor_settings(), **calls.mic_settings(),
+                **calls.silence_settings()}
+
+    if name == "call-monitor-device":
+        # The device the call is heard on; empty: the computer's speakers.
+        return {**calls.set_monitor(device=arg), **calls.mic_settings()}
+
+    if name == "call-user-mic":
+        # The user's own mic for calls; empty: the system default.
+        # Settings reads it with call-monitor.
+        return {**calls.monitor_settings(), **calls.set_user_mic(arg)}
+
+    if name == "call-greeting":
+        # default, own, or custom:<words>; no arg: only what it is.
+        if not arg:
+            return calls.greeting_settings()
+        mode, _, text = arg.partition(":")
+        return calls.set_greeting(mode, text)
+
+    if name == "call-silence":
+        # Seconds of quiet on the line before Flash answers.
+        # Settings reads it with call-monitor.
+        return calls.set_pause_seconds(arg)
+
+    if name == "call-pause":
+        # Hold Flash's voice on the call (on), or let it speak (off).
+        if arg not in ("on", "off"):
+            raise ValueError("call-pause takes on or off")
+        try:
+            return calls.set_paused(arg == "on", owner=chat_id)
+        except calls.CallError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "call-takeover":
+        # The user takes the call over from Flash (on), or hands it back.
+        if arg not in ("on", "off"):
+            raise ValueError("call-takeover takes on or off")
+        try:
+            return calls.take_over(arg == "on", owner=chat_id)
+        except calls.CallError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "call-mic":
+        # The user's own mic into the call Flash is on, or out of it;
+        # no arg: only where it stands.
+        if arg not in ("", "on", "off"):
+            raise ValueError("call-mic takes on or off")
+        if arg:
+            try:
+                return calls.set_mic(arg == "on", owner=chat_id)
+            except calls.CallError as exc:
+                raise ValueError(str(exc)) from None
+        return calls.live()
+
+    if name == "wake-word":
+        # The words that wake Flash; no arg: only what they are.
+        if arg:
+            heyflash.set_wake_word(arg)
+            session.hub.publish({"type": "status"})
+        return {"word": voice.wake_title()}
+
+    if name == "wake-service":
+        # The "Hey Flash" background service. No arg: only how it stands,
+        # for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("wake-service takes on or off")
+        how = ""
+        try:
+            if arg == "on":
+                how = keepalive.turn_on(keepalive.LISTENER)
+            elif arg == "off":
+                keepalive.turn_off(keepalive.LISTENER)
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+        return {
+            "on": keepalive.installed(keepalive.LISTENER), "how": how,
+            "elsewhere": heyflash.first_listener() not in (None, os.getpid()),
+        }
+
+    if name == "wake-always":
+        # No arg: only how it stands, for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("wake-always takes on or off")
+        if arg:
+            heyflash.set_enabled(arg == "on")
+            session.always.switched()
+            session.hub.publish({"type": "status"})
+        return session.always.snapshot()
+
+    if name == "sparks-always":
+        # No arg: only how it stands, for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("sparks-always takes on or off")
+        how = ""
+        try:
+            if arg == "on":
+                how = keepalive.turn_on()
+            elif arg == "off":
+                keepalive.turn_off()
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+        return {"always": keepalive.status(), "how": how}
+
+    if name == "sparks-auto-takeover":
+        if arg:
+            keepalive.set_auto_takeover(arg in ("on", "1", "true"))
+        return {"auto": keepalive.auto_takeover()}
+
+    if name == "sparks-takeover":
+        try:
+            # "stop": the user said to stop another Flash open elsewhere.
+            return {"always": keepalive.take_over(force=arg == "stop")}
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "checkins":
+        # What to tell the user about, and quiet hours: read, or changed.
+        from . import checkins
+
+        try:
+            if "interests" in body:
+                checkins.set_interests(str(body.get("interests") or ""))
+            if "quiet" in body:
+                checkins.set_quiet_hours(str(body.get("quiet") or ""))
+        except checkins.CheckinError as exc:
+            raise ValueError(str(exc)) from None
+        return {"interests": checkins.interests(),
+                "quiet": checkins.quiet_words(), "now": checkins.is_quiet()}
+
+    if name == "notify-limit":
+        # No arg: only what it is, for the row in Settings. "off" stops
+        # them; "4/15" lets the agent send 4 every 15 minutes.
+        from . import notify
+
+        try:
+            if arg == "off":
+                notify.set_limits(0, notify.limits()[1] // 60)
+            elif arg:
+                count, _, minutes = arg.partition("/")
+                notify.set_limits(count, minutes)
+        except notify.LimitError as exc:
+            raise ValueError(str(exc)) from None
+        count, window = notify.limits()
+        return {
+            "count": count, "minutes": window // 60,
+            "words": notify.limit_words(),
+            "default_count": notify.NOTIFY_LIMIT,
+            "default_minutes": notify.NOTIFY_WINDOW // 60,
+            "most": notify.LIMIT_MOST,
+            "most_minutes": notify.WINDOW_MOST_MINUTES,
+        }
+
+    if name == "spark-default-model":
+        # No arg: only what it is. "flash" makes it Flash's own again.
+        if arg:
+            sparks.set_default_model(arg)
+        return _spark_default(list_models(ai))
+
+    if name == "spark-models":
+        # Many sparks onto one model at once, from the bulk editor.
+        try:
+            # A model and fallbacks, either left as each has them when
+            # not given ("keep").
+            falls = body.get("fallbacks")
+            changed = sparks.set_many(
+                list(body.get("ids") or []),
+                None if body.get("model") is None else str(body["model"]),
+                None if falls is None or falls == "keep" else falls,
+            )
+        except sparks.SparkError as exc:
+            raise ValueError(str(exc)) from None
+        return {"changed": [spark.name for spark in changed]}
+
+    if name.startswith("spark-"):
+        return _spark_command(name, arg, body)
+
     if name == "extensions":
+        from . import vault
+
         return {
             "extensions": [_extension_info(e) for e in extensions.installed()],
             "problems": extensions.problems(),
+            # What a text setting can be set to instead of a value.
+            "secrets": vault.names(),
         }
+
+    if name == "extension-update":
+        # Pulled again from where it came from, and shown first like any
+        # install: the copy in place stays until the new one is.
+        try:
+            source = extensions.update_source(arg)
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        return _stage_extension(session, source)
+
+    if name == "extension-self-update":
+        # From the extension's own page or programs ("update me"): from
+        # where it came from, in at once unless it asks for more.
+        return self_update(session, arg)
+
+    if name == "extension-updates-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(extensions.UPDATES_SETTING, "1" if on else "0")
+        if session is not None:
+            session.hub.publish({"type": "status"})
+        return {"extension_updates": on}
 
     if name == "extension-preview":
         return _stage_extension(session, arg)
@@ -2070,17 +6737,214 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         _discard_staged(session)
         return {}
 
+    if name == "extension-setting":
+        # One of an extension's own settings, from its panel.
+        ext = extensions.find(arg)
+        if ext is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        try:
+            extensions.set_setting(
+                ext, str(body.get("id") or ""), body.get("value"),
+            )
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        values = extensions.shown_values(ext)
+        # Said at once, so a device showing it (a robot's eye colour) changes as you pick it.
+        setting = str(body.get("id") or "")
+        if session is not None:
+            session.hub.publish({"type": "extension-setting", "name": ext.name,
+                                 "id": setting, "value": values.get(setting)})
+        return {"values": values}
+
+    if name == "extension-services":
+        # How an extension's background programs are doing (its page asks
+        # when one of them doesn't answer).
+        from . import services
+
+        if extensions.find(arg) is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        return {"services": services.report(arg)}
+
+    if name == "extension-signal":
+        # A word between an extension's page and its device ("sleep now",
+        # "here is how I am"): said to everything listening, kept nowhere.
+        ext = extensions.find(arg)
+        if ext is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        signal = str(body.get("signal") or "").strip()[:40]
+        if not signal:
+            raise ValueError("which signal?")
+        data = body.get("data")
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("a signal's data is an object")
+        if len(json.dumps(data or {})) > 4000:
+            raise ValueError("that signal's data is too long")
+        # Which device said it (a robot's status, say, among several), and
+        # the one device it is for, if only one.
+        sender = session.access.about(browser) if session is not None else {}
+        to = str(body.get("to") or "")[:16]
+        if to == "desk":
+            # Voice mode here: the robot on the desk, when one is marked;
+            # every one listening otherwise.
+            to = session.access.desk("robot") if session is not None else ""
+        if session is not None:
+            session.hub.publish({"type": "extension-signal", "name": ext.name,
+                                 "signal": signal, "data": data or {},
+                                 **({"from": sender.get("id", "")} if sender.get("id") and
+                                    DEVICE_AGENT in sender.get("agent", "") else {}),
+                                 **({"to": to} if to else {})})
+        return {}
+
     if name == "extension-remove":
-        if not extensions.remove(arg):
+        try:
+            removed = extensions.remove(arg)
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        if not removed:
             raise ValueError(f"No extension called {arg!r}.")
         # Its scenes, commands and prompt text went with it.
         session.hub.publish({"type": "status"})
         return {"removed": arg}
 
+    if name == "device-pair":
+        # A code for a device, and where it can reach this computer.
+        if arg == "cancel":
+            session.pairing.cancel()
+            return {}
+        made = session.pairing.start()
+        if session.lan and session.port:
+            session.pairing.announce(session.port)
+        return {**made, "addresses": session.addresses()}
+
+    if name == "addresses":
+        # Where this Flash can be reached from now: a device away from
+        # home learns the public address without typing it.
+        return {"addresses": session.addresses()}
+
+    if name == "location":
+        # A watch with "Let Flash see my location" on tells where it
+        # is; turned off, it sends "off" and the place is forgotten.
+        from . import location
+
+        if arg == "off":
+            location.forget()
+            return {"location": None}
+        return {"location": location.save(
+            body.get("lat"), body.get("lon"), body.get("accuracy"))}
+
+    if name == "device":
+        # The watch's battery, sent when Flash is opened on it.
+        from . import devices
+
+        return {"device": devices.save_watch(
+            body.get("battery"), body.get("charging"),
+            str(body.get("watch") or ""))}
+
+    if name == "device-desk":
+        # The device on the user's desk: voice mode here talks through it.
+        if not session.access.set_desk(arg, bool(body.get("on", True))):
+            raise ValueError("That device is not signed in any more.")
+        session.hub.publish({"type": "browsers"})
+        return {}
+
+    if name == "device-rename":
+        if not session.access.rename(arg, str(body.get("to") or "")):
+            raise ValueError("That device is not signed in any more.")
+        session.hub.publish({"type": "browsers"})
+        return {}
+
+    if name == "notifications":
+        # What was worth telling the user since note ARG: for a device
+        # that asks now and then instead of keeping a page open.
+        try:
+            since = int(arg or 0)
+        except ValueError:
+            since = 0
+        return session.hub.notes_after(since)
+
+    if name == "chat-view":
+        # One chat, log and all: what a small screen asks for instead
+        # of every chat at once. Each entry keeps only what a small
+        # screen shows (no tool output, no pictures), so a long chat
+        # stays small: a watch asks for it again every second or two.
+        return {"chat": small_view(session.chat(chat_id).summary())}
+
     if name == "browsers":
         return {"browsers": session.access.listing(
             browser, session.hub.owners()
-        )}
+        ), "remember": remembering()}
+
+    if name == "shortcut-window":
+        # Settings > General: the Flash shortcut opens Flash as an app of its own, or in the browser.
+        if arg in ("app", "browser"):
+            ai.set_config_var(WINDOW_SETTING, "1" if arg == "app" else "0")
+            from . import launcher
+
+            def remake() -> None:
+                try:
+                    if launcher.place().exists():
+                        launcher.install()
+                except Exception:  # noqa: BLE001 -- the setting is saved either way
+                    pass
+            threading.Thread(target=remake, daemon=True).start()
+        return {"window": opens_in_window(), "mac": sys.platform == "darwin"}
+
+    if name == "routing":
+        # Settings > Usage: each model's calls, health, the presets, and
+        # how the cache, health routing and traces are set.
+        from . import routing
+
+        if arg == "clear-activity":
+            routing.clear_activity()
+        elif arg == "clear-cache":
+            routing.clear_cache()
+        elif arg == "forget-health":
+            routing.forget_health(str(body.get("model") or ""))
+        elif arg == "set":
+            for key, setting in (("cache", routing.CACHE_SETTING),
+                                 ("health", routing.HEALTH_SETTING)):
+                if key in body:
+                    ai.set_config_var(setting, "1" if body[key] else "0")
+            if "trace" in body:
+                ai.set_config_var(routing.TRACE_SETTING,
+                                  str(body["trace"] or "").strip()[:500])
+        elif arg == "save-preset":
+            routing.save_preset(str(body.get("preset") or ""),
+                                dict(body.get("value") or {}))
+        elif arg == "remove-preset":
+            routing.remove_preset(str(body.get("preset") or ""))
+        now = time.time()
+        return {
+            "models": routing.summary(float(body.get("days") or 7)),
+            "recent": routing.activity(1, most=40),
+            "health": [{"model": m, **h, "resting": float(
+                h.get("rest_until") or 0) > now}
+                for m, h in sorted(routing.health().items())],
+            "presets": routing.presets(),
+            "cache": routing.cache_on(),
+            "health_on": routing.health_on(),
+            "trace": os.getenv(routing.TRACE_SETTING, ""),
+            "fastest": routing.fastest(),
+        }
+
+    if name == "keep-deleted-usage":
+        # No arg: only how it stands, for the switch on the usage tab.
+        if arg:
+            ai.set_config_var(
+                KEEP_USAGE_SETTING, "1" if arg in ("on", "1", "true") else "0",
+            )
+        return {"keep": keeping_usage()}
+
+    if name == "remember-browsers":
+        # On, every browser signed in now is written down at once, so
+        # this one is known to the next Flash without opening the link.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(REMEMBER_SETTING, "1" if on else "0")
+        if on:
+            session.access.remember()
+        else:
+            forget_remembered()
+        return {"remember": remembering()}
 
     if name in ("sign-out", "sign-out-others"):
         gone = (
@@ -2091,13 +6955,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "browsers"})
         if name == "sign-out-others" and session.relink is not None:
             session.relink()
-        return {"signed_out": len(gone), "you": bool(browser in gone)}
+        return {"signed_out": len(gone),
+                "you": bool(browser) and _hashed(browser) in gone}
 
     if name == "voice-status":
         return {
             "missing": voice.web_missing(),
             "ready": voice.models_present(),
-            "install": voice.INSTALL_HINT,
+            "install": voice.install_hint(),
         }
 
     if name == "voice-setup":
@@ -2111,6 +6976,28 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "voice-models":
         return voice_models(session)
 
+    if name == "interrupt-setting":
+        # How talking over a reply cuts it off: in voice mode, or on calls.
+        how = str(body.get("how") or "")
+        if arg not in voice.INTERRUPT_SETTINGS or how not in \
+                voice.INTERRUPT_HOWS:
+            raise ValueError("pick voice or calls, and word or anything")
+        ai.set_config_var(voice.INTERRUPT_SETTINGS[arg][0], how)
+        return {"voice_interrupt": voice.interrupt_how("voice"),
+                "call_interrupt": voice.interrupt_how("calls")}
+
+    if name == "voice-disfluency":
+        if arg not in humanvoice.DISFLUENCIES:
+            raise ValueError("pick off, light or more")
+        ai.set_config_var(humanvoice.DISFLUENCY_SETTING, arg)
+        return voice_models(session)
+
+    if name == "voice-style":
+        if arg not in voice.STYLES:
+            raise ValueError(f"{arg!r} is not a voice style")
+        ai.set_config_var("VOICE_STYLE", arg)
+        return voice_models(session)
+
     if name == "voice-cancel":
         return {"cancelling": session.cancel_voice_download()}
 
@@ -2118,19 +7005,40 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         kind = str(body.get("kind") or "")
         if kind not in VOICE_KINDS:
             raise ValueError("pick listening or speaking")
-        offered, installed, setting, remove = VOICE_KINDS[kind]
-        if arg not in {c.name for c in getattr(voice, offered)}:
+        _, installed, setting, remove = VOICE_KINDS[kind]
+        if arg not in {c.name for c in voice.offered(kind)}:
             raise ValueError(f"{arg!r} is not a model Flash offers")
         if name == "voice-model-remove":
             if arg == getattr(voice, setting)():
                 raise ValueError("That one is in use. Pick another first.")
             getattr(voice, remove)(arg)
             return voice_models(session)
+        if voice.is_kokoro(arg) and not voice.kokoro_ready():
+            raise ValueError(voice.KOKORO_HINT)
+        if voice.is_phonon(arg) and not voice.phonon_ready():
+            raise ValueError(voice.PHONON_HINT)
+        if voice.is_moonshine(arg) and not voice.moonshine_ready():
+            raise ValueError(voice.MOONSHINE_HINT)
         if getattr(voice, installed)(arg):
             ai.set_config_var(VOICE_SETTINGS[kind], arg)
             return voice_models(session)
         session.fetch_voice_model(kind, arg)
         return voice_models(session)
+
+    if name == "tunnel":
+        if arg == "off":
+            session.tunnel.stop()
+        elif arg:
+            if not session.port:
+                raise ValueError("This Flash cannot open a tunnel.")
+            try:
+                session.tunnel.start(arg, session.port,
+                                     check=reaches(session))
+            except tunnel.TunnelError as exc:
+                raise ValueError(str(exc)) from None
+            _warn_public(session)
+        session.hub.publish({"type": "status"})
+        return tunnel_info(session)
 
     if name == "lan":
         if session.switch_lan is None:
@@ -2165,32 +7073,265 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
 
+    if name in ("connectors", "connector-add", "connector-edit",
+                "connector-remove", "connector-import",
+                "connector-switch", "connector-reload"):
+        return _connector_command(name, arg, body)
+
+    if name == "bg-stop":
+        return {"stopped": session.stop_background(arg or "all")}
+
+    if name == "wait-cancel":
+        try:
+            wait = waits.cancel(arg)
+        except waits.WaitError as exc:
+            raise ValueError(str(exc)) from None
+        session.wait_changed(wait)
+        return {"wait": wait.card()}
+
+    if name == "retry-shifts-setting":
+        # Whether a spark whose model failed tries again each shift.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(sparks.RETRY_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"on": on}
+
+    if name == "events-setting":
+        if arg in ("on", "off"):
+            triggers.set_enabled(arg == "on")
+            session.hub.publish({"type": "status"})
+        return {"on": triggers.enabled(), "kinds": triggers.kinds()}
+
+    if name == "computer-setting":
+        # "on" or "off" for all of it, or "on music", "off imessage" for
+        # one thing it can do.
+        said, _, kind = arg.partition(" ")
+        on = said in ("on", "1", "true")
+        if kind:
+            if kind not in computer.kinds():
+                raise ValueError(f"{kind} is not something Flash can do here.")
+            ai.set_config_var(computer.OFF_SETTING,
+                              computer.off_after(kind, on))
+        else:
+            ai.set_config_var(computer.SETTING, "1" if on else "0")
+            if not on:
+                # Computer Use goes with it: it needs this on.
+                computeruse.end()
+        session.hub.publish({"type": "status"})
+        return {"computer": computer.enabled(), **_computer_kinds(),
+                **_computer_use()}
+
+    if name == "computer-use-stop":
+        computeruse.taken_back()
+        return {}
+
+    if name == "computer-use-setting":
+        computeruse.set_enabled(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "keep-awake-setting":
+        # Keep the Mac awake while Flash serves, for the watch and calls.
+        from . import awake
+
+        awake.set_setting(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return awake.state()
+
+    if name in ("sandbox-setting", "sandbox-auto-setting"):
+        # Every command in the sandbox; and, in Ask first, sandboxed ones
+        # without asking.
+        from . import sandbox
+
+        sandbox.set_setting(
+            sandbox.SETTING if name == "sandbox-setting"
+            else sandbox.AUTO_ALLOW_SETTING, arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _sandbox()
+
+    if name == "computer-use-human":
+        # The mouse along curves at a hand's speed, keys in a typist's rhythm.
+        computeruse.set_human(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "computer-use-fast":
+        # Fast mode: several actions a step, buttons clicked by name.
+        computeruse.set_fast(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "computer-use-mouse":
+        # Whether moving the mouse takes the computer back.
+        computeruse.set_mouse_stops(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "incoming-calls-setting":
+        # Whether sparks may call the user at all.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(teamchat.CALLS_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"spark_calls": on}
+
+    if name == "titles-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(titles.SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"model_titles": on}
+
+    if name == "visuals-setting":
+        level = "less" if arg == "less" else "more"
+        ai.set_config_var(visuals.SETTING, level)
+        session.hub.publish({"type": "status"})
+        return {"visuals": level}
+
     if name == "compact-setting":
+        if arg.startswith("amount"):
+            # How much each compaction takes, in percent of the history.
+            try:
+                amount = max(0, min(ai.COMPACT_MOST, int(arg.split()[-1])))
+            except ValueError:
+                raise ValueError("The amount is a percent, 0 to "
+                                 f"{ai.COMPACT_MOST}.") from None
+            ai.set_config_var("COMPACT_AMOUNT", str(amount))
+            session.hub.publish({"type": "status"})
+            return {"compact_amount": amount}
         on = arg in ("on", "1", "true")
         ai.set_config_var("AUTO_COMPACT", "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"compact": on}
 
     if name == "auto":
-        on = (
-            not ai.Config.no_command_confirmation
-            if arg in ("", "toggle") else arg in ("on", "1", "true")
-        )
-        ai.set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
+        # "toggle" goes round the modes there are; "on" and "off" are
+        # autonomous or not, and "ask", "auto" and "ultra" say which.
+        ai.set_mode(ai.next_mode() if arg in ("", "toggle") else
+                    {"1": "auto", "true": "auto", "0": "ask",
+                     "false": "ask"}.get(arg, arg))
         session.hub.publish({"type": "status"})
-        return {"auto": on}
+        return {"auto": bool(ai.Config.no_command_confirmation),
+                "mode": ai.mode()}
+
+    if name == "ultra-setting":
+        ai.allow_ultra(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return {"ultra_allowed": bool(ai.Config.ultra_allowed),
+                "auto": bool(ai.Config.no_command_confirmation),
+                "mode": ai.mode()}
+
+    if name == "system-one-reviews":
+        return {"reviews": list(reversed(systemone.reviews()[-30:]))}
+
+    if name == "system-one-rate":
+        try:
+            rated = systemone.rate_review(
+                arg, str(body.get("rating") or ""),
+                str(body.get("why") or ""), str(body.get("reason") or ""))
+        except systemone.SystemOneError as exc:
+            raise ValueError(str(exc)) from None
+        return {"review": rated}
+
+    if name == "system-one":
+        # No arg: only what it is, for Settings. "models" scans the
+        # server for System One models too, for the model menu. "on"
+        # checks the server first, and "model" picks which model
+        # answers, None switching it off.
+        if arg in ("", "models"):
+            return system_one_state(ai, models=arg == "models")
+        try:
+            if arg in ("on", "1", "true"):
+                systemone.turn_on(ai.Config.host)
+            elif arg in ("off", "0", "false"):
+                systemone.set_enabled(False)
+            elif arg == "model":
+                systemone.choose(
+                    ai.Config.host, str(body.get("model") or ""),
+                )
+            else:
+                raise ValueError(f"Unknown System One setting {arg!r}.")
+        except systemone.SystemOneError as exc:
+            raise ValueError(str(exc)) from None
+        ai.Config.refresh()
+        session.hub.publish({"type": "status"})
+        return system_one_state(ai)
 
     if name == "model":
         if arg:
             ai.set_config_var("MODEL", arg)
             session.hub.publish({"type": "status"})
         models = list_models(ai)
+        from . import hardware
+
         return {"model": ai.Config.model or "", "models": models or [],
-                "reachable": models is not None}
+                # The ones that would not run quickly here, and why.
+                "fits": {m: hardware.fit(MODEL_SIZES.get(m, 0))
+                         for m in models or []
+                         if hardware.fit(MODEL_SIZES.get(m, 0)) in (
+                             hardware.TIGHT, hardware.TOO_BIG)},
+                "machine": hardware.machine().describe(),
+                "reachable": models is not None,
+                # Extensions still being asked: shown as loading, and the
+                # menu asks again until they answer.
+                "loading": providers.loading(),
+                "favorites": workspace.favorite_models(ai.Config.host),
+                **_spark_default(models)}
+
+    if name == "model-pin":
+        return {"favorites": workspace.pin_model(
+            ai.Config.host, arg, body.get("on") is not False,
+        )}
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
                 "current": workspace.listed_url(ai.Config.host)}
+
+    if name == "loader":
+        found = loaders.find(arg)
+        if found is None:
+            raise ValueError(f"No loader is called {arg!r}.")
+        ai.set_config_var(loaders.SETTING, found.id)
+        session.hub.publish({"type": "status"})
+        return {"loader": found.id}
+
+    if name == "loader-tasks":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var(loaders.TASKS_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"loader_tasks": on}
+
+    if name == "ext-status":
+        return {"status": [{"name": n, "text": t,
+                            "when_model": ext_ui.status_model(n)}
+                           for n, t in ext_ui.status_lines()]}
+
+    if name == "ext-button":
+        # An extension's button: what it does with TEXT, the reply or
+        # the box it was pressed on.
+        # From a 3D model's bar: the model's file, by the id the page
+        # has for it.
+        file = ""
+        if body.get("file"):
+            kept = workspace.kept_file(str(body["file"]))
+            if kept is None:
+                raise ValueError("That model is not here any more.")
+            file = str(kept[0])
+        return ext_ui.pressed(
+            str(body.get("extension") or ""), arg,
+            str(body.get("text") or ""), chat_id, file,
+            str(body.get("choice") or ""),
+        )
+
+    if name == "think-auto":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var("THINK_AUTO", "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"think_auto": on}
+
+    if name == "loader-morph":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var(loaders.MORPH_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"loader_morph": on}
 
     if name == "host":
         url = workspace.normalize_host(arg)
@@ -2199,13 +7340,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         # The quick check first: a host that is down has no models to
         # list, and asking would only make the switch wait.
-        up = workspace.host_up(url)
+        state = workspace.host_state(url)
+        up = state == "up"
         return {"host": url, "host_url": workspace.listed_url(url),
-                "models": (list_models(ai) or []) if up else [], "up": up}
+                "models": (list_models(ai) or []) if up else [], "up": up,
+                "refused": state == "refused",
+                "favorites": workspace.favorite_models(url)}
 
     if name == "host-add":
-        added = workspace.add_host(str(body.get("label") or ""), arg)
-        return {**added, "up": workspace.host_up(added["url"])}
+        # The key, if the server asks for one, comes in the body rather
+        # than the address, and is never sent back.
+        added = workspace.add_host(
+            str(body.get("label") or ""), arg, str(body.get("key") or ""),
+        )
+        state = workspace.host_state(added["url"])
+        return {**added, "up": state == "up", "refused": state == "refused"}
 
     if name == "host-remove":
         if workspace.host_key(arg) == workspace.host_key(ai.Config.host):
@@ -2218,36 +7367,156 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         made = workspace.create_project(
             str(body.get("label") or ""), arg,
             str(body.get("instructions") or ""),
+            body.get("folders") or [],
         )
         session.hub.publish({"type": "projects"})
         return asdict(made)
 
     if name == "project-update":
-        changes = {
+        changes: dict = {
             key: str(body[key]) for key in ("name", "path", "instructions")
             if key in body
         }
+        # "name" is the command's own name in the body, so the page sends
+        # the project's new name as "label".
+        if "label" in body:
+            changes["name"] = str(body["label"])
+        if "folders" in body:
+            changes["folders"] = body["folders"] or []
         updated = workspace.update_project(arg, **changes)
         session.hub.publish({"type": "projects"})
         return asdict(updated)
 
     if name == "project-delete":
         workspace.delete_project(arg)
+        # What it remembered goes with it.
+        with contextlib.suppress(ValueError):
+            memory.project_path(arg).unlink(missing_ok=True)
         session.hub.publish({"type": "projects"})
         return {}
 
     if name == "dirs":
         return {"dirs": workspace.folder_suggestions(arg)}
 
+    if name == "mkdir":
+        return {"path": workspace.make_folder(arg)}
+
+    if name == "design-save":
+        saved = design.save(
+            arg, list(body.get("edits") or []), dict(body.get("vars") or {}),
+        )
+        if chat_id in session.chats and saved["path"]:
+            # Told to the model with the chat's next message.
+            listed = session.edited.setdefault(chat_id, [])
+            if saved["path"] not in listed:
+                listed.append(saved["path"])
+        return saved
+
     if name == "document-save":
-        saved = workspace.save_document(arg, str(body.get("text") or ""))
-        # Told to the model with the chat's next message.
+        kept = workspace.kept_file(arg)
+        try:
+            before = kept[0].read_text(encoding="utf-8") if kept else ""
+        except (OSError, UnicodeDecodeError):
+            before = ""
+        text = str(body.get("text") or "")
+        saved = workspace.save_document(arg, text)
         where = saved["path"] or arg
-        if chat_id in session.chats:
+        if chat_id not in session.chats:
+            return saved
+        if saved["path"] and not body.get("quiet"):
+            # Flash reads what changed, now, and does what was left for it.
+            session.document_saved(
+                session.chat(chat_id), saved["path"], before, text,
+            )
+        else:
+            # Told to the model with the chat's next message.
             listed = session.edited.setdefault(chat_id, [])
             if where not in listed:
                 listed.append(where)
         return saved
+
+    if name == "inbox":
+        from . import inbox
+
+        return {"items": inbox.items()}
+
+    if name in ("inbox-yes", "inbox-no"):
+        from . import inbox
+
+        said = inbox.answer(arg, name == "inbox-yes", str(body.get("why") or ""))
+        session.hub.publish({"type": "sparks"})
+        return {"said": said, "items": inbox.items()}
+
+    if name == "inbox-add":
+        # From an extension's page (Flash.inbox): a note or a question
+        from . import inbox
+
+        item = body.get("item") if isinstance(body.get("item"), dict) else {}
+        try:
+            got = inbox.notify(str(item.get("from") or item.get("label") or "Extension"),
+                               str(item.get("title") or ""), str(item.get("body") or ""),
+                               id=str(item.get("id") or ""), url=str(item.get("url") or ""),
+                               ask=bool(item.get("ask")), detail=str(item.get("detail") or ""),
+                               colour=str(item.get("colour") or item.get("color") or ""))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        session.hub.publish({"type": "sparks"})
+        return {"id": got}
+
+    if name == "inbox-answer":
+        # From an extension's page: the user's answer to one it asked, or null while it waits
+        from . import inbox
+
+        return {"answer": inbox.answer_of(str(body.get("from") or ""), arg)}
+
+    if name == "inbox-seen":
+        from . import inbox
+
+        if arg == "all":
+            inbox.seen_all()
+        else:
+            inbox.seen(arg)
+        return {"items": inbox.items()}
+
+    if name == "setup-status":
+        # The first run's checklist: what is set up already, so it only asks for the rest.
+        from . import calendars, mail
+
+        kept = " \n".join(memory.list_memory()).lower()
+        return {
+            "model": bool(ai.Config.model),
+            "you": "the user's name is" in kept or "name:" in kept,
+            "mail": mail.configured(),
+            "calendar": calendars.google_connected() or bool(calendars.feeds()) or calendars.apple_connected(),
+            "files": "documents are in" in kept or "files are in" in kept,
+            "phone": bool(session.lan or session.tunnel.url),
+        }
+
+    if name == "setup-about-me":
+        said = []
+        who = " ".join(str(body.get("who") or "").split())[:60]
+        if who:
+            said.append(memory.add_memory(f"The user's name is {who}."))
+        how = " ".join(str(body.get("style") or "").split())[:200]
+        if how:
+            said.append(memory.add_memory(f"How the user likes answers: {how}."))
+        where = " ".join(str(body.get("folder") or "").split())[:300]
+        if where:
+            said.append(memory.add_memory(f"The user's documents are in {where}."))
+        return {"saved": len(said)}
+
+    if name == "history":
+        return {"turns": checkpoint.history()}
+
+    if name == "undo_to":
+        try:
+            index = int(body.get("index"))
+        except (TypeError, ValueError):
+            raise ValueError("Say which point to go back to.") from None
+        message = checkpoint.undo_to(index)
+        if chat_id in session.chats:
+            session.emit(session.chat(chat_id), {"type": "note", "text": message})
+        return {"message": message, "turns": checkpoint.history()}
 
     if name == "undo":
         message = checkpoint.undo()
@@ -2257,15 +7526,46 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             })
         return {"message": message}
 
+    if name == "showcase":
+        return showcase.totals()
+
     if name == "usage":
         return usage(session.chats.values())
 
+    # Memory commands with "project" in the body work on that project's
+    # memory instead of the user's.
+    kept_in = memory.project_path(str(body["project"])) \
+        if name.startswith("memory") and body.get("project") else None
+
     if name == "memory":
         return {
-            "entries": memory.list_memory(),
+            "entries": memory.list_memory(kept_in),
             "prompt": memory.IMPORT_PROMPT,
-            "path": str(memory.MEMORY_PATH),
+            "path": str(kept_in or memory.MEMORY_PATH),
         }
+
+    if name == "profile":
+        from . import usermodel
+
+        return {"text": usermodel.text(), "on": usermodel.enabled(),
+                "age": usermodel.age(), "path": str(usermodel.path()),
+                "sections": [[k, h] for k, h, _ in usermodel.SECTIONS]
+                + [list(usermodel.NOTES)],
+                "parsed": usermodel.load()}
+
+    if name == "profile-save":
+        from . import usermodel
+
+        sections = usermodel.save_text(str(body.get("text") or ""))
+        learning.refresh()
+        return {"text": usermodel.text(), "parsed": sections,
+                "age": usermodel.age()}
+
+    if name == "profile-auto":
+        from . import usermodel
+
+        usermodel.set_enabled(bool(body.get("on")))
+        return {"on": usermodel.enabled()}
 
     if name == "memory-preview":
         known = {e.lower() for e in memory.list_memory()}
@@ -2290,26 +7590,634 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             if name == "memory-add":
                 if not text:
                     raise ValueError("Nothing to remember.")
-                memory.add_memory(text)
+                memory.add_memory(text, kept_in)
             else:
-                memory.edit_memory(int(arg), text)
+                memory.edit_memory(int(arg), text, kept_in)
         except IndexError as exc:
             raise ValueError(str(exc)) from None
         learning.refresh()
-        return {"entries": memory.list_memory(), "text": text}
+        return {"entries": memory.list_memory(kept_in), "text": text}
+
+    if name == "progress-email":
+        return {"progress_email": _progress_email(ai, body)}
+
+    if name.startswith("email"):
+        return _email_command(name, body)
 
     if name == "memory-forget":
         try:
-            memory.forget_memory(int(arg))
+            memory.forget_memory(int(arg), kept_in)
         except IndexError as exc:
             raise ValueError(str(exc)) from None
         learning.refresh()
-        return {"entries": memory.list_memory()}
+        return {"entries": memory.list_memory(kept_in)}
 
     if name == "context":
-        return {"share": context_share(ai, session.chat(chat_id))}
+        return context_use(ai, session.chat(chat_id))
 
     raise ValueError(f"unknown command {name!r}")
+
+
+def _connector_command(name: str, arg: str, body: dict) -> dict:
+    """The MCP servers whose tools Flash has, for Settings, and changes
+    to them. Never a token: only the names of what each is given."""
+
+    try:
+        env: dict = {}
+        for line in str(body.get("env") or "").splitlines():
+            if not line.strip():
+                continue
+            if "=" not in line:
+                raise connectors.ConnectorError(
+                    f"{line.strip()!r} is not KEY=VALUE."
+                )
+            key, value = line.split("=", 1)
+            env[key.strip()] = value.strip()
+        if name == "connector-add":
+            connectors.add(arg, str(body.get("target") or ""), env,
+                           str(body.get("start") or ""))
+        elif name == "connector-import":
+            connectors.import_json(str(body.get("json") or ""))
+        elif name == "connector-edit":
+            connectors.edit(arg, str(body.get("target") or ""), env,
+                            str(body.get("start") or ""),
+                            str(body.get("rename") or ""))
+        elif name == "connector-remove":
+            connectors.remove(arg)
+        elif name == "connector-switch":
+            connectors.switch(arg, bool(body.get("on")))
+        elif name == "connector-reload":
+            connectors.reload()
+        else:
+            connectors.start()
+    except connectors.ConnectorError as exc:
+        raise ValueError(str(exc)) from None
+    return {
+        "connectors": connectors.listing(),
+        "path": str(connectors.config_path()),
+    }
+
+
+def _worktree_command(session: "Session", name: str, arg: str,
+                      chat_id: str, body: dict) -> dict:
+    """A chat's git worktrees: listed, made, picked, merged back or
+    removed. The folder they belong to is the chat's project's, or the
+    folder Flash runs in."""
+
+    from . import worktrees
+
+    chat = session.chats.get(chat_id)
+    if chat is None:
+        raise ValueError("no such chat")
+    found = workspace.project(chat.project) if chat.project else None
+    base = found.path if found else os.getcwd()
+    try:
+        if name == "worktrees":
+            listed = worktrees.listing(base)
+            current = chat.worktree if chat.worktree and os.path.isdir(chat.worktree) else ""
+            for wt in listed:
+                wt["current"] = (os.path.realpath(wt["path"]) == os.path.realpath(current)) if current else wt["main"]
+            return {"worktrees": listed, "repo": worktrees.repo_of(base)}
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish first.")
+        said = ""
+        if name == "worktree-new":
+            made = worktrees.create(base, arg or body.get("label") or chat.title)
+            chat.worktree = made["path"]
+            said = f"This chat now works in its own worktree, on the branch {made['branch']}."
+        elif name == "worktree-use":
+            if not arg:
+                chat.worktree = ""
+                said = "This chat works in the main checkout again."
+            else:
+                picked = worktrees.find(base, arg)
+                chat.worktree = "" if picked["main"] else picked["path"]
+                said = (f"This chat now works in the worktree on {picked['branch']}." if chat.worktree
+                        else "This chat works in the main checkout again.")
+        elif name == "worktree-merge":
+            said = worktrees.merge(base, arg or chat.worktree)
+        elif name == "worktree-remove":
+            path = arg or chat.worktree
+            said = worktrees.remove(base, path, force=bool(body.get("force")))
+            for other in session.chats.values():
+                if other.worktree and os.path.realpath(other.worktree) == os.path.realpath(path):
+                    other.worktree = ""
+        else:
+            raise ValueError("no such worktree step")
+    except worktrees.WorktreeError as exc:
+        raise ValueError(str(exc)) from None
+    session.emit(chat, {"type": "note", "text": said})
+    session.save(chat)
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    return {"worktree": chat.worktree, "said": said}
+
+
+def _meeting_post(session: "Session", path: str, body: dict) -> dict:
+    """A meeting being recorded: started in a chat of its own, heard a
+    piece at a time (anything said to Flash in it asked there as it is
+    said, and live notes kept if wanted), and ended, its transcript then
+    attached to that chat for the write-up."""
+
+    meetings = session.meetings
+    what = path.removeprefix("/api/meeting/")
+    try:
+        if what == "start":
+            session.always.page_listening()
+            started = meetings.start()
+            project = str(body.get("project") or "")
+            if project and workspace.project(project) is None:
+                project = ""
+            chat = session.new_chat(project=project)
+            chat.title = f"Meeting, {started.began:%b} {started.began.day} {started.began:%H:%M}"
+            chat.auto_title = chat.title
+            session.hub.publish({"type": "chats", "chat": chat.id})
+            started.chat = chat.id
+            started.live_notes = bool(body.get("notes"))
+            return {"id": started.id, "chat": chat.id}
+        if what == "hear":
+            session.always.page_listening()
+            found = meetings.get(str(body.get("id") or ""))
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            if pcm:
+                found.hear(pcm)
+            heard = found.since(int(body.get("count") or 0))
+            chat = session.chats.get(found.chat)
+            if chat is not None:
+                asked = found.asks()
+                for ask in asked:
+                    session.send(chat, meeting.ASKED.format(ask=ask["ask"]))
+                if asked:
+                    heard["asked"] = [ask["ask"] for ask in asked]
+                elif found.notes_due() and not (chat.busy or chat.queued):
+                    session.send(chat, meeting.NOTES_ASK.format(cid=found.notes_id()),
+                                 wake=True, note="Bringing the live notes up to date")
+            return heard
+        if what == "ask":
+            # Typed in the meeting bar, for when saying it aloud is not
+            # the moment.
+            found = meetings.get(str(body.get("id") or ""))
+            text = " ".join(str(body.get("text") or "").split())
+            chat = session.chats.get(found.chat)
+            if not text or chat is None:
+                raise ValueError("say what Flash should do")
+            session.send(chat, text)
+            return {}
+        if what == "notes":
+            found = meetings.get(str(body.get("id") or ""))
+            found.live_notes = bool(body.get("on"))
+            return {"notes": found.live_notes}
+        if what == "stop":
+            ended, lines = meetings.stop(str(body.get("id") or ""))
+            info = meeting.keep(ended, lines)
+            chat = session.chats.get(ended.chat)
+            if chat is None:
+                project = str(body.get("project") or "")
+                if project and workspace.project(project) is None:
+                    project = ""
+                chat = session.new_chat(project=project)
+            session.send(chat, "", files=[info["id"]])
+            return {"chat": chat.id, "file": info,
+                    "seconds": round(ended.seconds)}
+        if what == "discard":
+            meetings.discard(str(body.get("id") or ""))
+            return {}
+    except meeting.MeetingError as exc:
+        raise ValueError(str(exc)) from None
+    raise ValueError("no such meeting step")
+
+
+def _progress_email(ai: Any, body: dict) -> dict:
+    """Settings > Email > Progress emails: change what is in BODY (on,
+    to, account, kinds, or test), then say how they are set up."""
+
+    from . import mail
+    from . import progress_mail as pm
+
+    sent = ""
+    if "on" in body:
+        ai.set_config_var(pm.SETTING, "1" if body["on"] else "0")
+    if "to" in body:
+        to = str(body["to"] or "").strip()
+        if to and ("@" not in to or " " in to):
+            raise ValueError("That isn't one email address.")
+        if to:
+            ai.set_config_var(pm.TO_SETTING, to)
+        else:
+            ai.unset_config_var(pm.TO_SETTING)
+    if "account" in body:
+        account = str(body["account"] or "").strip()
+        if account and account.lower() not in (
+            a.lower() for a in mail.addresses()
+        ):
+            raise ValueError(f"{account} is not a connected account.")
+        if account:
+            ai.set_config_var(pm.FROM_SETTING, account)
+        else:
+            ai.unset_config_var(pm.FROM_SETTING)
+    if "kinds" in body:
+        kinds = [k for k in pm.KINDS if k in (body["kinds"] or [])]
+        ai.set_config_var(pm.KINDS_SETTING, ",".join(kinds))
+    if body.get("test"):
+        try:
+            sent = pm.test()
+        except (mail.MailError, RuntimeError) as exc:
+            raise ValueError(f"Not sent: {exc}") from None
+    now = pm.settings()
+    return {
+        **now, "recipient": pm.recipient(now), "own": mail.default_address(),
+        "accounts": mail.addresses(), "about": pm.ABOUT,
+        "problem": pm.last_problem(), "sent": sent,
+    }
+
+
+def _email_command(name: str, body: dict) -> dict:
+    """Settings > Email: connect the user's email, test it, disconnect."""
+
+    from . import mail
+
+    try:
+        if name == "email":
+            return {"email": mail.settings()}
+        address = str(body.get("address") or body.get("arg") or "").strip()
+        if name == "email-save":
+            # A blank password keeps the one already saved for it.
+            password = str(body.get("password") or "")
+            mail.save(
+                address, password or None,
+                str(body.get("imap") or ""), str(body.get("smtp") or ""),
+            )
+            return {"email": mail.settings(), "said": mail.test(address)}
+        if name == "email-test":
+            return {"email": mail.settings(), "said": mail.test(address)}
+        if name == "email-default":
+            return {"email": mail.set_default(address)}
+        if name == "email-forget":
+            if not address:
+                raise ValueError("Say which address to disconnect.")
+            mail.forget(address)
+            return {"email": mail.settings()}
+    except mail.MailError as exc:
+        raise ValueError(str(exc)) from None
+    raise ValueError(f"unknown command {name!r}")
+
+
+def team_info(team: "sparks.Team") -> dict:
+    """A team for the page: its name and colour, and its org chart."""
+
+    return {
+        "id": team.id, "name": team.name, "colour": team.colour,
+        "created": team.created, "chart": sparks.org_chart(team.id),
+        "chat_unread": teamchat.unread(team.id), "paused": team.paused,
+        "rules": team.rules,
+        # Only one still there: a deleted project leaves the team on none.
+        "project": team.project if sparks.team_project(team) else "",
+    }
+
+
+def _ringing_now() -> list[dict]:
+    """Sparks' calls to the user ringing now, in every private chat."""
+
+    out = []
+    with contextlib.suppress(OSError):
+        for path in teamchat._folder().glob(teamchat.DM_PREFIX + "*.json"):
+            for entry in teamchat._read(path.stem)["entries"]:
+                if sparkcalls._ringing(entry):
+                    out.append({"team": path.stem, **_ring_event(entry)})
+    return out
+
+
+def _ring_event(entry: dict) -> dict:
+    return {"call": entry.get("call"), "spark": entry.get("spark"),
+            "name": entry.get("name"), "reason": entry.get("reason"),
+            "at": entry.get("at")}
+
+
+def _team_command(name: str, arg: str, body: dict) -> dict:
+    """The Sparks page's teams, their templates, and hires to decide."""
+
+    try:
+        if name == "team-create":
+            return {"team": team_info(sparks.create_team(
+                arg, str(body.get("colour") or ""),
+            ))}
+        if name == "team-update":
+            team = sparks.update_team(
+                arg, str(body.get("rename") or ""),
+                str(body.get("colour") or ""),
+            )
+            if "rules" in body:
+                team = sparks.set_team_rules(
+                    team.id, str(body.get("rules") or ""),
+                )
+            if "project" in body and str(body.get("project") or "") != (
+                    team.project if sparks.team_project(team) else ""):
+                team, _ = sparks.set_team_project(
+                    team.id, str(body.get("project") or ""),
+                )
+            return {"team": team_info(team)}
+        if name == "team-remove":
+            return {"team": team_info(sparks.remove_team(arg))}
+        if name == "team-model":
+            # Everyone on the team onto one model; "flash" is Flash's own.
+            team, changed = sparks.set_team_model(
+                arg, str(body.get("model") or ""),
+            )
+            return {"team": team_info(team),
+                    "changed": [spark.name for spark in changed]}
+        if name in ("team-pause", "team-resume"):
+            team, changed = (
+                sparks.pause_team if name == "team-pause"
+                else sparks.resume_team
+            )(arg)
+            return {"team": team_info(team), "changed": len(changed)}
+        if name == "team-chat":
+            # The page with the chat open reads what it has not drawn,
+            # and, while it is in front of the user, marks it read.
+            # When it was last read, from before this look marks it:
+            # what came after is what the page shows as new.
+            seen = teamchat.read_at(arg)
+            if body.get("read"):
+                teamchat.mark_read(arg)
+            return {**teamchat.history(arg, int(body.get("since") or 0)),
+                    "seen_up_to": seen}
+        if name == "team-chat-say":
+            try:
+                reply_to = int(body.get("reply_to") or 0)
+            except (TypeError, ValueError):
+                reply_to = 0
+            try:
+                thread = int(body.get("thread") or 0)
+            except (TypeError, ValueError):
+                thread = 0
+            return {"entry": teamchat.send(
+                arg, str(body.get("text") or ""), reply_to=reply_to,
+                files=attachments(body.get("files")),
+                # The call's id from team-chat-call; true for voice
+                # mode's calls of old, kept with no call entry.
+                call=str(body["call"])[:40]
+                if isinstance(body.get("call"), str)
+                else bool(body.get("call")),
+                hidden=bool(body.get("hidden")),
+                note=humanvoice.note_for(body.get("voice_note")),
+                thread=thread,
+            )}
+        if name == "team-chat-call":
+            # A call begun (with a spark, or a team), or a step of one:
+            # still there, connected, answered, declined, hung up.
+            # Which page or terminal it is on, so another can take it.
+            holder = str(body.get("holder") or "")[:80]
+            if body.get("end"):
+                return {"entry": teamchat.call_step(
+                    arg, str(body.get("end"))[:40], "end", holder,
+                )}
+            step = str(body.get("step") or "")
+            if step:
+                return {"entry": teamchat.call_step(
+                    arg, str(body.get("call") or "")[:40], step, holder,
+                )}
+            return {"entry": teamchat.start_call(arg, holder)}
+        if name == "team-chat-call-state":
+            # A call as it stands: still here, moved, or over.
+            found = teamchat._call_entry(
+                teamchat._settled(teamchat._team(arg).id),
+                str(body.get("call") or "")[:40])
+            return {"entry": found}
+        if name == "team-chat-live":
+            # Calls going on now, anywhere: to take one over here.
+            return {"calls": teamchat.live_calls()}
+        if name == "team-chat-call-log":
+            # Who said what on a call, from the chat itself.
+            return {"lines": teamchat.call_log(
+                arg, str(body.get("call") or "")[:40],
+            )}
+        if name == "team-chat-ringing":
+            # A spark's call ringing now, for a page that just opened.
+            return {"rings": _ringing_now()}
+        if name == "team-chat-retry":
+            # A spark's message, answered again in its place.
+            try:
+                entry_id = int(body.get("id") or 0)
+            except (TypeError, ValueError):
+                entry_id = 0
+            return {"entry": teamchat.retry(arg, entry_id)}
+        if name == "team-chat-react":
+            # The user's reaction, on or off as it was not.
+            try:
+                entry_id = int(body.get("id") or 0)
+            except (TypeError, ValueError):
+                entry_id = 0
+            return {"entry": teamchat.react(
+                arg, entry_id, str(body.get("emoji") or ""),
+            )}
+        if name == "team-share":
+            return {"code": sparks.share_team_code(arg)}
+        if name == "team-code":
+            return {"team": sparks.read_team_code(arg)}
+        if name == "team-templates":
+            return {"templates": sparks.team_templates()}
+        if name == "team-add":
+            # Its sparks start paused unless asked otherwise: a whole team
+            # at once is a lot to set going before it is looked over.
+            from . import ai  # deferred: ai imports half of Flash
+
+            # Given none, it is made on the model new sparks are made on.
+            model, gone = str(body.get("model") or ""), ""
+            if not model:
+                model, gone = sparks.model_for_new(ai.Config.model or "")
+            return {"team": team_info(sparks.add_team(
+                arg, model, bool(body.get("paused", True)),
+            )), "note": gone}
+        if name == "hire-decide":
+            return {"hire": sparks.decide_hire(
+                arg, bool(body.get("yes")), str(body.get("why") or ""),
+            )}
+    except (sparks.SparkError, teamchat.TeamChatError) as exc:
+        raise ValueError(str(exc)) from None
+    raise ValueError(f"unknown command {name!r}")
+
+
+def _flow_command(name: str, arg: str, body: dict) -> dict:
+    """Flows on the Sparks page: steps handed from spark to spark, with
+    the user's yes where a step asks for it."""
+    from . import flows  # deferred: only the Sparks page asks
+
+    try:
+        if name == "flows":
+            return {"flows": [flows.summary(f) for f in flows.all_flows()]}
+        if name == "flow-create":
+            flow = flows.create(arg, body.get("steps"),
+                                body.get("trigger") or "")
+        elif name == "flow-update":
+            flow = flows.update(
+                arg, body.get("rename"), body.get("steps"),
+                body.get("trigger"), body.get("paused"))
+        elif name == "flow-run":
+            flows.start(arg)
+            flow = flows.find(arg)
+        elif name == "flow-answer":
+            flows.answer(arg, str(body.get("step") or ""),
+                         bool(body.get("yes")))
+            flow = flows.find(arg)
+        elif name == "flow-stop":
+            flows.stop(arg)
+            flow = flows.find(arg)
+        elif name == "flow-delete":
+            if not flows.remove(arg):
+                raise flows.FlowError(f"No flow called {arg!r}.")
+            return {"deleted": arg}
+        else:
+            raise ValueError(f"unknown command {name!r}")
+    except flows.FlowError as exc:
+        raise ValueError(str(exc)) from None
+    if flow is None:
+        raise ValueError(f"No flow called {arg!r}.")
+    return {"flow": flows.summary(flow)}
+
+
+def _spark_command(name: str, arg: str, body: dict) -> dict:
+    """The Sparks page: make, change, run, teach, and read them."""
+
+    try:
+        if name == "spark-create":
+            spark = sparks.create(
+                arg, str(body.get("goal") or ""),
+                str(body.get("boundaries") or ""),
+                str(body.get("every") or ""),
+                str(body.get("project") or ""),
+                str(body.get("watch") or ""),
+                str(body.get("model") or ""),
+                str(body.get("title") or ""),
+                bool(body.get("paused")),
+                str(body.get("colour") or ""),
+                body.get("events") or (),
+            )
+            if body.get("shape"):
+                spark = sparks.update(spark.id, shape=str(body["shape"]))
+            # Several projects: the first its main one.
+            if isinstance(body.get("projects"), list) and \
+                    len(body["projects"]) > 1:
+                spark = sparks.update(spark.id, projects=[
+                    str(p) for p in body["projects"]])
+        elif name == "spark-update":
+            # The new name comes as "rename": "name" names the command.
+            fields = {"rename": "name", "goal": "goal", "every": "every",
+                      "boundaries": "boundaries", "project": "project",
+                      "watch": "watch", "model": "model",
+                      "title": "title", "colour": "colour",
+                      "voice": "voice", "pitch": "pitch",
+                      "morning": "morning", "morning_tasks": "morning_tasks", "shape": "shape"}
+            changes = {
+                field: str(body[key])
+                for key, field in fields.items() if key in body
+            }
+            if "events" in body:
+                changes["events"] = body["events"] or ()
+            if "fallbacks" in body:
+                changes["fallbacks"] = body["fallbacks"] or []
+            if isinstance(body.get("projects"), list):
+                # Every project it works on, its main one first.
+                changes.pop("project", None)
+                changes["projects"] = [str(p) for p in body["projects"]]
+            spark = sparks.update(arg, **changes)
+        elif name == "spark-run":
+            spark = sparks.run_now(arg)
+        elif name == "spark-team":
+            spark = sparks.set_team(arg, str(body.get("team") or ""))
+        elif name == "spark-lead":
+            # One or more, as equals: "leads", or the one "lead".
+            picked = body.get("leads")
+            spark = sparks.set_leads(
+                arg, [str(p) for p in picked] if isinstance(picked, list)
+                else [str(body.get("lead") or "")],
+            )
+        elif name == "spark-mode":
+            spark = sparks.set_mode(arg, str(body.get("mode") or ""))
+        elif name == "spark-budget":
+            spark = sparks.set_budget(
+                arg, bool(body.get("on")), body.get("tokens") or None,
+                body.get("period") or None,
+            )
+        elif name == "spark-audit":
+            return sparks.audit_log(arg)
+        elif name == "spark-audit-export":
+            return {"text": sparks.audit_export(arg)}
+        elif name in ("spark-approve", "spark-deny"):
+            spark = sparks.answer_step(
+                arg, name == "spark-approve", str(body.get("why") or ""),
+            )
+        elif name == "spark-stop":
+            spark = sparks.stop(arg)
+        elif name == "spark-share":
+            return {"code": sparks.share_code(arg)}
+        elif name == "spark-code":
+            return {"template": sparks.read_code(arg)}
+        elif name == "spark-add":
+            spark = sparks.add_from(
+                arg, str(body.get("project") or ""),
+                str(body.get("model") or ""), bool(body.get("paused")),
+            )
+        elif name == "spark-documents":
+            return {"documents": sparks.documents(sparks._must_find(arg).id)}
+        elif name == "spark-document":
+            # One of a spark's documents, kept for the page to show and
+            # edit, the edits landing in the spark's own copy.
+            spark = sparks._must_find(arg)
+            path = sparks.document_of(spark.id, str(body.get("path") or ""))
+            try:
+                return {"file": workspace.keep_file(str(path))}
+            except (workspace.WorkspaceError, OSError) as exc:
+                raise ValueError(str(exc)) from None
+        elif name == "spark-templates":
+            return {"templates": sparks.TEMPLATES}
+        elif name == "spark-schedule":
+            # A schedule as the form's box reads it, before it is saved.
+            every, at = sparks.parse_schedule(arg)
+            schedule = {"every": every, "at": at}
+            return {
+                **schedule, "schedule": sparks.schedule_words(schedule),
+                "next": sparks.next_shift(
+                    sparks.Spark(id="", name="", goal="", **schedule),
+                    time.time(),
+                ),
+            }
+        elif name in ("spark-pause", "spark-resume"):
+            spark = sparks.set_paused(arg, name == "spark-pause")
+        elif name == "spark-read":
+            spark = sparks.mark_read(arg)
+            briefing.stale()
+        elif name == "spark-teach":
+            at = body.get("at")
+            spark = sparks.teach(
+                arg, str(body.get("lesson") or ""),
+                float(at) if isinstance(at, (int, float)) else None,
+            )
+        elif name == "spark-rate":
+            at = body.get("at")
+            if not isinstance(at, (int, float)):
+                raise sparks.SparkError("Which report?")
+            spark = sparks.rate(arg, float(at), body.get("rating"))
+        elif name == "spark-unteach":
+            spark = sparks.forget_lesson(arg, int(body.get("index") or 0))
+        elif name == "spark-remove":
+            spark = sparks.remove(arg)
+            return {"removed": spark.id}
+        elif name == "spark-restore":
+            spark = sparks.restore(arg)
+        elif name == "spark-delete-forever":
+            spark = sparks.delete_forever(arg)
+            return {"deleted": spark.id}
+        else:
+            raise ValueError(f"unknown command {name!r}")
+    except (sparks.SparkError, OSError) as exc:
+        raise ValueError(str(exc)) from None
+    return {"spark": spark.to_dict()}
 
 
 # --- HTTP ----------------------------------------------------------------
@@ -2337,6 +8245,12 @@ class Handler(BaseHTTPRequestHandler):
         reached this server, and so is the machine's own name.
         """
 
+        # The tunnel's own public name, exactly, while it is on: what a
+        # request through it comes in as.
+        public = self.server.session.tunnel.host
+        if public and host.lower() in (public, public + ":443"):
+            return True
+
         name, _, port = host.rpartition(":")
         if port != str(self.server.server_address[1]):
             return False
@@ -2355,6 +8269,23 @@ class Handler(BaseHTTPRequestHandler):
 
         machine = socket.gethostname().lower().removesuffix(".local")
         return name in (machine, machine + ".local")
+
+    def _address(self) -> str:
+        """Where the browser is: through the tunnel, the address the
+        service says it came from, never this machine's, which the
+        tunnel's own program connects from."""
+
+        public = self.server.session.tunnel.host
+        host = self.headers.get("Host", "").lower()
+        if public and host in (public, public + ":443"):
+            given = (self.headers.get("CF-Connecting-IP")
+                     or self.headers.get("X-Forwarded-For", "")
+                     .split(",")[0]).strip()
+            try:
+                return str(ipaddress.ip_address(given))
+            except ValueError:
+                return "through the tunnel"
+        return self.client_address[0]
 
     def _same_site(self) -> bool:
         host = self.headers.get("Host", "")
@@ -2391,9 +8322,12 @@ class Handler(BaseHTTPRequestHandler):
         # browsers were signed in one by one.
         access = self.server.session.access
         cookie = self._cookie()
-        if access.browser(cookie, self.client_address[0]) is not None:
-            self.browser = cookie
-            return True
+        # A paired device sends its key in a header: it keeps no cookies.
+        for key in (cookie, self.headers.get("X-Flash-Device", "")):
+            if access.browser(key, self._address(),
+                              self.headers.get("User-Agent", "")) is not None:
+                self.browser = key
+                return True
         self.browser = ""
         return any(access.token_matches(given) for given in (
             self.headers.get("X-Flash-Token"),
@@ -2413,6 +8347,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        # A request answered before its body was read (refused, too
+        # large) leaves that body on the connection, where it would be
+        # read as the start of the next request: hang up instead.
+        unread = self.command == "POST" and not self._body_read
+        if unread:
+            self.send_header("Connection", "close")
+            self.close_connection = True
         if self.server.closing.is_set():
             # A server replaced after a LAN switch still answers what
             # arrives on a connection the browser kept open, then hangs
@@ -2420,7 +8361,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in (headers or {}):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
@@ -2448,6 +8390,38 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         query = parse_qs(url.query)
 
+        if url.path.startswith("/tunnel-check/"):
+            # Flash asking itself through a new tunnel: the code it gave
+            # comes back, and nothing else is told.
+            given = url.path.removeprefix("/tunnel-check/")
+            wanted = self.server.session.tunnel_nonce
+            if wanted and hmac.compare_digest(given, wanted):
+                self._send(HTTPStatus.OK, wanted.encode(),
+                           "text/plain; charset=utf-8")
+            else:
+                self._refuse()
+            return
+
+        if url.path == "/oauth/google":
+            # Google, sending the browser back after signing in: the
+            # state Flash made is the proof, as the page's cookie may be
+            # for another name for this computer.
+            from . import calendars
+
+            try:
+                calendars.google_finish(
+                    (query.get("code") or [""])[0],
+                    (query.get("state") or [""])[0])
+                said = ("Google Calendar is connected. You can close this "
+                        "tab.")
+                self.server.session.hub.publish({"type": "calendar"})
+            except (calendars.CalendarError, httpx.HTTPError) as exc:
+                said = f"Google Calendar did not connect: {exc}"
+            self._send(HTTPStatus.OK, OAUTH_PAGE.format(
+                said=html.escape(said)).encode(),
+                "text/html; charset=utf-8")
+            return
+
         name = url.path.removeprefix("/static/")
         if name in STATIC and url.path.startswith("/static/"):
             if not self._same_site():
@@ -2464,24 +8438,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._refuse()
             return
 
+        if url.path.startswith("/ext/"):
+            # An extension's web folder: its stylesheet, script, panels.
+            name, _, rest = url.path.removeprefix("/ext/").partition("/")
+            found = ext_ui.web_file(name, unquote(rest))
+            if found is None:
+                self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send(HTTPStatus.OK, *found)
+            return
+
         if PAGE_PATHS.match(url.path):
             # The page. Opened with the token rather than as a signed-in
             # browser, it signs this browser in: a cookie with a key of
             # its own, HttpOnly so no script can read it, SameSite=Strict
             # so no other site's request carries it, and no expiry, so it
             # goes when the browser closes. A new server knows none of
-            # the old keys.
+            # the old keys, unless browsers are remembered: then the
+            # cookie lasts REMEMBER_DAYS, renewed each time the page
+            # opens, and the next Flash knows it from the file.
             headers = {}
-            if not self.browser:
+            key = self.browser
+            if not key:
                 key = self.server.session.access.sign_in(
-                    self.client_address[0],
+                    self._address(),
                     self.headers.get("User-Agent", ""),
+                )
+                self.server.session.hub.publish({"type": "browsers"})
+            if not self.browser or remembering():
+                lasts = (
+                    f"; Max-Age={REMEMBER_DAYS * 86400}"
+                    if remembering() else ""
                 )
                 headers["Set-Cookie"] = (
                     f"{self.server.cookie_name}={key}; Path=/; "
-                    "HttpOnly; SameSite=Strict"
+                    f"HttpOnly; SameSite=Strict{lasts}"
                 )
-                self.server.session.hub.publish({"type": "browsers"})
             self._send(
                 HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8",
                 headers,
@@ -2492,9 +8484,62 @@ class Handler(BaseHTTPRequestHandler):
             ))
         elif url.path == "/api/events":
             self._events()
+        elif url.path.startswith("/api/files/") and url.path.endswith(
+                "/board"):
+            self._board(
+                url.path.removeprefix("/api/files/").removesuffix("/board"),
+                query.get("format", [""])[0],
+            )
+        elif url.path.startswith("/api/files/") and url.path.endswith(
+                "/export"):
+            self._export(
+                url.path.removeprefix("/api/files/").removesuffix("/export"),
+                query.get("format", [""])[0],
+            )
         elif url.path.startswith("/api/files/"):
             self._file(url.path.removeprefix("/api/files/"),
-                       download=query.get("download", [""])[0] == "1")
+                       download=query.get("download", [""])[0] == "1",
+                       design=query.get("design", [""])[0] == "1")
+        elif url.path.startswith("/api/tile/"):
+            # The map's tiles, through Flash: named and kept, as the tile servers ask.
+            from . import maps
+
+            try:
+                z, x, y = (int(p) for p in url.path.removeprefix("/api/tile/").removesuffix(".png").split("/"))
+                self._send(HTTPStatus.OK, maps.tile(z, x, y), "image/png", {"Cache-Control": "private, max-age=604800"})
+            except (ValueError, maps.MapsError):
+                self._send(HTTPStatus.NOT_FOUND, b"", "image/png")
+        elif url.path == "/api/geocode":
+            from . import maps
+
+            try:
+                self._json(maps.geocode(query.get("q", [""])[0])[0])
+            except maps.MapsError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        elif url.path == "/api/route":
+            # the road or path between a map block's places, for it to draw
+            from . import maps
+
+            try:
+                points = [tuple(float(x) for x in p.split(",")[:2])
+                          for p in query.get("points", [""])[0].split(";") if p]
+                self._json(maps.line(points, query.get("mode", ["driving"])[0]))
+            except (ValueError, maps.MapsError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        elif url.path == "/api/structure":
+            # A protein or molecule for the 3D viewer in a reply, fetched
+            # here (and kept), so the page needs no other site.
+            from . import science
+
+            try:
+                fmt, text = science.structure(query.get("kind", [""])[0],
+                                              query.get("id", [""])[0])
+            except science.ScienceError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+            else:
+                self._json({"format": fmt, "data": text})
+        elif url.path == "/api/background":
+            self._json(self.server.session.background())
         elif url.path == "/api/agents":
             self._json({"agents": self.server.session.agent_list(
                 query.get("chat", [""])[0]
@@ -2505,13 +8550,31 @@ class Handler(BaseHTTPRequestHandler):
             )})
         elif url.path == "/api/qr":
             self._json(phone_link(self.server))
+        elif url.path == "/api/browser/frame":
+            # The agent's browser as it is now, for the user watching or
+            # driving it.
+            from . import browser
+
+            frame = browser.live_frame()
+            if frame:
+                self._send(HTTPStatus.OK, frame, "image/jpeg")
+            else:
+                self._json({"error": "no browser open"},
+                           HTTPStatus.NOT_FOUND)
         else:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+    # Whether this request's body has been read off the connection.
+    _body_read = True
+
     def do_POST(self) -> None:
         url = urlparse(self.path)
+        self._body_read = False
 
-        if not self._authorized({}):
+        # Pairing is how a device gets its key, so it cannot have one
+        # yet: the code it sends is what lets it in.
+        pairing = url.path == "/api/pair" and self._same_site()
+        if not pairing and not self._authorized({}):
             self._refuse()
             return
 
@@ -2526,8 +8589,11 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length") or 0)
         limit = {
-            "/api/upload": MAX_UPLOAD_BODY,
+            "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
+            "/api/pronounce": MAX_VOICE_BODY,
+            "/api/voice/live": MAX_VOICE_BODY,
+            "/api/voice/wake": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
             self._json(
@@ -2536,30 +8602,153 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            body = json.loads(self.rfile.read(length) or b"{}")
+            raw = self.rfile.read(length)
+            self._body_read = True
+            body = json.loads(raw or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("expected an object")
             self._json(self._post(url.path, body))
+        except (BrokenPipeError, ConnectionResetError):
+            # The page went away before its answer: nothing to tell it.
+            self.close_connection = True
         except KeyError:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-        except ValueError as exc:
+        except (ValueError, calls.CallError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def _post(self, path: str, body: dict) -> dict:
         session = self.server.session
+
+        if path == "/api/pair":
+            if not session.pairing.take(str(body.get("code", ""))):
+                raise ValueError(
+                    "That code did not work. Make a new one on the computer."
+                )
+            name = " ".join(str(body.get("name") or "").split())[:40]
+            agent = self.headers.get("User-Agent", "")
+            if DEVICE_AGENT not in agent:
+                agent = f"{DEVICE_AGENT}1"
+            key = session.access.sign_in(
+                self._address(), f"{agent.split()[0]} {name}".strip(),
+                device_product(agent))
+            session.hub.publish({"type": "browsers"})
+            session.hub.publish({"type": "paired", "name": name})
+            return {"key": key}
 
         if path == "/api/send":
             chat_id = str(body.get("chat") or "")
             chat = (
                 session.chat(chat_id) if chat_id else session.new_chat()
             )
+            # Only for a turn about to start: a message steered into one
+            # running has it to no turn.
+            if body.get("voice") and body.get("voice_note") and \
+                    not (chat.busy or chat.queued):
+                session.voice_notes[chat.id] = humanvoice.note_for(
+                    body["voice_note"])
+            device = session.access.about(self.browser)
+            kind = device_kind(device.get("product", "")) \
+                if DEVICE_AGENT in device.get("agent", "") else ""
             sent = session.send(
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
                 files=[str(f) for f in body.get("files") or []],
                 heard=bool(body.get("voice")),
+                deep=bool(body.get("deep")),
+                asked_from={
+                    "from": "robot" if kind == "robot" else
+                    "voice" if body.get("voice") else "typed",
+                    "device": device.get("id", ""),
+                    "name": device.get("name", "") or kind,
+                },
             )
             return {"chat": chat.id, **sent}
+
+        if path == "/api/pronounce":
+            # A phrase said aloud, judged by its sound; a tutor's say step is measured with it.
+            from . import pronounce, tutor
+
+            def flash_says(word: str) -> bytes:
+                wav, why = voice.synthesize(word)
+                return b"" if why else wav
+
+            try:
+                pcm = base64.b64decode(str(body.get("audio") or ""))
+                said = pronounce.assess(str(body.get("text") or ""), str(body.get("lang") or "en-US"), pcm, flash_says)
+            except pronounce.PronounceError as exc:
+                raise ValueError(str(exc)) from None
+            if body.get("subject") and body.get("id"):
+                said["measured"] = tutor.spoken(str(body["subject"]), str(body["id"]), said["score"])
+                session.hub.publish({"type": "course-changed", "subject": tutor._key(str(body["subject"]))})
+            return said
+
+        if path == "/api/btw":
+            chat_id = str(body.get("chat") or "")
+            chat = (
+                session.chat(chat_id) if chat_id else session.new_chat()
+            )
+            return {
+                "chat": chat.id,
+                "id": session.btw(chat, str(body.get("text", ""))),
+            }
+
+        if path == "/api/debate":
+            chat_id = str(body.get("chat") or "")
+            chat = (
+                session.chat(chat_id) if chat_id else session.new_chat()
+            )
+            return {
+                "chat": chat.id,
+                "id": session.debate(
+                    chat, str(body.get("text", "")),
+                    continues=str(body.get("continues") or ""),
+                    steer=str(body.get("steer") or ""),
+                    models=list(body.get("models") or []),
+                    rounds=_int(body.get("rounds")),
+                    until=body.get("until") or ""),
+            }
+
+        if path == "/api/browser/control":
+            # The user takes the agent's browser, or hands it back: the
+            # chat hears which, and where it was left.
+            from . import browser
+
+            try:
+                said = browser.take_control(bool(body.get("on")))
+            except browser.PageProblem as exc:
+                raise ValueError(str(exc)) from None
+            chat_id = str(body.get("chat") or "")
+            if chat_id in session.chats:
+                chat = session.chat(chat_id)
+                note = ("You took over Flash's browser. Flash waits until "
+                        "you hand it back." if said["taken"] else
+                        f"You handed the browser back, at {said['url']}.")
+                session.emit(chat, {"type": "note", "text": note})
+            return said
+
+        if path == "/api/browser/act":
+            from . import browser
+
+            try:
+                url = browser.user_act(
+                    str(body.get("kind") or ""),
+                    float(body.get("x") or 0), float(body.get("y") or 0),
+                    str(body.get("text") or ""), str(body.get("key") or ""),
+                    float(body.get("dx") or 0), float(body.get("dy") or 0))
+            except browser.PageProblem as exc:
+                raise ValueError(str(exc)) from None
+            except Exception as exc:  # noqa: BLE001  (the page's own error)
+                raise ValueError(str(exc).splitlines()[0]) from None
+            return {"url": url}
+
+        if path == "/api/debate-steer":
+            session.steer_debate(str(body.get("id") or ""),
+                                 str(body.get("text") or ""))
+            return {}
+
+        if path == "/api/debate-stop":
+            return {"stopped": session.stop_debate(
+                str(body.get("id") or ""), str(body.get("chat") or ""))}
 
         if path == "/api/upload":
             try:
@@ -2568,9 +8757,15 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except (ValueError, TypeError):
                 raise ValueError("that upload did not arrive whole") from None
-            return workspace.keep_upload(str(body.get("name") or ""), data)
+            stills, unheard = recording_stills(body)
+            kept = workspace.keep_upload(
+                str(body.get("name") or ""), data, stills or None,
+            )
+            # Narrated, but nothing to hear it with: the page says so.
+            return {**kept, "unheard": unheard} if unheard else kept
 
         if path == "/api/voice/hear":
+            session.always.page_listening()
             try:
                 pcm = base64.b64decode(
                     str(body.get("data") or ""), validate=True
@@ -2582,23 +8777,121 @@ class Handler(BaseHTTPRequestHandler):
             text, why = voice.transcribe(pcm)
             if why:
                 raise ValueError(why)
+            speaking = str(body.get("speaking") or "")
             return {
                 "text": text,
-                **voice.voice_command(text, str(body.get("speaking") or "")),
+                **voice.voice_command(text, speaking,
+                                      bool(body.get("first"))),
+                # Said over a reply, it is not a turn of its own to read.
+                **({} if speaking else {
+                    "mood": session.ear.mood(pcm, text),
+                    "ack": humanvoice.ack_for(text),
+                }),
             }
 
-        if path == "/api/voice/say":
-            wav, why = voice.synthesize(
-                voice.speakable(str(body.get("text") or ""))
-            )
+        if path.startswith("/api/meeting/"):
+            return _meeting_post(session, path, body)
+
+        if path == "/api/voice/live":
+            session.always.page_listening()
+            # The words so far, while the user is still talking.
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            stream = str(body.get("id") or "")[:32]
+            if not stream:
+                raise ValueError("which recording is that?")
+            words, why = voice.hear_live(stream, pcm, bool(body.get("end")))
             if why:
                 raise ValueError(why)
-            return {"audio": base64.b64encode(wav).decode("ascii")}
+            return {"text": words}
+
+        if path == "/api/voice/wake":
+            session.always.page_listening()
+            # Listening for "Hey Flash", while the page is open.
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            stream = str(body.get("id") or "")[:32]
+            if not stream:
+                raise ValueError("which recording is that?")
+            woke, why = voice.hear_wake(stream, pcm, bool(body.get("end")))
+            if why:
+                raise ValueError(why)
+            if woke and voicehooks.ask("wake")["ignore"]:
+                woke = False
+            return {"woke": woke}
+
+        if path == "/api/voice/wake-teach":
+            # The owner saying the wake word a few times, kept so it knows
+            # their voice (wake_voice). "forget" drops what it kept.
+            from . import wake_voice
+
+            if body.get("forget"):
+                wake_voice.forget()
+                return {"taught": False}
+            clips = []
+            for item in body.get("clips") or []:
+                try:
+                    clips.append(base64.b64decode(str(item), validate=True))
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        "that recording did not arrive whole"
+                    ) from None
+            kept = wake_voice.teach(clips[:8])
+            return {"taught": True, **kept}
+
+        if path == "/api/voice/hook":
+            # A moment of voice mode, for the extensions in the middle of
+            # it: what they decide for the ones they are asked, nothing
+            # for the ones they are only told.
+            event = str(body.get("event") or "")
+            talk = str(body.get("conversation") or "")
+            data = {k: body[k] for k in ("text", "state", "how")
+                    if k in body}
+            if event in voicehooks.ASKED:
+                return voicehooks.ask(event, talk, **data)
+            if event in voicehooks.TOLD:
+                voicehooks.tell(event, talk, **data)
+                return {}
+            raise ValueError(f"no voice moment called {event!r}")
+
+        if path == "/api/voice/say":
+            session.always.page_listening()
+            # A spark on a call speaks in a voice of its own; a voice and
+            # pitch given are one being tried, before they are saved.
+            if "voice" in body:
+                own = voice.spark_voice(
+                    str(body.get("spark") or "new spark"),
+                    chosen=str(body.get("voice") or ""),
+                    pitch=_int(body.get("pitch")))
+            else:
+                own = voice.spark_voice(str(body.get("spark") or ""))
+            said = voice.speakable(str(body.get("text") or ""))
+            wav, why = voice.synthesize(said, speaker=own["voice"]) \
+                if own.get("voice") else voice.synthesize(said)
+            if why:
+                raise ValueError(why)
+            # Its own pitch on top: the feeling it is said with, and the
+            # line's small variation.
+            return {"audio": base64.b64encode(wav).decode("ascii"),
+                    "detune": own.get("detune", 0) + voice.pitch_of(said)}
 
         if path == "/api/answer":
             return {
                 "ok": session.answer(
-                    str(body.get("id", "")), str(body.get("answer", ""))
+                    str(body.get("id", "")), str(body.get("answer", "")),
+                    str(body.get("why") or ""),
                 )
             }
 
@@ -2607,7 +8900,9 @@ class Handler(BaseHTTPRequestHandler):
 
         raise ValueError(f"unknown endpoint {path}")
 
-    def _file(self, file_id: str, download: bool) -> None:
+    def _file(
+        self, file_id: str, download: bool, design: bool = False,
+    ) -> None:
         """A file the agent showed, as the type it was stored as.
 
         Only types a browser shows are ever stored, and nosniff keeps it
@@ -2632,7 +8927,76 @@ class Handler(BaseHTTPRequestHandler):
         }
         if mime == "text/html":
             headers["Content-Security-Policy"] = HTML_SANDBOX
+            if design and not download:
+                data = with_design_kit(data)
+        # Videos and sound are asked for in pieces (Safari will not play
+        # one otherwise, and seeking asks for the part it needs).
+        headers["Accept-Ranges"] = "bytes"
+        part = byte_range(self.headers.get("Range", ""), len(data))
+        if part == "bad":
+            self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", mime,
+                       {"Content-Range": f"bytes */{len(data)}"})
+            return
+        if part:
+            start, end = part
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+            self._send(HTTPStatus.PARTIAL_CONTENT, data[start:end + 1], mime,
+                       headers)
+            return
         self._send(HTTPStatus.OK, data, mime, headers)
+
+    def _board(self, file_id: str, fmt: str) -> None:
+        """A board Flash designed, as a board house's zip, a KiCad
+        board, or a 3D model, made from its file."""
+
+        from . import pcb
+
+        kept = workspace.kept_file(file_id)
+        if kept is None or kept[0].suffix != pcb.SUFFIX:
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+        try:
+            board = pcb.load(kept[0].read_text(encoding="utf-8"))
+            stem = re.sub(r"[^A-Za-z0-9_-]+", "-", board["name"]).strip(
+                "-") or "board"
+            if fmt == "fab":
+                data, kind, name = (pcb.fab_zip(board), "application/zip",
+                                    f"{stem}-fab.zip")
+            elif fmt == "kicad":
+                data, kind, name = (pcb.kicad(board).encode(),
+                                    "application/octet-stream",
+                                    f"{stem}.kicad_pcb")
+            elif fmt == "glb":
+                data, kind, name = (pcb.glb(board), "model/gltf-binary",
+                                    f"{stem}.glb")
+            else:
+                raise pcb.PcbError("format is fab, kicad or glb")
+        except (pcb.PcbError, OSError, ValueError, KeyError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send(HTTPStatus.OK, data, kind, {
+            "Content-Disposition": f'attachment; filename="{name}"',
+        })
+
+    def _export(self, file_id: str, fmt: str) -> None:
+        """A design drawn as a PNG, a PDF or slides, as a download."""
+
+        try:
+            out = design.export(
+                file_id, fmt, workspace.store() / "exports" / file_id,
+            )
+            data = out.read_bytes()
+        except (design.DesignError, OSError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        kinds = {
+            "png": "image/png", "pdf": "application/pdf",
+            "pptx": "application/vnd.openxmlformats-officedocument"
+                    ".presentationml.presentation",
+        }
+        self._send(HTTPStatus.OK, data, kinds[fmt], {
+            "Content-Disposition": f'attachment; filename="{out.name}"',
+        })
 
     def _events(self) -> None:
         """A Server-Sent Events stream of everything that happens."""
@@ -2660,7 +9024,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     event = queue.get(timeout=PING_SECONDS)
                 except Empty:
-                    self.wfile.write(b": ping\n\n")
+                    # An event, not a comment: the page sees it, and a
+                    # stream that has gone quiet without closing, after
+                    # a laptop sleeps or the network changes, is one it
+                    # can notice and open again.
+                    self.wfile.write(b"event: ping\ndata: {}\n\n")
                     self.wfile.flush()
                     continue
                 if event is None:
@@ -2707,9 +9075,12 @@ class Server(ThreadingHTTPServer):
         if session is None:
             session = Session()
             session.access = Access.kept()
+            session.keep_extensions_updated()
         self.session = session
         self.session.lan = lan
         self.lan = lan
+        # Extensions' models asked for now, in the background, so the model menu has them when first opened.
+        threading.Thread(target=lambda: _quietly(providers.every_model), daemon=True).start()
         # A LAN switch in progress: the server that replaces this one,
         # once it is listening, and whether to leave the session open.
         self.swapping = False
@@ -2766,22 +9137,72 @@ class Server(ThreadingHTTPServer):
         super().server_close()
 
 
-def lan_address() -> str:
-    """This machine's address on the local network.
+_VIRTUAL = ("lo", "utun", "tun", "tap", "ipsec", "ppp", "bridge", "vmnet",
+            "vboxnet", "docker", "veth", "awdl", "llw", "gif", "stf", "anpi")
 
-    Connecting a UDP socket sends nothing; it only asks the system
-    which interface it would route through, which is the one a phone
-    on the same Wi-Fi can reach.
+
+def _interfaces() -> tuple[str, dict[str, list[str]]]:
+    """The default route's interface and each interface's IPv4 addresses,
+    from route and ifconfig (macOS and the BSDs); empty where they are
+    missing."""
+
+    default, found = "", {}
+    try:
+        said = subprocess.run(["route", "-n", "get", "default"],
+                              capture_output=True, text=True, timeout=3).stdout
+        default = next((line.split(":", 1)[1].strip()
+                        for line in said.splitlines()
+                        if line.strip().startswith("interface:")), "")
+        said = subprocess.run(["ifconfig"], capture_output=True, text=True,
+                              timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return default, found
+    name = ""
+    for line in said.splitlines():
+        if line and not line[0].isspace():
+            name = line.split(":", 1)[0]
+        elif line.strip().startswith("inet ") and name:
+            found.setdefault(name, []).append(line.split()[1])
+    return default, found
+
+
+def lan_addresses(every: bool = False) -> list[str]:
+    """This machine's addresses on the local network, best first.
+
+    The interface with the default route comes first: that is the Wi-Fi
+    or Ethernet a phone or watch shares. VPNs (utun), VM bridges and
+    Internet Sharing are left out: a VPN can take over routing, so asking
+    the system which way it would send a packet names the tunnel, not
+    the Wi-Fi. Without ifconfig, that probe is the fallback. EVERY keeps
+    those too, after the rest, for a device that tries each in turn.
     """
 
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        probe.connect(("10.255.255.255", 1))
-        return probe.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        probe.close()
+    default, interfaces = _interfaces()
+    found: list[str] = []
+    names = sorted(interfaces, key=lambda n: (
+        n != default, n != default and n.startswith(_VIRTUAL)))
+    for name in names:
+        if not every and name != default and name.startswith(_VIRTUAL):
+            continue
+        for ip in interfaces[name]:
+            if not ip.startswith(("127.", "169.254.")) and ip not in found:
+                found.append(ip)
+    if not found:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.255.255.255", 1))
+            found.append(probe.getsockname()[0])
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    return found or ["127.0.0.1"]
+
+
+def lan_address() -> str:
+    """The best of lan_addresses: the one to show and put in the QR."""
+
+    return lan_addresses()[0]
 
 
 def qr_svg(url: str) -> str:
@@ -2805,6 +9226,72 @@ def qr_text(url: str) -> str:
     return out.getvalue()
 
 
+# What a tunnel service answers with when it cannot reach this computer.
+_UNREACHED = (502, 503, 504, 530)
+
+
+def reaches(session: "Session") -> Callable[[str], str]:
+    """A check for Tunnel.start: whether this Flash answers through the
+    public address, with a code only it knows. "" when it does, or why
+    not."""
+
+    def check(url: str) -> str:
+        nonce = secrets.token_urlsafe(16)
+        session.tunnel_nonce = nonce
+        try:
+            with urllib.request.urlopen(  # nosec B310  (the tunnel's https)
+                f"{url}/tunnel-check/{nonce}", timeout=8,
+            ) as got:
+                said = got.read(200).decode("utf-8", "replace").strip()
+        except urllib.error.HTTPError as exc:
+            return f"the service answered {exc.code}" + (
+                ", so it could not get through to Flash on this computer"
+                if exc.code in _UNREACHED else "")
+        except (urllib.error.URLError, OSError) as exc:
+            return str(getattr(exc, "reason", "") or exc)
+        finally:
+            session.tunnel_nonce = ""
+        return "" if said == nonce else "something other than Flash answered"
+
+    return check
+
+
+def tunnel_info(session: "Session") -> dict:
+    """The tunnel, for Settings: its state, the link through it with the
+    token, a QR code of that, and the services to pick from."""
+
+    found = session.tunnel
+    link = ""
+    if found.state == tunnel.ON:
+        link = f"{found.url}/?token={session.access.token}"
+    return {
+        "tunnel": {**found.status(), "link": link,
+                   "svg": qr_svg(link) if link else ""},
+        "services": tunnel.services(),
+    }
+
+
+def _service_title(name: str) -> str:
+    service = tunnel.find(name)
+    return service.title if service else name
+
+
+def _warn_public(session: "Session") -> None:
+    """Say in the terminal, loudly, that Flash is on the internet."""
+
+    found = session.tunnel
+    if found.state != tunnel.ON:
+        return
+    console.print(Text(
+        f"Flash is on the internet at {found.url}, through "
+        f"{_service_title(found.service)}. Anyone with the link "
+        "can use Flash as you: read your chats, run commands, change "
+        "files, send messages. Turn it off in Settings, Network, when "
+        "you're done.",
+        style=WARN,
+    ))
+
+
 def phone_link(server: "Server") -> dict:
     """What the page's "open on your phone" panel shows."""
 
@@ -2816,6 +9303,14 @@ def phone_link(server: "Server") -> dict:
     }
 
 
+def over_ssh() -> bool:
+    """Whether this Flash runs in an SSH session: a browser opened here
+    would open on the far computer, or nowhere."""
+
+    return bool(os.environ.get("SSH_CONNECTION") or os.environ.get(
+        "SSH_TTY")) and not os.environ.get("DISPLAY", "").startswith(":")
+
+
 def announce(server: "Server") -> None:
     """Say where the web UI is, with a QR code for a phone."""
 
@@ -2823,10 +9318,16 @@ def announce(server: "Server") -> None:
     line.append(server.url, style=f"bold {ACCENT}")
     console.print(line)
 
+    if remembering():
+        plain = Text("Browsers signed in before open it at ", style=DIM)
+        plain.append(f"http://{HOST}:{server.port}/", style=ACCENT)
+        console.print(plain)
+
     if server.network_url is None:
         console.print(Text(
-            "Only this machine can reach it, and only with that link. "
-            "Add --lan (or /web lan) to open it on your phone.",
+            ("Only this machine can reach it. " if remembering() else
+             "Only this machine can reach it, and only with that link. ")
+            + "Add --lan (or /web lan) to open it on your phone.",
             style=DIM,
         ))
         return
@@ -2853,8 +9354,35 @@ def announce(server: "Server") -> None:
 def _listen(
     port: int, lan: bool, session: Optional[Session] = None,
 ) -> "Server":
+    if not lan:
+        # An extension that pairs a device (a watch) needs Flash where
+        # that device can reach it, from the start.
+        from . import extensions
+
+        wanting = extensions.wanting_network()
+        if wanting:
+            lan = True
+            console.print(Text(
+                "On your network for " + ", ".join(wanting)
+                + ": its extension asks for that.",
+                style=DIM))
     try:
-        return Server(port, session=session, lan=lan)
+        server = Server(port, session=session, lan=lan)
+        os.environ[URL_ENV] = f"http://127.0.0.1:{getattr(server, 'port', port)}"
+        # The token, for extension programs only (their tools and buttons
+        # call Flash's API with it), not for every command run: Access
+        # took it out of the environment as it started.
+        from . import extensions as installed
+        serving = getattr(server, "session", None) or session
+        if serving is not None:
+            installed.web_token = serving.access.token
+            installed.web_token_source = lambda: serving.access.token
+        # Extensions' services (programs that run while Flash is open), now
+        # that they can reach Flash's API.
+        from . import services
+
+        services.start()
+        return server
     except OSError as exc:
         raise OSError(
             f"could not listen on port {port} ({exc.strerror}); pass "
@@ -2878,6 +9406,10 @@ def _restart(
     """
 
     server.session.access.hand_over()
+    # The restarted Flash starts them again; left running, they'd be twice.
+    from . import services
+
+    services.stop()
     # As it is now, which a LAN switch may have changed since it began.
     args = [a for a in sys.argv[1:] if a != "--lan"]
     if server.lan:
@@ -2931,10 +9463,67 @@ def _attach(server: "Server", standalone: bool) -> None:
 
     session = server.session
     session.relink = lambda: announce(server)
+    # Asleep, the watch cannot reach Flash and no spark can call: hold
+    # the Mac awake for as long as this process serves (on by default).
+    from . import awake
+
+    awake.start()
+    # Timers and alarms: the page and the watch hear the moment one is set,
+    # rings or stops.
+    from . import clock
+
+    clock.on_change(lambda st: session.hub.publish({"type": "clock"}))
+    clock.state()
+    # Sparks work for as long as the server runs, and the page hears of
+    # every shift they start and finish.
+    sparks.on_change(session.sparks_changed)
+    teamchat.on_change(
+        lambda team: session.hub.publish({"type": "team-chat", "team": team})
+    )
+
+    # A spark calling the user: every open page rings, and with none
+    # open the computer does, its Answer opening this page on the call.
+    def ringing(team: str, entry: dict) -> None:
+        session.hub.publish({"type": "spark-ring", "team": team,
+                             **_ring_event(entry)})
+        session.hub.note("call", f"{entry.get('name') or 'A spark'} is "
+                         "calling", str(entry.get("reason") or ""), team)
+        if not session.hub.watched() and \
+                sparkcalls.claim(str(entry.get("call") or "")):
+            sparkcalls.ring_desktop(team, entry, answer_url=(
+                f"{server.url}&answer={team}:{entry.get('call')}"))
+
+    sparkcalls.listen(ringing, lambda team, entry: session.hub.publish({
+        "type": "spark-ring-end", "team": team, "call": entry.get("call"),
+        "state": teamchat._state(entry)}))
+    # A spark's @user: the page plays a ping and says who it was.
+    pings.on_ping(lambda said: session.hub.publish({"type": "ping", **said}))
+    # Flash read the briefing out: the page's dot clears.
+    briefing.on_seen(lambda: session.hub.publish({"type": "status"}))
+    from . import tools as tools_for_briefing
+
+    tools_for_briefing._BRIEFING_SESSION[0] = session
+    # A terminal's Flash, or the keeper, talking in a team's chat is news
+    # to the page as soon as it is written.
+    teamchat.watch()
+    sparks.start()
+    # Another Flash running them, and this one set to take over: done in
+    # the background, as it waits for that keeper to go.
+    threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
+        "say": lambda said: session.hub.publish(
+            {"type": "notify", "title": "Sparks", "text": said})},
+        daemon=True).start()
+    # The MCP servers start with Flash, not with the first chat that
+    # wants their tools.
+    connectors.start()
+    session.always.start()
+    session.port = server.port
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
     if standalone:
+        # Calls show on the page and in their saved file, not here.
+        calls.terminal = False
         if os.name != "nt":
             # Windows cannot replace a running Flash at all: its update
             # finishes after this one quits, so there is nothing to
@@ -2962,20 +9551,132 @@ def _serve(server: "Server", standalone: bool, running: list) -> None:
         _attach(server, standalone)
 
 
+# Where the web UI that is running says it is, for flash://open to find
+# it: its link, token and all, in a file only this user can read.
+RUNNING_FILE = "running.json"
+
+
+def _running_path() -> Path:
+    return workspace.store() / RUNNING_FILE
+
+
+def note_running(server: "Server") -> None:
+    """Write down SERVER's link, for another Flash to open."""
+
+    path = _running_path()
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump({"pid": os.getpid(), "port": server.port,
+                       "url": server.url}, out)
+
+
+def forget_running(server: "Server") -> None:
+    path = _running_path()
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(path.read_text(encoding="utf-8")).get("pid") \
+                == os.getpid():
+            path.unlink()
+
+
+def running_url() -> Optional[str]:
+    """The link of a web UI running on this machine, or None: one that
+    was written down and still answers on its port."""
+
+    try:
+        found = json.loads(_running_path().read_text(encoding="utf-8"))
+        port, url = int(found["port"]), str(found["url"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        with socket.create_connection((HOST, port), timeout=0.5):
+            return url
+    except OSError:
+        return None
+
+
+WINDOW_SETTING = "FLASH_WINDOW"
+APP_BROWSERS = {
+    "windows": [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+                r"%LocalAppData%\Google\Chrome\Application\chrome.exe",
+                r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"],
+    "linux": ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge",
+              "brave-browser"],
+}
+
+
+def opens_in_window() -> bool:
+    """Whether the Flash shortcut opens Flash as an app of its own (the
+    setting), not a browser tab."""
+
+    # A Mac has the Flash app for it; elsewhere a browser's app window, when asked for.
+    default = "1" if sys.platform == "darwin" else "0"
+    return (os.environ.get(WINDOW_SETTING) or default).strip() != "0"
+
+
+def open_page(url: str) -> None:
+    """URL in a window of its own when the setting asks for one and a
+    browser that can make one is here (Edge, Chrome, Brave or Chromium in
+    app mode), else in the browser. On a Mac the Flash app is the window."""
+
+    if opens_in_window() and sys.platform != "darwin":
+        kind = "windows" if os.name == "nt" else "linux"
+        for found in APP_BROWSERS[kind]:
+            path = os.path.expandvars(found) if kind == "windows" else shutil.which(found)
+            if path and os.path.exists(path):
+                try:
+                    subprocess.Popen([path, f"--app={url}", "--window-size=1280,860"],  # nosec B603
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                    return
+                except OSError:
+                    continue
+    webbrowser.open(url)
+
+
+def open_ui(port: int = DEFAULT_PORT, lan: bool = False,
+            prompt: str = "") -> None:
+    """flash://open: the web UI in the browser, the one already running
+    if there is one, else a new one, served from here. With PROMPT (a
+    flash://?prompt= link's), the page opens with it in the message box,
+    not sent: it is read before anything is asked."""
+
+    tail = f"#prompt={urllib.parse.quote(prompt)}" if prompt else ""
+    url = running_url()
+    if url:
+        console.print(Text("Opening Flash.", style=DIM))
+        open_page(url + tail)
+        return
+    serve(port=port, open_browser=True, lan=lan, opener=open_page, **({"tail": tail} if tail else {}))
+
+
 def serve(
-    port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False
+    port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False,
+    tail: str = "", opener=None,
 ) -> None:
     """Run the web UI until Ctrl+C."""
 
     server = _listen(port, lan)
+    note_running(server)
     announce(server)
     console.print(Text("Ctrl+C stops it.", style=DIM))
+    # One press: serving is all this process does, so there is nothing a
+    # stray press would lose.
+    interrupt.release()
 
     _attach(server, standalone=True)
     server.session.updates.check_in_background()
 
-    if open_browser:
-        webbrowser.open(server.url)
+    if open_browser and over_ssh():
+        console.print(Text(
+            "Over SSH, so no browser here: forward the port (ssh -L "
+            f"{server.port}:localhost:{server.port} ...) and open the "
+            "link above where you are.", style=DIM))
+    elif open_browser:
+        (opener or webbrowser.open)(server.url + tail)
 
     running = [server]
     try:
@@ -2983,6 +9684,7 @@ def serve(
     except KeyboardInterrupt:
         console.print(Text("Stopped.", style=DIM))
     finally:
+        forget_running(server)
         running[0].server_close()
 
 
@@ -2999,11 +9701,13 @@ def start_background(
     which interfaces a server listens on is fixed when it opens.
     """
 
-    if _background is not None and _background.lan == lan:
+    if _background is not None and _background.lan == lan and (
+            port is None or _background.server_address[1] == port):
         return _background
 
     stop_background()
     server = _listen(DEFAULT_PORT if port is None else port, lan)
+    note_running(server)
     _attach(server, standalone=False)
     server.session.updates.check_in_background()
     threading.Thread(
@@ -3012,12 +9716,19 @@ def start_background(
     return server
 
 
+def running_background() -> Optional[Server]:
+    """The server /web started beside this session, if it runs."""
+
+    return _background
+
+
 def stop_background() -> bool:
     global _background
 
     if _background is None:
         return False
 
+    forget_running(_background)
     _background.shutdown()
     _background.server_close()
     _background = None

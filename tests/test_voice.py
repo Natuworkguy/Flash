@@ -1,10 +1,12 @@
 # pylint: disable=C0114,C0115,C0116
 
 import array
+import io
 import json
 import sys
 import threading
 import types
+import wave
 import zipfile
 
 import pytest
@@ -240,10 +242,12 @@ def _fake_piper(monkeypatch, tmp_path, *, streaming: bool):
         def load(path):
             loaded = _Voice()
             if streaming:
-                loaded.synthesize_stream_raw = lambda text: [_pcm(1000, 8)]
+                loaded.synthesize_stream_raw = (
+                    lambda text, **settings: [_pcm(1000, 8)]
+                )
             return loaded
 
-        def synthesize(self, text):
+        def synthesize(self, text, syn_config=None):
             return [_Chunk()]
 
     piper = types.ModuleType("piper")
@@ -262,7 +266,9 @@ def test_speak_plays_audio_through_both_piper_apis(
 
     assert why == ""  # nosec B101
     assert interrupted is False  # nosec B101
-    assert stream.written == [_pcm(1000, 8)]  # nosec B101
+    assert stream.written[0] == _pcm(1000, 8)  # nosec B101
+    # Then the breath a warm voice takes after a sentence: quiet.
+    assert all(not any(chunk) for chunk in stream.written[1:])  # nosec B101
 
 
 def test_speak_says_nothing_about_an_empty_reply(monkeypatch):
@@ -391,7 +397,7 @@ def test_heard_interruption_ignores_ordinary_speech(said):
 class _Interrupting:
     """Stands in for the barge-in listener, having already heard it."""
 
-    def __init__(self):
+    def __init__(self, how="word", line=""):
         self.heard = threading.Event()
         self.heard.set()
 
@@ -588,7 +594,12 @@ def test_a_line_is_made_fit_to_hear():
     ) == "See a link for more."
 
 
-@pytest.mark.parametrize("catalogue", [voice.LISTENING, voice.SPEAKING])
+@pytest.mark.parametrize("catalogue", [
+    voice.LISTENING,
+    # To speak with, the best and the second best come first.
+    [c for c in voice.SPEAKING
+     if not (voice.is_phonon(c.name) or voice.is_kokoro(c.name))],
+])
 def test_settings_offers_the_defaults_lightest_first(catalogue):
     names = [c.name for c in catalogue]
     sizes = [c.size for c in catalogue]
@@ -598,6 +609,22 @@ def test_settings_offers_the_defaults_lightest_first(catalogue):
         voice.DEFAULT_PIPER_VOICE in names
     )
     assert all(c.label for c in catalogue)  # nosec B101
+
+
+def test_phonon_is_offered_as_the_best_and_kokoro_second():
+    engines = []
+    for choice in voice.SPEAKING:
+        if voice.engine_of(choice.name) not in engines:
+            engines.append(voice.engine_of(choice.name))
+
+    assert engines == ["Phonon", "Kokoro", "Piper"]  # nosec B101
+    assert "the best" in voice.SPEAKING[0].label  # nosec B101
+    assert voice.engine_label("phonon-harper") == (  # nosec B101
+        "Phonon, the best")
+    assert voice.engine_label("kokoro-af_heart") == (  # nosec B101
+        "Kokoro, second best")
+    kokoro = next(c for c in voice.SPEAKING if voice.is_kokoro(c.name))
+    assert "second best" in kokoro.label  # nosec B101
 
 
 def test_one_model_downloads_by_name(tmp_path, monkeypatch):
@@ -610,7 +637,7 @@ def test_one_model_downloads_by_name(tmp_path, monkeypatch):
             with zipfile.ZipFile(out, "w") as bundle:
                 bundle.writestr("vosk-model-en-us-0.22-lgraph/am/x", "x")
         else:
-            out.write_text("{}")
+            out.write_text("{}", encoding="utf-8")
         on_progress(label, 100)
         return ""
 
@@ -765,10 +792,950 @@ def test_what_reaches_piper_is_sayable(monkeypatch, tmp_path):
     monkeypatch.setattr(voice, "_speaker", None)
     heard = []
     voice_obj, _rate = _load_speaker()
-    voice_obj.synthesize_stream_raw = lambda text: heard.append(text) or []
+    voice_obj.synthesize_stream_raw = (
+        lambda text, **settings: heard.append(text) or []
+    )
 
     list(voice._pcm_chunks(voice_obj, "Nested [[ae]] is_ok"))
 
     assert heard == ["Nested ae is ok"]  # nosec B101
     # Piper's own complaints about sounds it lacks stay out of the way.
     assert logging.getLogger("piper").level == logging.ERROR  # nosec B101
+
+
+# --- How the voice delivers it -------------------------------------------
+
+
+class _Heard:
+    """A Piper of either kind that keeps what it was asked to say, and
+    how."""
+
+    def __init__(self, streaming):
+        self.said = []
+        if streaming:
+            self.synthesize_stream_raw = self._raw
+
+    def _raw(self, text, **settings):
+        self.said.append((text, settings))
+        return [b"\x01\x00" * 10]
+
+    def synthesize(self, text, syn_config=None):
+        self.said.append((text, syn_config))
+        return [types.SimpleNamespace(audio_int16_bytes=b"\x01\x00" * 10)]
+
+
+def test_sentences_end_where_a_sentence_ends():
+    said = voice.sentences(
+        'Oh, nice! It costs 3.50 now. Did it work? Well... "Done." Okay'
+    )
+
+    assert said == [  # nosec B101
+        "Oh, nice!", "It costs 3.50 now.", "Did it work?", "Well...",
+        '"Done."', "Okay",
+    ]
+
+
+def test_each_sentence_gets_its_own_shape():
+    warm = voice.STYLES["warm"]
+
+    told, _ = voice.delivery("Here it is.", warm)
+    asked, _ = voice.delivery("Is it here?", warm)
+    glad, _ = voice.delivery("It is here!", warm)
+    _, trailing = voice.delivery("Well...", warm)
+
+    assert asked["length_scale"] > told["length_scale"]  # nosec B101
+    assert glad["length_scale"] < told["length_scale"]  # nosec B101
+    assert glad["noise_scale"] > told["noise_scale"]  # nosec B101
+    assert trailing > warm.breath  # nosec B101
+    plain = voice.delivery("Here.", voice.STYLES["plain"])
+    assert plain == ({}, 0.0)  # nosec B101
+
+
+def test_the_warm_voice_breathes_between_sentences(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "warm")
+    piper_voice = _Heard(streaming=True)
+
+    audio = b"".join(
+        voice._pcm_chunks(piper_voice, "Hi there! All done.", 100)
+    )
+
+    assert [text for text, _ in piper_voice.said] == [  # nosec B101
+        "Hi there!", "All done.",
+    ]
+    assert all(s["noise_scale"] for _, s in piper_voice.said)  # nosec B101
+    # Two sentences of 20 bytes each, and 0.32 s of quiet after each at
+    # 100 samples a second.
+    assert len(audio) == 2 * 20 + 2 * 32 * 2  # nosec B101
+
+
+def test_the_newer_piper_is_handed_the_style_as_its_config(monkeypatch):
+    piper = types.ModuleType("piper")
+    piper.SynthesisConfig = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "piper", piper)
+    monkeypatch.setenv("VOICE_STYLE", "lively")
+    piper_voice = _Heard(streaming=False)
+
+    list(voice._pcm_chunks(piper_voice, "Ready?", 100))
+
+    [(text, config)] = piper_voice.said
+    assert text == "Ready?"  # nosec B101
+    assert config["noise_w_scale"] == 1.0  # nosec B101
+    assert config["length_scale"] < 1  # nosec B101
+
+
+def test_plain_reads_as_the_voice_always_did(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "plain")
+    piper_voice = _Heard(streaming=True)
+
+    audio = b"".join(
+        voice._pcm_chunks(piper_voice, "Hi there! All done.", 100)
+    )
+
+    assert piper_voice.said == [("Hi there! All done.", {})]  # nosec B101
+    assert len(audio) == 20  # nosec B101
+
+
+def test_an_unknown_style_falls_back_to_warm(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "shouty")
+
+    assert voice.voice_style() == "warm"  # nosec B101
+
+
+class _Talking:
+    """A recognizer that hears "run the tests" "and then stop" a word a
+    block, finishing the first stretch after three blocks."""
+
+    WORDS = ["run", "the", "tests", "and", "then", "stop"]
+
+    def __init__(self, *_):
+        self.fed = 0
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return self.fed == 3
+
+    def Result(self):
+        return json.dumps({"text": "run the tests"})
+
+    def PartialResult(self):
+        return json.dumps({"partial": " ".join(self.WORDS[3:self.fed])})
+
+    def FinalResult(self):
+        return json.dumps({"text": " ".join(self.WORDS[3:self.fed])})
+
+
+def test_hearing_gives_the_words_so_far_and_keeps_every_stretch():
+    hearing = voice.Hearing(_Talking())
+
+    seen = [hearing.feed(b"..") for _ in range(5)]
+
+    assert seen == [  # nosec B101
+        "", "", "run the tests", "run the tests and",
+        "run the tests and then",
+    ]
+    # The first stretch is not lost from the end result.
+    assert hearing.final() == "run the tests and then"  # nosec B101
+
+
+def test_listen_shows_the_words_as_they_are_said(monkeypatch):
+    _fake_audio(monkeypatch, [_pcm(6000)] * 5 + [_pcm(0)] * 20)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+
+    shown = []
+    heard, why = listen(lambda _state: None, shown.append)
+
+    assert why == ""  # nosec B101
+    assert shown[:3] == [  # nosec B101
+        "run the tests", "run the tests and", "run the tests and then",
+    ]
+    assert heard.startswith("run the tests and then")  # nosec B101
+
+
+def test_a_room_never_quiet_ends_the_turn_once_the_words_settle(
+        monkeypatch):
+    # A video playing: loud from start to end, and never a pause.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+
+    heard, why = listen(lambda _state: None, settle=True)
+
+    assert why == ""  # nosec B101
+    assert heard.startswith("run the tests and then stop")  # nosec B101
+    # Ended a pause after the last word, not when the recording did.
+    assert len(stream.blocks) > 350  # nosec B101
+
+    # Without it, only a pause or the limit ends the turn.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+    listen(lambda _state: None, limit=5)
+    assert 348 <= len(stream.blocks) <= 350  # nosec B101
+
+
+def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+    monkeypatch.setattr(voice, "_live", {})
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    assert voice.hear_live("a", piece * 2) == ("", "")  # nosec B101
+    assert voice.hear_live("a", piece * 2) == (  # nosec B101
+        "run the tests and", "",
+    )
+    # Another recording starts from nothing.
+    assert voice.hear_live("b", piece) == ("", "")  # nosec B101
+
+    voice.hear_live("a", b"", end=True)
+    assert "a" not in voice._live and "b" in voice._live  # nosec B101
+
+
+class _Waking:
+    """A recognizer held to a grammar, which hears "hey", then "hey
+    flash", a block at a time."""
+
+    made: list = []
+
+    def __init__(self, model, rate, grammar=None):
+        self.grammar = grammar
+        self.fed = 0
+        self.resets = 0
+        _Waking.made.append(self)
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return False
+
+    def PartialResult(self):
+        said = ["", "hey", "hey flash"][min(self.fed, 2)]
+        return json.dumps({"partial": said})
+
+    def Reset(self):
+        self.resets += 1
+        self.fed = 0
+
+
+def test_hey_flash_is_heard_and_nothing_else_is_listened_for(monkeypatch):
+    # Turned all the way up: heard mid phrase.
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "100")
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Waking
+    monkeypatch.setattr(voice, "_wake", {})
+    _Waking.made = []
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    assert voice.hear_wake("w", piece) == (True, "")  # nosec B101
+
+    heard = _Waking.made[0]
+    assert json.loads(heard.grammar) == [  # nosec B101
+        *voice.WAKE_PHRASES, "[unk]",
+    ]
+    # Heard once, it starts listening afresh for the next time.
+    assert heard.resets == 1  # nosec B101
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    voice.hear_wake("w", b"", end=True)
+    assert "w" not in voice._wake  # nosec B101
+
+
+class _Finished:
+    """A recognizer that hears "hey flash" in full on its second block,
+    as sure of each word as CONF, and "hey flash" mid phrase before."""
+
+    conf = 0.9
+
+    def __init__(self, model, rate, grammar=None):
+        self.fed = 0
+        self.words = False
+
+    def SetWords(self, on):
+        self.words = on
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return self.fed == 2
+
+    def PartialResult(self):
+        return json.dumps({"partial": "hey flash"})
+
+    def Result(self):
+        return json.dumps({"text": "hey flash", "result": [
+            {"word": "hey", "conf": 1.0},
+            {"word": "flash", "conf": _Finished.conf},
+        ]})
+
+    def Reset(self):
+        self.fed = 0
+
+
+@pytest.mark.parametrize("sensitivity, conf, woke", [
+    (50, 0.7, True),
+    (50, 0.5, False),
+    (0, 0.9, False),
+    (0, 0.97, True),
+    (100, 0.4, True),
+])
+def test_how_sure_it_has_to_be_follows_the_sensitivity(
+        monkeypatch, sensitivity, conf, woke):
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", str(sensitivity))
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Finished
+    monkeypatch.setattr(voice, "_wake", {})
+    monkeypatch.setattr(_Finished, "conf", conf)
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    # Below eager, the phrase mid way wakes nothing: only said in full.
+    first = voice.hear_wake("w", piece)
+    assert first == (sensitivity >= voice.WAKE_EAGER, "")  # nosec B101
+    if sensitivity < voice.WAKE_EAGER:
+        assert voice.hear_wake("w", piece) == (woke, "")  # nosec B101
+
+
+def test_wake_sensitivity_is_kept_in_bounds(monkeypatch):
+    assert voice.wake_sensitivity() == 50  # nosec B101
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "400")
+    assert voice.wake_sensitivity() == 100  # nosec B101
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "loud")
+    assert voice.wake_sensitivity() == 50  # nosec B101
+
+
+def test_waking_without_the_listening_model_says_why(monkeypatch):
+    monkeypatch.setitem(sys.modules, "vosk", None)
+    monkeypatch.setattr(voice, "_wake", {})
+
+    woke, why = voice.hear_wake("w", b"\0\0")
+
+    assert woke is False and why == voice.INSTALL_HINT  # nosec B101
+
+
+class _FakeKokoro:
+    """Stands in for kokoro_onnx.Kokoro: a short tone per piece of text,
+    longer the slower it is asked to speak."""
+
+    made: list = []
+
+    def __init__(self, model, voices):
+        _FakeKokoro.made.append((model, voices))
+        self.asked: list = []
+
+    def create(self, text, voice, speed=1.0, lang="en-us"):
+        import numpy
+
+        self.asked.append((text, voice, speed, lang))
+        return numpy.full(int(2400 / speed), 0.25, dtype="float32"), 24000
+
+
+@pytest.fixture
+def kokoro(monkeypatch, tmp_path):
+    module = types.ModuleType("kokoro_onnx")
+    module.Kokoro = _FakeKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", module)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_speaker", None)
+    monkeypatch.setattr(voice, "_kokoro", None)
+    _FakeKokoro.made = []
+    for path in voice.kokoro_paths():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"model")
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-bf_emma")
+    return module
+
+
+def test_kokoro_voices_are_offered_and_share_one_download(kokoro):
+    names = [c.name for c in voice.SPEAKING if voice.is_kokoro(c.name)]
+
+    assert "kokoro-af_heart" in names and len(names) >= 4  # nosec B101
+    # The files are shared: every Kokoro voice is in once they are.
+    assert all(voice.voice_installed(n) for n in names)  # nosec B101
+    assert voice.models_present() is False  # nosec B101  (no listening)
+
+
+def test_kokoro_speaks_through_the_same_path(kokoro, monkeypatch):
+    # Speaking goes through numpy, which comes with the voice extras.
+    pytest.importorskip("numpy")
+    monkeypatch.setenv("VOICE_STYLE", "calm")
+
+    wav, why = voice.synthesize("Hello there. How are you?")
+
+    assert why == ""  # nosec B101
+    with wave.open(io.BytesIO(wav)) as heard:
+        assert heard.getframerate() == voice.KOKORO_RATE  # nosec B101
+    spoken = voice._kokoro[1].asked
+    # A sentence at a time, in the voice's accent, at the style's pace.
+    assert [s[0] for s in spoken] == [  # nosec B101
+        "Hello there.", "How are you?",
+    ]
+    assert {s[1] for s in spoken} == {"bf_emma"}  # nosec B101
+    assert {s[3] for s in spoken} == {"en-gb"}  # nosec B101
+    assert all(s[2] < 1.0 for s in spoken)  # nosec B101  (calm is slower)
+    # One network for every voice: another voice loads nothing new.
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-af_heart")
+    voice.synthesize("Hi.")
+    assert len(_FakeKokoro.made) == 1  # nosec B101
+
+
+def test_kokoro_without_its_package_says_how(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", None)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_speaker", None)
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-af_heart")
+
+    assert voice.KOKORO_PACKAGE in voice.missing_packages()  # nosec B101
+    assert voice.install_hint() == voice.KOKORO_HINT  # nosec B101
+    assert voice.kokoro_ready() is False  # nosec B101
+
+
+def test_kokoro_downloads_what_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    fetched = []
+
+    def download(url, out, label, on_progress, stop=None):
+        fetched.append(url.rsplit("/", 1)[1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return ""
+
+    monkeypatch.setattr(voice, "_download", download)
+
+    assert voice.download_voice("kokoro-af_heart", lambda *a: None) == ""
+    assert fetched == list(voice.KOKORO_FILES)  # nosec B101
+    # Another Kokoro voice needs nothing more.
+    assert voice.download_voice("kokoro-am_michael", lambda *a: None) == ""
+    assert len(fetched) == 2  # nosec B101
+
+
+def test_kokoro_is_not_removed_from_under_the_voice_in_use(kokoro):
+    with pytest.raises(ValueError, match="in use"):
+        voice.remove_voice("kokoro-af_heart")
+
+
+def test_kokoro_is_removed_once_none_speaks(kokoro, monkeypatch):
+    monkeypatch.setenv("VOICE_PIPER_VOICE", voice.DEFAULT_PIPER_VOICE)
+
+    voice.remove_voice("kokoro-af_heart")
+
+    assert not any(p.exists() for p in voice.kokoro_paths())  # nosec B101
+
+
+def test_an_update_puts_kokoro_back_when_it_was_in(monkeypatch):
+    from flash import updater
+
+    found = types.SimpleNamespace()
+    monkeypatch.setattr("importlib.util.find_spec",
+                        lambda name: found if name == "kokoro_onnx" else None)
+    assert updater.KOKORO_PACKAGE in updater.voice_packages()  # nosec
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    assert updater.voice_packages() == list(  # nosec B101
+        updater.VOICE_PACKAGES)
+
+
+class _MoonStream:
+    """Stands in for a Moonshine stream: each piece of audio fed to it
+    reveals the next of HEARD, as its listeners hear lines change."""
+
+    def __init__(self, heard):
+        self.heard = list(heard)
+        self.listeners: list = []
+        self.fed: list = []
+        self.started = self.stopped = self.closed = False
+
+    def add_listener(self, listener):
+        self.listeners.append(listener)
+
+    def start(self):
+        self.started = True
+
+    def add_audio(self, samples, rate):
+        self.fed.append((len(samples), rate, min(samples), max(samples)))
+        if self.heard:
+            line_id, text = self.heard.pop(0)
+            line = types.SimpleNamespace(line_id=line_id, text=text)
+            for listener in self.listeners:
+                listener(types.SimpleNamespace(line=line))
+
+    def stop(self):
+        self.stopped = True
+        return types.SimpleNamespace(lines=[
+            types.SimpleNamespace(line_id=0, text="Hello there."),
+            types.SimpleNamespace(line_id=1, text="Run the tests."),
+        ])
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeMoonshine:
+    made: list = []
+    streams: list = []
+
+    def __init__(self, path, arch):
+        _FakeMoonshine.made.append((path, arch))
+
+    def create_stream(self):
+        stream = _MoonStream([(0, "Hello"), (0, "Hello there."),
+                              (1, "Run")])
+        _FakeMoonshine.streams.append(stream)
+        return stream
+
+
+@pytest.fixture
+def moonshine(monkeypatch, tmp_path):
+    import enum
+
+    module = types.ModuleType("moonshine_voice")
+    module.Transcriber = _FakeMoonshine
+    module.ModelArch = enum.IntEnum("ModelArch", {
+        "TINY_STREAMING": 2, "SMALL_STREAMING": 4, "MEDIUM_STREAMING": 5,
+    })
+    monkeypatch.setitem(sys.modules, "moonshine_voice", module)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_moonshine", None)
+    _FakeMoonshine.made = []
+    _FakeMoonshine.streams = []
+    for file in voice.MOONSHINE_FILES:
+        (tmp_path / "moonshine-small").mkdir(exist_ok=True)
+        (tmp_path / "moonshine-small" / file).write_bytes(b"model")
+    monkeypatch.setenv("VOICE_VOSK_MODEL", "moonshine-small")
+    return module
+
+
+def test_moonshine_models_are_offered_beside_vosk():
+    offered = {c.name: c.size for c in voice.LISTENING}
+
+    for name, (_, sizes) in voice.MOONSHINE_MODELS.items():
+        assert offered[name] == sum(sizes)  # nosec B101
+        assert len(sizes) == len(voice.MOONSHINE_FILES)  # nosec B101
+    assert voice.find_model("moonshine-small")[0] == "listening"  # nosec
+
+
+def test_moonshine_downloads_as_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    fetched, shown = [], []
+
+    def download(url, out, label, on_progress, stop=None):
+        fetched.append(url)
+        on_progress(label, 50)
+        on_progress(label, 100)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return ""
+
+    monkeypatch.setattr(voice, "_download", download)
+
+    assert voice.download_listening(  # nosec B101
+        "moonshine-tiny", lambda label, percent: shown.append(percent),
+    ) == ""
+    base = (f"{voice.MOONSHINE_BASE}/tiny-streaming-en/"
+            f"{voice.MOONSHINE_RELEASE}")
+    assert fetched == [  # nosec B101
+        f"{base}/{file}" for file in voice.MOONSHINE_FILES
+    ]
+    # One bar for all its files, never going back.
+    assert shown == sorted(shown) and shown[-1] == 100  # nosec B101
+    assert voice.listening_installed("moonshine-tiny")  # nosec B101
+    assert voice.download_listening("moonshine-tiny", print) == ""  # nosec
+    assert len(fetched) == len(voice.MOONSHINE_FILES)  # nosec B101
+
+
+def test_moonshine_hears_a_recording(moonshine, tmp_path):
+    text, why = voice.transcribe(_pcm(16000) * 3)
+
+    assert (text, why) == ("Hello there. Run the tests.", "")  # nosec B101
+    assert _FakeMoonshine.made == [  # nosec B101
+        (str(tmp_path / "moonshine-small"), 4),
+    ]
+    stream = _FakeMoonshine.streams[0]
+    assert stream.started and stream.stopped and stream.closed  # nosec
+    # Fed as samples between -1 and 1, at the rate Flash records.
+    count, rate, low, high = stream.fed[0]
+    assert (count, rate) == (voice.BLOCK_FRAMES, 16000)  # nosec B101
+    assert -1.0 <= low <= high <= 1.0  # nosec B101
+    # The model loads once.
+    voice.transcribe(_pcm(100))
+    assert len(_FakeMoonshine.made) == 1  # nosec B101
+
+
+def test_moonshine_streams_the_words_as_they_come(moonshine):
+    piece = _pcm(9000)
+
+    assert voice.hear_live("a", piece) == ("Hello", "")  # nosec B101
+    assert voice.hear_live("a", piece) == ("Hello there.", "")  # nosec
+    assert voice.hear_live("a", piece) == (  # nosec B101
+        "Hello there. Run", "",
+    )
+    stream = _FakeMoonshine.streams[0]
+    assert not stream.closed  # nosec B101
+    voice.hear_live("a", b"", end=True)
+    assert stream.closed  # nosec B101
+
+
+def test_moonshine_listens_in_the_terminal(moonshine, monkeypatch):
+    _fake_audio(monkeypatch, [_pcm(4000)] * 3)
+    monkeypatch.setenv("VOICE_SILENCE_SECONDS", "0.3")
+    words = []
+
+    text, why = listen(lambda state: None, words.append)
+
+    assert (text, why) == ("Hello there. Run the tests.", "")  # nosec
+    assert words[0] == "Hello"  # nosec B101
+    assert _FakeMoonshine.streams[0].closed  # nosec B101
+
+
+def test_hey_flash_stays_with_vosk_while_moonshine_listens(moonshine,
+                                                           tmp_path):
+    assert voice.wake_model() == voice.DEFAULT_VOSK_MODEL  # nosec B101
+    # The listening is here; "Hey Flash"'s model is not yet.
+    assert voice.models_present() is False  # nosec B101
+
+    (tmp_path / "vosk-model-en-us-0.22-lgraph" / "am").mkdir(parents=True)
+    assert voice.wake_model() == "vosk-model-en-us-0.22-lgraph"  # nosec
+    with pytest.raises(ValueError, match="Hey Flash"):
+        voice.remove_listening("vosk-model-en-us-0.22-lgraph")
+
+
+def test_setting_up_moonshine_fetches_hey_flash_model_too(moonshine,
+                                                          monkeypatch):
+    monkeypatch.setattr(voice, "voice_installed", lambda name: True)
+    fetched = []
+
+    def fetch(name, on_progress, stop=None):
+        fetched.append(name)
+        return ""
+
+    monkeypatch.setattr(voice, "download_listening", fetch)
+
+    assert ensure_models(lambda *a: None) == ""  # nosec B101
+    assert fetched == [  # nosec B101
+        "moonshine-small", voice.DEFAULT_VOSK_MODEL,
+    ]
+
+
+def test_moonshine_without_its_package_says_how(moonshine, monkeypatch):
+    monkeypatch.setitem(sys.modules, "moonshine_voice", None)
+
+    assert voice.MOONSHINE_PACKAGE in voice.missing_packages()  # nosec
+    assert voice.install_hint() == voice.MOONSHINE_HINT  # nosec B101
+    assert voice.moonshine_ready() is False  # nosec B101
+    assert voice.transcribe(_pcm(100)) == (  # nosec B101
+        "", voice.MOONSHINE_HINT,
+    )
+
+
+def test_an_update_puts_moonshine_back_when_it_was_in(monkeypatch):
+    from flash import updater
+
+    found = types.SimpleNamespace()
+    monkeypatch.setattr(
+        "importlib.util.find_spec",
+        lambda name: found if name == "moonshine_voice" else None,
+    )
+    assert updater.voice_packages() == [  # nosec B101
+        *updater.VOICE_PACKAGES, updater.MOONSHINE_PACKAGE,
+    ]
+
+
+def test_models_are_grouped_by_their_engine():
+    from flash import voice
+
+    assert voice.engine_of("vosk-model-small-en-us-0.15") == "Vosk"
+    assert voice.engine_of(f"{voice.MOONSHINE}tiny") == "Moonshine"
+    assert voice.engine_of("en_US-amy-low") == "Piper"
+    assert voice.engine_of(f"{voice.KOKORO}af_heart") == "Kokoro"
+
+    listening = [voice.engine_of(c.name)
+                 for c in voice.by_engine(voice.LISTENING)]
+    assert listening == sorted(listening, key=["Vosk", "Moonshine"].index)
+    speaking = [voice.engine_of(c.name)
+                for c in voice.by_engine(voice.SPEAKING)]
+    assert speaking == sorted(
+        speaking, key=["Phonon", "Kokoro", "Piper"].index)
+
+
+def test_the_next_piece_is_made_while_one_plays():
+    import threading
+    import time
+
+    made = []
+
+    def pieces():
+        for n in range(3):
+            made.append((n, time.monotonic()))
+            time.sleep(0.05)
+            yield n
+
+    taken = []
+    for piece in voice.ahead(pieces()):
+        taken.append((piece, time.monotonic()))
+        time.sleep(0.2)  # "playing" it
+    assert [p for p, _ in taken] == [0, 1, 2]
+    # Piece 1 was being made before piece 0 had finished playing.
+    assert made[1][1] < taken[0][1] + 0.2
+    stop = threading.Event()
+    stop.set()
+    assert list(voice.ahead(iter([1, 2]), stop)) in ([], [1], [1, 2])
+
+
+def test_a_long_sentence_is_said_in_parts():
+    long = ("This is a long sentence about the weather, which goes on for a "
+            "while, and then it goes on a little more before it stops.")
+    parts = voice._parts(long)
+    assert len(parts) > 1 and " ".join(parts) == long
+    assert voice._parts("Short.") == ["Short."]
+
+
+class TestWakeWord:
+    def test_the_default_and_its_greetings(self, monkeypatch):
+        monkeypatch.delenv(voice.WAKE_SETTING, raising=False)
+        assert voice.wake_phrases() == voice.WAKE_PHRASES  # nosec B101
+        assert voice.wake_title() == "Hey Flash"  # nosec B101
+
+    def test_a_word_of_your_own(self, monkeypatch):
+        monkeypatch.setenv(voice.WAKE_SETTING, "Hey,  Nova!")
+        assert voice.wake_word() == "hey nova"  # nosec B101
+        assert voice.wake_title() == "Hey Nova"  # nosec B101
+        assert voice.wake_phrases() == (  # nosec B101
+            "hey nova", "hi nova", "okay nova", "ok nova")
+        assert voice._woke('{"text": "um hi nova"}', "text")  # nosec B101
+        assert not voice._woke('{"text": "hey flash"}', "text")  # nosec B101
+        monkeypatch.setenv(voice.WAKE_SETTING, "computer")
+        assert voice.wake_phrases()[:2] == (  # nosec B101
+            "computer", "hey computer")
+
+    def test_checked_against_the_model(self, monkeypatch):
+        class Model:
+            def find_word(self, word):
+                return -1 if word == "zorblax" else 7
+
+        monkeypatch.setattr(voice, "_load_listener", lambda: Model())
+        assert voice.check_wake_word("hey nova") == ""  # nosec B101
+        assert "zorblax" in voice.check_wake_word("hey zorblax")  # nosec B101
+        assert voice.check_wake_word("hi") != ""  # nosec B101
+        assert voice.check_wake_word("a b c d e") != ""  # nosec B101
+
+    def test_a_new_word_makes_a_new_recognizer(self, monkeypatch):
+        _fake_audio(monkeypatch)
+        sys.modules["vosk"].KaldiRecognizer = _Waking
+        monkeypatch.setattr(voice, "_wake", {})
+        _Waking.made = []
+        piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+        monkeypatch.delenv(voice.WAKE_SETTING, raising=False)
+        voice.hear_wake("w", piece)
+        monkeypatch.setenv(voice.WAKE_SETTING, "hey nova")
+        voice.hear_wake("w", piece)
+        grammars = [json.loads(m.grammar) for m in _Waking.made]
+        assert grammars[-1][0] == "hey nova"  # nosec B101
+        assert len(_Waking.made) == 2  # nosec B101
+
+
+def test_voice_devices_can_be_chosen_by_name(monkeypatch, tmp_path):
+    """A virtual device such as BlackHole can carry both ears and mouth."""
+
+    stream = _fake_audio(monkeypatch)
+    _fake_piper(monkeypatch, tmp_path, streaming=True)
+    opened = []
+    sounddevice = sys.modules["sounddevice"]
+
+    def opener(kind):
+        return lambda **kw: opened.append((kind, kw)) or stream
+
+    sounddevice.RawInputStream = opener("in")
+    sounddevice.RawOutputStream = opener("out")
+    monkeypatch.setenv("VOICE_INPUT_DEVICE", "BlackHole 2ch")
+    monkeypatch.setenv("VOICE_OUTPUT_DEVICE", "Loopback Audio")
+
+    listen(lambda _: None)
+    speak("all done")
+
+    assert ("in", "BlackHole 2ch") in [  # nosec B101
+        (k, kw.get("device")) for k, kw in opened]
+    assert ("out", "Loopback Audio") in [  # nosec B101
+        (k, kw.get("device")) for k, kw in opened]
+
+
+def test_voice_devices_default_to_the_system_ones(monkeypatch):
+    monkeypatch.delenv("VOICE_INPUT_DEVICE", raising=False)
+    monkeypatch.setenv("VOICE_OUTPUT_DEVICE", "  ")
+
+    assert voice.input_device() is None  # nosec B101
+    assert voice.output_device() is None  # nosec B101
+
+
+def test_how_talking_over_a_reply_cuts_it_off(monkeypatch):
+    monkeypatch.delenv("VOICE_INTERRUPT", raising=False)
+    monkeypatch.delenv("CALL_INTERRUPT", raising=False)
+    # Voice mode waits for the word; a call is cut by anything said.
+    assert voice.interrupt_how("voice") == "word"
+    assert voice.interrupt_how("calls") == "anything"
+    monkeypatch.setenv("VOICE_INTERRUPT", "anything")
+    monkeypatch.setenv("CALL_INTERRUPT", "word")
+    assert voice.interrupt_how("voice") == "anything"
+    assert voice.interrupt_how("calls") == "word"
+    monkeypatch.setenv("CALL_INTERRUPT", "nonsense")
+    assert voice.interrupt_how("calls") == "anything"
+
+
+def test_only_the_users_own_words_count_as_talking_over():
+    line = "The build broke on the payments test after the last merge"
+    assert voice._talked_over("wait roll it back", line)
+    # Its own words, back through the microphone, do not.
+    assert not voice._talked_over("the payments test after", line)
+    # Nor a single sound.
+    assert not voice._talked_over("uh", line)
+
+
+class _FakePhonon:
+    """A stand-in for ptts: it keeps how it was loaded and what it said."""
+
+    made: list = []
+    fail_local = False
+
+    def __init__(self, model=None, *, lang=None, quant=None,
+                 voice_catalog=None):
+        if self.fail_local and not str(model).startswith("hf://"):
+            raise OSError("not a model folder")
+        _FakePhonon.made.append({"model": model, "lang": lang,
+                                 "quant": quant, "catalog": voice_catalog})
+        self.said = []
+
+    def synth(self, text, voice=None):
+        import numpy
+
+        self.said.append((text, voice))
+        return numpy.array([0.0, 0.5, -2.0], dtype="float32")
+
+
+class TestPhonon:
+    @pytest.fixture(autouse=True)
+    def phonon(self, tmp_path, monkeypatch):
+        fake = types.ModuleType("ptts")
+        fake.TTS = _FakePhonon
+        _FakePhonon.made = []
+        _FakePhonon.fail_local = False
+        monkeypatch.setitem(sys.modules, "ptts", fake)
+        monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+        monkeypatch.setattr(voice, "_phonon", None)
+        monkeypatch.setattr(voice, "_speaker", None)
+        return tmp_path
+
+    def test_one_download_brings_the_model_and_every_voice(
+            self, monkeypatch):
+        fetched = []
+
+        def fetch(url, out, label, on_progress, stop=None):
+            fetched.append(url)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"x")
+            return ""
+
+        monkeypatch.setattr(voice, "_download", fetch)
+        assert not voice.voice_installed("phonon-harper")  # nosec B101
+
+        why = voice.download_voice("phonon-harper", lambda *a: None)
+
+        assert why == ""  # nosec B101
+
+        assert len(fetched) == len(voice.PHONON_FILES) + len(  # nosec B101
+            voice.PHONON_VOICES)
+        assert all(voice.voice_installed(f"phonon-{v}")  # nosec B101
+                   for v in voice.PHONON_VOICES)
+        catalog = (voice.phonon_dir() / "voices.jsonl").read_text(
+            encoding="utf-8").splitlines()
+        assert len(catalog) == len(voice.PHONON_VOICES)  # nosec B101
+        assert json.loads(catalog[0])["name"] == "Harper"  # nosec B101
+        assert not voice.voice_installed("phonon-nobody")  # nosec B101
+
+    def test_it_speaks_from_its_own_folder_in_the_voice_picked(self):
+        pytest.importorskip("numpy")
+        speaker = voice._PhononVoice("phonon-maeve")
+
+        pcm = speaker.pcm("Hello there.")
+
+        [made] = _FakePhonon.made
+        assert made["model"] == str(voice.phonon_dir())  # nosec B101
+        assert made["lang"] == "en" and made["quant"] == "q8"  # nosec B101
+        assert made["catalog"].endswith("voices.jsonl")  # nosec B101
+        assert speaker.model.said == [("Hello there.", "Maeve")]  # nosec B101
+        said = array.array("h", pcm).tolist()
+        assert said == [0, 16383, -32767]  # nosec B101
+
+    def test_it_falls_back_to_its_own_download(self):
+        _FakePhonon.fail_local = True
+
+        voice._PhononVoice("phonon-harper")
+
+        made = _FakePhonon.made[0]["model"]
+        assert made == voice.PHONON_REMOTE  # nosec B101
+
+    def test_one_model_serves_every_voice(self):
+        voice._PhononVoice("phonon-harper")
+        voice._PhononVoice("phonon-miles")
+
+        assert len(_FakePhonon.made) == 1  # nosec B101
+
+    def test_without_the_package_it_says_what_to_install(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ptts", None)
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        with pytest.raises(RuntimeError, match="ptts"):
+            voice._PhononVoice("phonon-harper")
+        assert voice.PHONON_PACKAGE in voice.missing_packages()  # nosec B101
+        assert voice.install_hint() == voice.PHONON_HINT  # nosec B101
+        assert not voice.phonon_ready()  # nosec B101
+
+    def test_a_spark_gets_another_phonon_voice(self, monkeypatch):
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        own = voice.spark_voice("spark-1")
+
+        assert voice.is_phonon(own["voice"])  # nosec B101
+        assert own["voice"] != "phonon-harper"  # nosec B101
+
+    def test_its_download_stays_while_one_of_its_voices_speaks(
+            self, monkeypatch):
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        with pytest.raises(ValueError, match="in use"):
+            voice.remove_voice("phonon-miles")
+
+
+class TestFalseWakes:
+    def test_the_name_must_really_be_heard(self):
+        phrases = voice.wake_phrases("hey flash")
+        assert voice._name_heard("hey flash what time is it", phrases)  # nosec B101
+        assert voice._name_heard("a flesh", phrases)  # nosec B101
+        assert not voice._name_heard("hey fella", phrases)  # nosec B101
+        assert not voice._name_heard("the weather today", phrases)  # nosec B101
+
+    def test_heard_again_freely_before_it_wakes(self, monkeypatch):
+        monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "100")
+        _fake_audio(monkeypatch)
+        monkeypatch.setattr(voice, "_wake", {})
+        monkeypatch.setattr(voice, "_wake_audio", {})
+        said = {"free": "the weather is nice"}
+
+        class Free(_Waking):
+            def FinalResult(self):
+                return json.dumps({"text": said["free"]})
+
+        sys.modules["vosk"].KaldiRecognizer = Free
+        piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+        voice.hear_wake("w", piece)
+        # The grammar heard "hey flash", but nothing like it was said.
+        assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+        said["free"] = "hey flash"
+        voice.hear_wake("w", piece)
+        assert voice.hear_wake("w", piece) == (True, "")  # nosec B101
+        voice.hear_wake("w", b"", end=True)
+        assert "w" not in voice._wake_audio  # nosec B101
+
+
+class TestDismissals:
+    @pytest.mark.parametrize("text", ["Stop voice.", "close", "Never mind", "okay cancel",
+                                      "flash stop", "nothing", "go away"])
+    def test_first_words_that_end_it(self, text):
+        assert voice.voice_command(text, first=True)["exit"]  # nosec B101
+
+    def test_later_only_the_exit_phrases_do(self):
+        assert not voice.voice_command("never mind", first=False)["exit"]  # nosec B101
+        assert voice.voice_command("close", first=False)["exit"]  # nosec B101
+        assert not voice.voice_command("stop the music now please", first=True)["exit"]  # nosec B101
+        assert not voice.voice_command("what can you do", first=True)["exit"]  # nosec B101

@@ -6,10 +6,10 @@ in the background over what just happened and writes down what is
 worth keeping, as a new or corrected skill or a remembered fact, so
 the next session starts out knowing it.
 
-The design follows Hermes Agent's. The review is a separate pass after
-the reply has gone out, never part of the user's turn, and it only
-runs once there has been enough work to learn from: SKILL_REVIEW_AFTER
-tool calls since the last one, or MEMORY_REVIEW_EVERY messages.
+The review is a separate pass after the reply has gone out, never part
+of the user's turn, and it only runs once there has been enough work
+to learn from: SKILL_REVIEW_AFTER tool calls since the last one, or
+MEMORY_REVIEW_EVERY messages.
 """
 
 import os
@@ -19,9 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import ollama
-
-from . import context, skills
+from . import context, loop, providers, skills, skilltrials
 from .memory import list_memory
 from .theme import capture_tool_output
 
@@ -42,7 +40,8 @@ MAX_REVIEW_ROUNDS = 6
 
 # The tools the review may call. No shell, no files, no forget: it
 # works unattended, so it gets nothing it could do damage with.
-REVIEW_TOOL_NAMES = ("skill_view", "skill_manage", "remember", "recall")
+REVIEW_TOOL_NAMES = ("skill_view", "skill_manage", "remember", "recall",
+                     "update_user_model")
 
 NOTHING = "Nothing to save."
 
@@ -99,6 +98,40 @@ MEMORY_TASK = "Review the conversation above and save anything worth " \
 BOTH_TASK = "Review the conversation above: update the skill library, " \
     "and save anything worth remembering about the user or their " \
     "environment."
+
+PROJECT_GUIDE = """\
+This conversation was worked in a project. What it taught you about the \
+project itself goes in the project's own memory: remember with project \
+true. Worth keeping: the commands that build, test and run it and that \
+worked; its conventions and layout; where things live; a mistake that \
+cost time and what fixed it; a decision made and why. Keep facts about \
+the user out of it (plain remember), and keep it current: one short \
+line each, nothing the project's memory below already says."""
+
+PROJECT_TASK = " And save what it taught you about this project in the " \
+    "project's memory."
+
+# Said by the user, a decision or a standing preference is worth keeping at once, not ten messages later: the
+# next turn may already be in a new session.
+import re as _re  # noqa: E402
+
+DECIDED = _re.compile(
+    r"\b(let'?s (go|stick) with|we'?ll (go with|use)|(i|we) (decided|chose|picked|went with)|decided (to|on)|"
+    r"from now on|going forward|always (use|do|write|keep|put|call|ask)|never (use|do|write|put|call|again)|"
+    r"don'?t ever|stop (doing|using|adding)|i (prefer|want you to|like it when|hate it when)|"
+    r"(use|call it|name it) .{1,40} instead|stick to|the rule is|make sure (you|to) always)\b", _re.I)
+
+DECISION_GUIDE = """The user just stated a decision or a standing preference. Keep it now, so it is never asked again: the decision as one short line that starts with "Decided:" and ends with the reason when they gave one, in the project's memory (remember with project true) when it is about the project, else in plain memory. If an older line says the opposite, correct that line instead of adding a second one. Save nothing for a choice that only held for this one task."""
+
+
+def decided(text: str) -> bool:
+    """Whether TEXT, the user's words, states a decision or a standing preference."""
+
+    return bool(DECIDED.search(text or ""))
+
+PROFILE_TASK = " Then, only if the conversation showed something lasting " \
+    "about the user that the profile misses or gets wrong, update that " \
+    "section of the profile."
 
 
 def _setting(name: str, default: int) -> int:
@@ -170,8 +203,22 @@ def prompt_block() -> str:
     global _snapshot
 
     if _snapshot is None:
+        from . import vault  # the names of the user's secrets, never more
+
+        try:
+            secrets = vault.prompt_block()
+        except Exception:  # noqa: BLE001
+            secrets = ""
+        from . import usermodel  # deferred: kept beside memory
+
+        try:
+            profile = usermodel.prompt_block()
+        except Exception:  # noqa: BLE001
+            profile = ""
         _snapshot = "\n\n".join(
-            part for part in (memory_block(), skills.listing()) if part
+            part for part in (profile, memory_block(), skills.listing(),
+                              secrets)
+            if part
         )
 
     return _snapshot
@@ -192,6 +239,17 @@ class Review:
     skills: bool
     memory: bool
     started: float = field(default_factory=time.time)
+    # A review the user asked for by rating a reply: what they thought
+    # of which reply, and why, if they said.
+    rating: str = ""
+    # The project the conversation was worked in ("" for none): what it
+    # learned about the project goes in the project's own memory.
+    project: str = ""
+    # Whether it may rewrite the user profile (flash/usermodel.py), which
+    # it does alongside memory while the setting is on.
+    profile: bool = False
+    # Started because the user stated a decision or a standing preference: kept at once.
+    decision: bool = False
     actions: list[str] = field(default_factory=list)
     reply: str = ""
     error: str = ""
@@ -229,9 +287,67 @@ def running() -> bool:
 
 
 def _task(review: Review) -> str:
+    if review.rating:
+        return review.rating
     if review.skills and review.memory:
         return BOTH_TASK
     return SKILLS_TASK if review.skills else MEMORY_TASK
+
+
+RATED_GOOD = (
+    "The user marked this reply of yours as a good one:\n\n{reply}\n{why}\n"
+    "Work out what made it good for them (its approach, format, length, "
+    "tone) and, only if that is a way of working worth repeating for a "
+    "class of task, save it as a skill or a remembered preference. A "
+    "reply that was simply right needs nothing saved."
+)
+
+RATED_BAD = (
+    "The user marked this reply of yours as a bad one:\n\n{reply}\n{why}\n"
+    "Work out what was wrong with it from the conversation and what they "
+    "said, and save what to do differently next time: correct the skill "
+    "that led to it, or save the preference it went against. Save "
+    "nothing you would have to guess at."
+)
+
+RATED_REPLY_CHARS = 3000
+
+
+def rated(
+    messages: list[dict],
+    reply: str,
+    good: bool,
+    why: str = "",
+    *,
+    host: str,
+    model: str,
+    start: Callable[..., Any] = threading.Thread,
+) -> Optional[Review]:
+    """The user rated REPLY, in the conversation MESSAGES: a review now,
+    of that, on a thread of its own. Not counted against the reviews
+    after turns, and run even while one of those is."""
+
+    try:
+        skilltrials.rated(reply, good)
+    except OSError:
+        pass
+    if not model:
+        return None
+    reply = str(reply or "").strip()
+    if len(reply) > RATED_REPLY_CHARS:
+        reply = reply[:RATED_REPLY_CHARS] + "\n(cut)"
+    why = " ".join(str(why or "").split())
+    task = (RATED_GOOD if good else RATED_BAD).format(
+        reply="\n".join(f"> {line}" for line in reply.splitlines()),
+        why=f"\nWhy, in their words: {why}\n" if why else "")
+    review = Review(skills=True, memory=True, rating=task)
+    worker = start(
+        target=_run,
+        args=(review, [dict(m) for m in messages], host, model),
+        daemon=True,
+    )
+    worker.start()
+    return review
 
 
 def review_messages(review: Review, messages: list[dict]) -> list[dict]:
@@ -243,9 +359,27 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
         guides.append(
             skills.listing() or "=== Skills ===\nNo skills saved yet."
         )
+    if review.decision:
+        guides.append(DECISION_GUIDE)
     if review.memory:
         guides.append(MEMORY_GUIDE)
         guides.append(memory_block() or "=== Memory ===\nNothing saved yet.")
+    if review.profile:
+        from . import usermodel  # deferred: kept beside memory
+
+        guides.append(usermodel.GUIDE)
+        guides.append(usermodel.review_block())
+    if review.memory and review.project:
+        from . import memory  # deferred: memory imports nothing of ours
+
+        guides.append(PROJECT_GUIDE)
+        try:
+            kept = memory.list_memory(memory.project_path(review.project))
+        except ValueError:
+            kept = []
+        guides.append("=== The project's memory ===\n" + (
+            "\n".join(f"- {entry}" for entry in kept[-60:])
+            or "Nothing saved yet."))
 
     conversation = context.transcript(messages)
     if len(conversation) > REVIEW_INPUT_CHARS:
@@ -263,6 +397,10 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
                 f"{conversation}\n"
                 "=== End of conversation ===\n\n"
                 f"{_task(review)}"
+                + (PROJECT_TASK if review.memory and review.project
+                   else "")
+                + (PROFILE_TASK if review.profile else "")
+                + (" First of all, keep the decision or preference the user just stated." if review.decision else "")
             ),
         },
     ]
@@ -280,6 +418,8 @@ def _allowed(review: Review) -> tuple[str, ...]:
         names += ["skill_view", "skill_manage"]
     if review.memory:
         names += ["remember", "recall"]
+    if review.profile:
+        names += ["update_user_model"]
     return tuple(names)
 
 
@@ -300,6 +440,8 @@ def _call(review: Review, name: str, args: dict) -> str:
     succeeded = (
         (name == "skill_manage" and not result.startswith("Error"))
         or (name == "remember" and result.startswith("Remembered"))
+        or (name == "update_user_model"
+            and result.startswith(("Updated", "Cleared")))
     )
     if succeeded:
         review.actions.append(result)
@@ -335,43 +477,40 @@ def _stream(client, model: str, messages: list, tools: list) -> Any:
 
 
 def _run(review: Review, messages: list[dict], host: str, model: str):
+    from . import memory  # deferred: memory imports nothing of ours
+
+    # remember with project true reaches the project's memory.
+    with memory.in_project(review.project):
+        _review(review, messages, host, model)
+
+
+def _review(review: Review, messages: list[dict], host: str, model: str):
     try:
-        client = ollama.Client(host=host)
+        client = providers.client(host)
         tools = _schemas(_allowed(review))
         chat = review_messages(review, messages)
-        reply = ""
+        def ask(convo: list, with_tools: bool) -> loop.Reply:
+            reply, calls = _stream(client, model, convo,
+                                   tools if with_tools else None)
+            return loop.Reply(content=reply, calls=[
+                (call.function.name, dict(call.function.arguments or {}))
+                for call in calls
+            ])
+
+        def call(name: str, args: dict) -> str:
+            try:
+                return _call(review, name, args)
+            except TypeError as exc:
+                return f"Error: {exc}"
 
         # Tool output goes to a sink, never the terminal: this thread
         # would otherwise print into the middle of the user's prompt.
+        # The main loop's rules (loop.py), less the code checks: a
+        # review only writes skills and memories.
         with capture_tool_output(lambda *_event: None):
-            for _round in range(MAX_REVIEW_ROUNDS):
-                reply, calls = _stream(client, model, chat, tools)
-                if not calls:
-                    break
-
-                named = [
-                    (
-                        call.function.name,
-                        dict(call.function.arguments or {}),
-                    )
-                    for call in calls
-                ]
-                chat.append({
-                    "role": "assistant",
-                    "content": reply,
-                    "tool_calls": [
-                        {"function": {"name": n, "arguments": a}}
-                        for n, a in named
-                    ],
-                })
-                for name, args in named:
-                    try:
-                        result = _call(review, name, args)
-                    except TypeError as exc:
-                        result = f"Error: {exc}"
-                    chat.append(
-                        {"role": "tool", "content": result, "tool_name": name}
-                    )
+            done = loop.run(chat, ask=ask, call=call,
+                            rounds=MAX_REVIEW_ROUNDS, check_code=False)
+        reply = done.reply.content
 
         review.reply = reply.strip()
     except InterruptedError:
@@ -401,8 +540,22 @@ def after_turn(
     host: str,
     model: str,
     start: Callable[..., Any] = threading.Thread,
+    project: Optional[str] = None,
 ) -> Optional[Review]:
-    """Count a finished turn, and start a review if one is due."""
+    """Count a finished turn, and start a review if one is due. PROJECT:
+    the project it was worked in, the current one by default."""
+
+    if project is None:
+        from . import memory  # deferred: memory imports nothing of ours
+
+        project = memory.current_project()
+
+    try:
+        # The skills it used: scored, judged, rewritten if they keep
+        # going badly. Never at the cost of the turn.
+        skilltrials.after_turn(messages, host=host, model=model, start=start)
+    except Exception:  # noqa: BLE001, S110  # nosec B110
+        pass
 
     skill_every = skill_review_after()
     memory_every = memory_review_every()
@@ -416,6 +569,10 @@ def after_turn(
 
         due_skills = bool(skill_every) and _state.tool_calls >= skill_every
         due_memory = bool(memory_every) and _state.turns >= memory_every
+        asked = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"
+                      and isinstance(m.get("content"), str)), "")
+        due_decision = bool(memory_every) and decided(asked)
+        due_memory = due_memory or due_decision
 
         if not (due_skills or due_memory):
             return None
@@ -425,7 +582,15 @@ def after_turn(
         if due_memory:
             _state.turns = 0
 
-        review = Review(skills=due_skills, memory=due_memory)
+        # Work in a project is worth learning from for the project, too,
+        # whenever enough of it was done for a review.
+        from . import usermodel  # deferred: kept beside memory
+
+        review = Review(skills=due_skills,
+                        memory=due_memory or bool(project),
+                        project=project or "",
+                        profile=due_memory and usermodel.enabled(),
+                        decision=due_decision)
         _state.running = review
         _state.cancel.clear()
 
@@ -451,7 +616,7 @@ def news() -> list[str]:
     with _lock:
         finished, _state.finished = _state.finished, []
 
-    lines = []
+    lines = skilltrials.news()
     for review in finished:
         if review.actions:
             lines.extend(review.actions)

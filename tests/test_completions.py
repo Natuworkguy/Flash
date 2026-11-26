@@ -37,7 +37,7 @@ class TestImagePaths:
                                                    monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "cat.png").write_bytes(b"")
-        (tmp_path / "notes.txt").write_text("x")
+        (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
 
         offered = {c.text for c in complete("/image ")}
 
@@ -140,8 +140,11 @@ class TestSurvivingAResize:
     def test_the_prompt_is_a_callable_not_a_string(self):
         source = inspect.getsource(repl_input.read_line)
 
-        assert "def message()" in source
+        assert "_frame_message(" in source
         assert "_session.prompt(\n        message," in source
+        assert "def message()" in inspect.getsource(
+            repl_input._frame_message
+        )
 
     def test_the_rule_follows_the_terminal(self, monkeypatch):
         widths = iter([80, 120])

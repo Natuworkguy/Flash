@@ -10,6 +10,7 @@ can be typed in.
 
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,9 +24,10 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
-from rich.live import Live
+from prompt_toolkit.mouse_events import MouseEventType
 from rich.text import Text
 
+from . import providers
 from .theme import (
     ACCENT,
     BAR_EMPTY,
@@ -36,8 +38,10 @@ from .theme import (
     DIM,
     DIM_HEX,
     ELLIPSIS,
+    Live,
     confirm,
     console,
+    mouse_on,
     tool_line,
     tool_result,
 )
@@ -123,13 +127,21 @@ def _ago(when: Optional[datetime]) -> str:
 
 
 def _tagged(name: str) -> str:
-    """NAME as Ollama stores it: gemma4 -> gemma4:latest.
+    """NAME as Ollama stores it: mymodel -> mymodel:latest.
 
     Only the part after the last slash can carry a tag; the rest may be a
     namespace or a registry host, and a host can hold a port colon.
     """
 
     return name if ":" in name.rpartition("/")[2] else f"{name}:latest"
+
+
+def full_name(name: str) -> str:
+    """NAME as Ollama lists it, with its tag: mymodel is mymodel:latest.
+    A provider's model is listed by the name its provider gave it."""
+
+    name = name.strip()
+    return name if providers.routed(name) else _tagged(name)
 
 
 def _listing(client) -> Optional[list]:
@@ -168,7 +180,7 @@ def is_installed(client, name: str) -> Optional[bool]:
 
 def _describe(model) -> str:
     """What one model is, out of what the listing already told us:
-    'gemma3, 12.2B, Q4_K_M, pulled 3 days ago'."""
+    'family, 12.2B, Q4_K_M, pulled 3 days ago'."""
 
     details = getattr(model, "details", None)
 
@@ -187,12 +199,15 @@ def _describe(model) -> str:
 def installed_models(
     client,
     current: str = "",
+    pinned: Sequence[str] = (),
 ) -> Optional[list[Model]]:
     """Every model on this machine, as picker rows.
 
     The one in use leads the list, so opening the picker and pressing
-    Enter changes nothing. None when Ollama could not be asked, which is
-    not the same answer as the empty list a fresh install gives.
+    Enter changes nothing. The PINNED ones come next, in the order they
+    were pinned, then the rest by name. None when Ollama could not be
+    asked, which is not the same answer as the empty list a fresh
+    install gives.
     """
 
     listing = _listing(client)
@@ -200,18 +215,26 @@ def installed_models(
     if listing is None:
         return None
 
-    active = _tagged(current) if current else ""
+    active = full_name(current) if current else ""
+    order = {full_name(name): i for i, name in enumerate(pinned)}
     rows = [
         Model(
-            _tagged(model.model),
-            _describe(model),
-            human_size(model.size or 0),
-            "active" if _tagged(model.model) == active else "",
+            full_name(model.model),
+            # A provider's model has no size or family to tell: where it
+            # comes from is what there is to say.
+            f"from the @{providers.split(model.model)[0]} provider"
+            if providers.routed(model.model) else _describe(model),
+            "" if providers.routed(model.model)
+            else human_size(model.size or 0),
+            "active" if full_name(model.model) == active
+            else "pinned" if full_name(model.model) in order else "",
         )
         for model in listing
     ]
 
-    return sorted(rows, key=lambda row: (row.note != "active", row.name))
+    return sorted(rows, key=lambda row: (
+        row.note != "active", order.get(row.name, len(order)), row.name,
+    ))
 
 
 def _matching(models: list[Model], query: str) -> list[Model]:
@@ -241,16 +264,24 @@ def _fit(text: str, width: int) -> str:
     return text[: max(0, width - len(ELLIPSIS))] + ELLIPSIS
 
 
-def choose(models: list[Model]) -> Optional[str]:
+def choose(
+    models: list[Model],
+    title: str = "Switch model",
+    unmatched: str = "Enter downloads {typed!r}",
+    empty: str = "no models here yet. Type a name to download one",
+    start: int = 0,
+) -> Optional[str]:
     """Run the picker over MODELS; return a model name, or None if cancelled.
 
     Typing filters the list. A query that matches nothing is handed back
     as typed, which is how a model that is not on this machine yet gets
-    named: the caller downloads it.
+    named: the caller downloads it. TITLE heads the list, UNMATCHED and
+    EMPTY say what Enter does with nothing to pick, and the cursor
+    starts on row START.
     """
 
-    index = 0
-    top = 0
+    index = max(0, min(start, len(models) - 1))
+    top = max(0, index - VISIBLE_ROWS + 1)
     query = ""
 
     def rows() -> list[Model]:
@@ -275,7 +306,7 @@ def choose(models: list[Model]) -> Optional[str]:
 
         out: StyleAndTextTuples = [
             (f"fg:{ACCENT}", f"{BULLET} "),
-            ("bold", "Switch model"),
+            ("bold", title),
         ]
 
         if query:
@@ -291,10 +322,10 @@ def choose(models: list[Model]) -> Optional[str]:
             out.append((
                 f"fg:{DIM_HEX}",
                 (
-                    f"     nothing here matches. Enter downloads {typed!r}\n"
+                    "     nothing here matches. "
+                    + unmatched.format(typed=typed) + "\n"
                     if typed
-                    else "     no models here yet. Type a name to "
-                         "download one\n"
+                    else f"     {empty}\n"
                 ),
             ))
 
@@ -302,22 +333,25 @@ def choose(models: list[Model]) -> Optional[str]:
             visible[top:top + VISIBLE_ROWS], start=top
         ):
             selected = offset == index
-            out.append(
+            row: StyleAndTextTuples = [
                 (f"fg:{ACCENT}", f"  {CURSOR} ")
                 if selected
-                else ("", "    ")
-            )
-            out.append((
-                f"fg:{ACCENT} bold" if selected else "",
-                _fit(model.name, width).ljust(width),
-            ))
+                else ("", "    "),
+                (
+                    f"fg:{ACCENT} bold" if selected else "",
+                    _fit(model.name, width).ljust(width),
+                ),
+            ]
 
             if model.size:
-                out.append((f"fg:{DIM_HEX}", model.size.rjust(SIZE_WIDTH)))
+                row.append((f"fg:{DIM_HEX}", model.size.rjust(SIZE_WIDTH)))
 
             if model.note:
-                out.append((f"fg:{DIM_HEX}", f"  {model.note}"))
+                row.append((f"fg:{DIM_HEX}", f"  {model.note}"))
 
+            # A click picks the row; the wheel moves through the list.
+            handler = _clicked(offset)
+            out.extend((style, text, handler) for style, text, *_ in row)
             out.append(("", "\n"))
 
         if len(visible) > VISIBLE_ROWS:
@@ -335,6 +369,25 @@ def choose(models: list[Model]) -> Optional[str]:
         out.append((f"fg:{DIM_HEX}", f"     {_fit(HINTS, columns - 6)}"))
 
         return out
+
+    def _clicked(offset: int):
+        def handler(event) -> None:
+            nonlocal index
+
+            if event.event_type == MouseEventType.SCROLL_UP:
+                move(-1)
+            elif event.event_type == MouseEventType.SCROLL_DOWN:
+                move(1)
+            elif event.event_type == MouseEventType.MOUSE_UP:
+                visible = rows()
+                if 0 <= offset < len(visible):
+                    index = offset
+                    get_app().exit(result=visible[offset].name)
+            else:
+                return NotImplemented
+            return None
+
+        return handler
 
     keys = KeyBindings()
 
@@ -411,6 +464,7 @@ def choose(models: list[Model]) -> Optional[str]:
         ),
         key_bindings=keys,
         erase_when_done=True,
+        mouse_support=mouse_on(),
     )
 
     return app.run()
@@ -576,7 +630,9 @@ def fetch_if_missing(client, name: str) -> bool:
     either way, so nothing is offered and the name is taken on trust.
     """
 
-    if is_installed(client, name) is not False:
+    # A provider's model is the provider's to have, never Ollama's to
+    # download.
+    if providers.routed(name) or is_installed(client, name) is not False:
         return True
 
     if not confirm(f"{name} is not installed. Download it now?"):
@@ -588,6 +644,7 @@ def fetch_if_missing(client, name: str) -> bool:
 def pick_model(
     client,
     current: str = "",
+    pinned: Sequence[str] = (),
 ) -> Optional[str]:
     """The bare `/model` flow: pick one of this machine's models, or type
     the name of one to download. Returns the model to switch to, or None
@@ -597,7 +654,7 @@ def pick_model(
     if not can_pick():
         return None
 
-    rows = installed_models(client, current)
+    rows = installed_models(client, current, pinned)
 
     if rows is None:
         return None

@@ -15,7 +15,10 @@ last action actually did.
 
 import atexit
 import json
+import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -188,8 +191,11 @@ def capture(
     full_page: bool,
     wait_ms: int,
     mouse: Optional[tuple[float, float]] = None,
+    cursor: bool = True,
 ) -> tuple[list[str], str]:
     """Render `url` to `out` as a PNG.
+
+    `cursor` False leaves out the Flash cursor drawn on the page.
 
     With `mouse`, the pointer is moved there first, so the picture shows
     what hovering does, with the Flash cursor where it rests.
@@ -209,7 +215,7 @@ def capture(
     try:
         with sync_playwright() as driver:
             try:
-                browser = driver.chromium.launch()
+                browser = launch_chromium(driver)
             except PlaywrightError as exc:
                 return [], _launch_reason(exc)
 
@@ -218,7 +224,8 @@ def capture(
                     viewport={"width": width, "height": height},
                 )
                 _watch(page, problems)
-                page.add_init_script(_CURSOR_JS)
+                if cursor:
+                    page.add_init_script(_CURSOR_JS)
                 page.goto(
                     url,
                     wait_until="load",
@@ -247,6 +254,73 @@ def _first_line(exc: Exception) -> str:
     text = str(exc).strip()
 
     return text.splitlines()[0] if text else exc.__class__.__name__
+
+
+# What a Chromium download is called, in each kind of build, newest
+# kind first: the headless shell suits a page nobody watches.
+_CHROMIUM_NAMES = (
+    "chrome-headless-shell", "chrome-headless-shell.exe",
+    "Google Chrome for Testing", "Chromium", "chrome", "chrome.exe",
+)
+
+
+def _browser_caches() -> list[Path]:
+    """Where Playwright keeps the browsers it downloads, on any system."""
+
+    found = []
+    given = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if given and given != "0":
+        found.append(Path(given).expanduser())
+    home = Path.home()
+    found += [
+        home / "Library" / "Caches" / "ms-playwright",
+        home / ".cache" / "ms-playwright",
+        Path(os.environ.get("LOCALAPPDATA") or home) / "ms-playwright",
+    ]
+    return [path for path in found if path.is_dir()]
+
+
+def installed_chromiums() -> list[Path]:
+    """Every Chromium Playwright has downloaded, of whatever version, the
+    newest build first: the one this Playwright wants may not be among
+    them, and another version usually works as well."""
+
+    found: list[tuple[int, int, Path]] = []
+    for cache in _browser_caches():
+        for build in cache.glob("chromium*-*"):
+            number = build.name.rsplit("-", 1)[-1]
+            if not number.isdigit():
+                continue
+            for rank, name in enumerate(_CHROMIUM_NAMES):
+                for path in build.rglob(name):
+                    if path.is_file() and os.access(path, os.X_OK):
+                        found.append((-int(number), rank, path))
+    return [path for _, _, path in sorted(found)]
+
+
+def launch_chromium(driver: Any) -> Any:
+    """A headless Chromium from DRIVER: Playwright's own, or when that
+    one was never downloaded, another version it has, or Google Chrome.
+    Raises Playwright's error for the first when none of them starts."""
+
+    from playwright.sync_api import Error as PlaywrightError
+
+    try:
+        return driver.chromium.launch()
+    except PlaywrightError as exc:
+        if "playwright install" not in str(exc).lower() and \
+                "executable doesn't exist" not in str(exc).lower():
+            raise
+        first = exc
+    for path in installed_chromiums():
+        try:
+            return driver.chromium.launch(executable_path=str(path))
+        except PlaywrightError:
+            continue
+    try:
+        return driver.chromium.launch(channel="chrome")
+    except PlaywrightError:
+        raise first from None
 
 
 def _launch_reason(exc: Exception) -> str:
@@ -333,6 +407,13 @@ class _Session:
         # Where the agent's pointer is, in the page's pixels, once it has
         # moved: drawn again on a page it navigated to.
         self.mouse: Optional[tuple[float, float]] = None
+        # What the page has fetched, and everything it has logged, since
+        # it opened: kept quietly, for the devtools tool to show when it
+        # is asked. Each request by its number, for a closer look.
+        self.network: list[dict] = []
+        self.requests: dict[int, Any] = {}
+        self.console: list[dict] = []
+        self.seq = 0
 
     def moved(self, x: float, y: float) -> None:
         self.mouse = (x, y)
@@ -409,7 +490,7 @@ def open_page(url: str, *, width: int, height: int, wait_ms: int) -> str:
         return f"Chromium would not start: {_first_line(exc)}"
 
     try:
-        browser = driver.chromium.launch()
+        browser = launch_chromium(driver)
     except PlaywrightError as exc:
         driver.stop()
         return _launch_reason(exc)
@@ -421,6 +502,7 @@ def open_page(url: str, *, width: int, height: int, wait_ms: int) -> str:
         page.set_default_timeout(ACTION_TIMEOUT_MS)
         session.page = page
         _watch(page, session.problems)
+        _record(page, session)
         page.expose_function("__flashMoved", session.moved)
         page.add_init_script(_CURSOR_JS)
         page.goto(url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
@@ -837,3 +919,799 @@ def _short(result) -> str:
         return text[:MAX_EVAL_RESULT] + " ... (truncated)"
 
     return text
+
+
+# --- Devtools ---------------------------------------------------------------
+#
+# What a browser's developer tools show, for the page that is open: the
+# requests it made, everything it logged, JavaScript run in it with what
+# that logged, and one element looked at closely. The requests and the
+# log are kept from the moment the page opens; nothing is shown until
+# the model asks.
+
+MAX_NETWORK = 300
+MAX_CONSOLE = 300
+NETWORK_LIST = 40
+CONSOLE_LIST = 60
+MAX_BODY = 4000
+MAX_RUN_RESULT = 4000
+MAX_HTML = 2500
+# What inspect reads of an element's computed style, unless asked for
+# others: enough to say where it is and why it looks as it does.
+STYLE_PROPERTIES = (
+    "display", "position", "visibility", "opacity", "z-index", "width",
+    "height", "margin", "padding", "color", "background-color",
+    "font-family", "font-size", "font-weight", "line-height", "border",
+    "overflow", "cursor", "pointer-events",
+)
+
+
+def _record(page, session: "_Session") -> None:
+    """Keep what PAGE fetches and logs in SESSION, a few hundred of each."""
+
+    by_request: dict[int, dict] = {}
+
+    def on_request(request) -> None:
+        session.seq += 1
+        entry = {
+            "n": session.seq, "method": request.method, "url": request.url,
+            "type": request.resource_type, "status": None, "failure": "",
+            "ms": None, "started": time.monotonic(),
+        }
+        session.network.append(entry)
+        session.requests[session.seq] = request
+        by_request[id(request)] = entry
+        while len(session.network) > MAX_NETWORK:
+            old = session.network.pop(0)
+            gone = session.requests.pop(old["n"], None)
+            by_request.pop(id(gone), None)
+
+    def on_response(response) -> None:
+        entry = by_request.get(id(response.request))
+        if entry is not None:
+            entry["status"] = response.status
+
+    def on_done(request) -> None:
+        entry = by_request.get(id(request))
+        if entry is not None:
+            entry["ms"] = round((time.monotonic() - entry["started"]) * 1000)
+
+    def on_failed(request) -> None:
+        entry = by_request.get(id(request))
+        if entry is not None:
+            entry["failure"] = str(request.failure or "failed")
+            on_done(request)
+
+    def on_console(message) -> None:
+        try:
+            where = message.location or {}
+        except Exception:  # noqa: BLE001
+            where = {}
+        session.console.append({
+            "type": message.type, "text": message.text, "at": time.time(),
+            "where": (
+                f"{where.get('url', '')}:{where.get('lineNumber', '')}"
+                if where.get("url") else ""
+            ),
+        })
+        del session.console[:-MAX_CONSOLE]
+
+    page.on("request", on_request)
+    page.on("response", on_response)
+    page.on("requestfinished", on_done)
+    page.on("requestfailed", on_failed)
+    page.on("console", on_console)
+    page.on("pageerror", lambda exc: session.console.append({
+        "type": "pageerror", "text": str(exc), "at": time.time(), "where": "",
+    }))
+
+
+def _short_url(url: str, keep: int = 110) -> str:
+    return url if len(url) <= keep else url[:keep - 3] + "..."
+
+
+def network(
+    match: str = "", failed_only: bool = False, limit: int = NETWORK_LIST,
+) -> tuple[list[str], str]:
+    """The requests the open page made, newest last: those whose address
+    or type has MATCH in it, or that failed, if asked. `(lines, why)`."""
+
+    if not is_open():
+        return [], NO_PAGE
+    match = match.strip().lower()
+    found = [
+        e for e in _session.network
+        if (not match or match in e["url"].lower() or match == e["type"])
+        and (not failed_only or e["failure"] or (e["status"] or 0) >= 400)
+    ]
+    failed = sum(
+        1 for e in _session.network
+        if e["failure"] or (e["status"] or 0) >= 400
+    )
+    lines = [
+        f"{len(_session.network)} request"
+        f"{'' if len(_session.network) == 1 else 's'} since the page opened"
+        f", {failed} failed. request with a number shows one in full."
+    ]
+    if len(found) > limit:
+        lines.append(f"(the last {limit} of {len(found)} that match)")
+    for entry in found[-limit:]:
+        status = (
+            f"failed ({entry['failure']})" if entry["failure"]
+            else str(entry["status"]) if entry["status"] is not None
+            else "pending"
+        )
+        took = f" {entry['ms']}ms" if entry["ms"] is not None else ""
+        lines.append(
+            f"#{entry['n']} {entry['method']} {status} {entry['type']}"
+            f"{took} {_short_url(entry['url'])}"
+        )
+    return lines, ""
+
+
+def _headers(found: dict, keep: int = 30) -> str:
+    return "\n".join(
+        f"  {name}: {value[:200]}"
+        for name, value in list(found.items())[:keep]
+    ) or "  (none)"
+
+
+def request(number: int) -> tuple[str, str]:
+    """One request in full: what was sent, and what came back, with the
+    start of its body. `(text, why)`."""
+
+    if not is_open():
+        return "", NO_PAGE
+    found = _session.requests.get(int(number))
+    entry = next((e for e in _session.network if e["n"] == int(number)), None)
+    if found is None or entry is None:
+        return "", (
+            f"There is no request #{number}. The network list numbers them."
+        )
+    from playwright.sync_api import Error as PlaywrightError
+
+    try:
+        sent = found.all_headers()
+        parts = [
+            f"#{entry['n']} {found.method} {found.url}",
+            f"Type: {found.resource_type}",
+            "Request headers:\n" + _headers(sent),
+        ]
+        body = found.post_data
+        if body:
+            parts.append("Request body:\n" + body[:MAX_BODY])
+        if entry["failure"]:
+            parts.append(f"Failed: {entry['failure']}")
+        response = found.response()
+        if response is not None:
+            parts.append(f"Status: {response.status} {response.status_text}")
+            got = response.all_headers()
+            parts.append("Response headers:\n" + _headers(got))
+            kind = got.get("content-type", "")
+            if any(t in kind for t in ("text", "json", "javascript", "xml",
+                                       "html", "css", "svg")):
+                try:
+                    text = response.text()
+                except PlaywrightError as exc:
+                    text = f"(could not be read: {_first_line(exc)})"
+                more = len(text) - MAX_BODY
+                parts.append(
+                    "Response body:\n" + text[:MAX_BODY]
+                    + (f"\n... ({more} more characters)" if more > 0 else "")
+                )
+            elif kind:
+                parts.append(f"Response body: {kind}, not shown as text.")
+        if entry["ms"] is not None:
+            parts.append(f"Took {entry['ms']} ms.")
+    except PlaywrightError as exc:
+        return "", _first_line(exc)
+    return "\n".join(parts), ""
+
+
+def console(
+    level: str = "", limit: int = CONSOLE_LIST,
+) -> tuple[list[str], str]:
+    """What the open page logged, newest last: only LEVEL (log, info,
+    warning, error) if asked. `(lines, why)`."""
+
+    if not is_open():
+        return [], NO_PAGE
+    level = level.strip().lower()
+    level = {"warn": "warning", "errors": "error"}.get(level, level)
+    found = [
+        m for m in _session.console
+        if not level or m["type"] == level
+        or (level == "error" and m["type"] == "pageerror")
+    ]
+    if not found:
+        return ["The page has logged nothing" + (
+            f" at the {level} level." if level else "."
+        )], ""
+    lines = [f"{len(found)} message{'' if len(found) == 1 else 's'}"
+             + (f", the last {limit}" if len(found) > limit else "") + ":"]
+    for message in found[-limit:]:
+        where = f" ({message['where']})" if message["where"] else ""
+        lines.append(f"[{message['type']}] {message['text'][:500]}{where}")
+    return lines, ""
+
+
+_RUN_JS = """
+async () => {
+  const logs = [];
+  const kept = {};
+  const shown = (x) => {
+    if (typeof x === 'string') return x;
+    if (x instanceof Element) return x.outerHTML.slice(0, 300);
+    try { return JSON.stringify(x); } catch (_) { return String(x); }
+  };
+  for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+    kept[level] = console[level];
+    console[level] = (...args) => {
+      logs.push(level + ': ' + args.map(shown).join(' '));
+      kept[level].apply(console, args);
+    };
+  }
+  try {
+    const value = await (async () => { %s })();
+    let text;
+    let kind = typeof value;
+    if (value === undefined) {
+      text = 'undefined';
+    } else if (value instanceof Element) {
+      kind = 'element';
+      text = value.outerHTML;
+    } else if (value instanceof NodeList || value instanceof HTMLCollection) {
+      kind = 'elements';
+      text = Array.from(value)
+        .map((e) => e.outerHTML.slice(0, 200)).join('\\n');
+    } else {
+      try { text = JSON.stringify(value, null, 2); }
+      catch (_) { text = String(value); }
+    }
+    if (text === undefined) text = String(value);
+    return { ok: true, kind, text, logs };
+  } catch (error) {
+    const said = error && error.name
+      ? error.name + ': ' + error.message : String(error);
+    return { ok: false, kind: 'error', text: said, logs };
+  } finally {
+    for (const level in kept) console[level] = kept[level];
+  }
+}
+"""
+
+
+_STATEMENT_WORDS = (
+    "const ", "let ", "var ", "if ", "if(", "for ", "for(", "while ",
+    "while(", "return", "function ", "class ", "throw ", "try ", "try{",
+    "switch", "}", "//",
+)
+
+
+def _ways_to_run(code: str) -> list[str]:
+    """CODE as a function body, the ways a console would read it: as one
+    expression; as statements whose last one is the value, as in
+    `await x(); y`; and as statements that `return` what they mean to."""
+
+    ways = [f"return ({code}\n);"]
+    trimmed = code.rstrip().rstrip(";")
+    cut = max(trimmed.rfind(";"), trimmed.rfind("\n"))
+    if cut > 0:
+        head, last = trimmed[:cut + 1], trimmed[cut + 1:].strip()
+        if last and not last.startswith(_STATEMENT_WORDS):
+            ways.append(f"{head}\nreturn ({last}\n);")
+    ways.append(code)
+    return ways
+
+
+def run_script(code: str) -> tuple[str, str]:
+    """Run CODE in the open page, as the console would: an expression's
+    value comes back, statements can `return` one, and `await` works.
+    What it logged meanwhile comes with it. `(text, why)`."""
+
+    if not is_open():
+        return "", NO_PAGE
+    code = code.strip()
+    if not code:
+        return "", "run needs the JavaScript to run, in value."
+    from playwright.sync_api import Error as PlaywrightError
+
+    found = None
+    problem = ""
+    for body in _ways_to_run(code):
+        try:
+            found = _session.page.evaluate(_RUN_JS % body)
+            break
+        except PlaywrightError as exc:
+            # A way the code does not parse: the next way, then.
+            problem = problem or _first_line(exc)
+    if found is None:
+        return "", problem
+    text = str(found.get("text", ""))
+    if len(text) > MAX_RUN_RESULT:
+        more = len(text) - MAX_RUN_RESULT
+        text = text[:MAX_RUN_RESULT] + f"\n... ({more} more)"
+    parts = [
+        ("Returned" if found.get("ok") else "Threw")
+        + f" ({found.get('kind', '')}):\n{text}"
+    ]
+    if found.get("logs"):
+        parts.append("Logged:\n" + "\n".join(found["logs"][:50]))
+    return "\n".join(parts), ""
+
+
+_INSPECT_JS = """
+([el, props]) => {
+  const box = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  const attrs = {};
+  for (const a of el.attributes) {
+    if (a.name !== 'data-flash-id') attrs[a.name] = a.value.slice(0, 200);
+  }
+  const styles = {};
+  for (const p of props) styles[p] = style.getPropertyValue(p);
+  const path = [];
+  let n = el;
+  while (n && n.nodeType === 1 && path.length < 6) {
+    let part = n.tagName.toLowerCase();
+    if (n.id) part += '#' + n.id;
+    else if (n.classList.length) {
+      part += '.' + [...n.classList].slice(0, 2).join('.');
+    }
+    path.unshift(part);
+    n = n.parentElement;
+  }
+  return {
+    tag: el.tagName.toLowerCase(), path: path.join(' > '), attrs, styles,
+    box: {
+      x: Math.round(box.x), y: Math.round(box.y),
+      width: Math.round(box.width), height: Math.round(box.height),
+    },
+    text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300),
+    children: el.children.length,
+    html: el.outerHTML,
+    visible: !!(box.width && box.height) && style.visibility !== 'hidden'
+      && style.display !== 'none',
+  };
+}
+"""
+
+
+def inspect(target: str, properties: Optional[list] = None) -> tuple[str, str]:
+    """One element of the open page, closely: where it sits in the page,
+    its attributes, its box, its computed style, and its HTML. TARGET is
+    an element number, a CSS selector, or its text. `(text, why)`."""
+
+    if not is_open():
+        return "", NO_PAGE
+    from playwright.sync_api import Error as PlaywrightError
+
+    wanted = [
+        str(p).strip() for p in (properties or []) if str(p).strip()
+    ] or list(STYLE_PROPERTIES)
+    try:
+        located = _locate(_session.page, target.strip())
+        found = located.evaluate(
+            "(el, props) => (" + _INSPECT_JS.strip() + ")([el, props])",
+            wanted,
+        )
+    except (PageProblem, PlaywrightError) as exc:
+        return "", _first_line(exc)
+    box = found["box"]
+    html = found["html"]
+    if len(html) > MAX_HTML:
+        more = len(found["html"]) - MAX_HTML
+        html = html[:MAX_HTML] + f"\n... ({more} more)"
+    parts = [
+        f"<{found['tag']}> at {found['path']}",
+        f"Box: {box['width']}x{box['height']} at ({box['x']}, {box['y']})"
+        + ("" if found["visible"] else ", not visible"),
+        f"Children: {found['children']}",
+    ]
+    if found["text"]:
+        parts.append(f"Text: {found['text']}")
+    if found["attrs"]:
+        parts.append("Attributes:\n" + "\n".join(
+            f"  {k}: {v}" for k, v in found["attrs"].items()
+        ))
+    parts.append("Computed style:\n" + "\n".join(
+        f"  {k}: {v}" for k, v in found["styles"].items() if v != ""
+    ))
+    parts.append("HTML:\n" + html)
+    return "\n".join(parts), ""
+
+
+# Real time --------------------------------------------------------------
+
+# A game that moves sixty times a second cannot wait for a model to look
+# and think between frames. So the model writes a reflex instead: a short
+# JavaScript policy the page runs every frame, reading the canvas's
+# pixels and pressing keys or clicking, faster than any person, for as
+# long as it is asked. It watches how the run went, changes the policy,
+# and runs again.
+MOST_PLAY_SECONDS = 120
+
+
+def _play_js() -> str:
+    return (Path(__file__).parent / "web" / "play.js").read_text(
+        encoding="utf-8")
+
+
+MOST_ATTEMPTS = 50
+
+
+def _play(policy: str, seconds: float = 20, until: str = "",
+          canvas: str = "", start_keys: Optional[list] = None,
+          record: str = "", attempts: int = 1, died: str = "",
+          restart_keys: Optional[list] = None,
+          progress: str = "") -> tuple[str, str]:
+    """Run POLICY every frame for SECONDS, or until UNTIL is true.
+    With ATTEMPTS, each time DIED is true the RESTART_KEYS are tapped and
+    it plays again, its memory kept, until UNTIL or the attempts or the
+    seconds run out; PROGRESS says how far each got. With RECORD, a path,
+    the best attempt is filmed and saved there as WebM.
+    Returns (what happened, "") or ("", why not)."""
+
+    if not is_open():
+        return "", NO_PAGE
+    if taken():
+        return "", TAKEN
+    seconds = max(0.5, min(float(seconds or 20), MOST_PLAY_SECONDS))
+    attempts = max(1, min(int(attempts or 1), MOST_ATTEMPTS))
+    page = _session.page
+    try:
+        found = page.evaluate(
+            _play_js(),
+            [policy, seconds, until or "", canvas or "",
+             [str(k) for k in start_keys or []], bool(record), attempts,
+             died or "", [str(k) for k in restart_keys or []],
+             progress or ""])
+    except Exception as exc:  # noqa: BLE001
+        return "", _first_line(exc)
+    if found.get("error") and not found.get("frames"):
+        return "", found["error"]
+    return _played(found, record), ""
+
+
+def _played(found: dict, record: str = "") -> str:
+    """How a run went, in words, from what play.js handed back."""
+
+    lines = [
+        f"Ran {found['frames']} frames in {found['seconds']}s, "
+        f"{found['actions']} actions"
+        + (f"; stopped: {found['stopped']}" if found.get("stopped") else "")
+        + ".",
+        f"The page's title now: {found.get('title') or '(none)'}",
+    ]
+    tries = found.get("attempts") or []
+    if len(tries) > 1 or (tries and tries[0].get("ended") == "died"):
+        def said(t: dict) -> str:
+            how = {"won": "won", "died": "died", "time": "ran out of time",
+                   "error": "the policy threw"}.get(t.get("ended"), "")
+            far = (f" at {t['progress']:g}%" if t.get("progress") is not None
+                   else "")
+            return f"#{t['attempt']}: {how}{far} after {t['seconds']}s"
+        lines.append("Attempts: " + "; ".join(said(t) for t in tries) + ".")
+        best = found.get("best") or {}
+        if best:
+            lines.append(f"Best: attempt {best.get('attempt')}"
+                         + (f", {best['progress']:g}%"
+                            if best.get("progress") is not None else "")
+                         + (" (filmed)" if record else "") + ".")
+    if not found.get("canvas"):
+        lines.append("There is no canvas on the page: px and find see "
+                     "nothing; act on the page with tap and click.")
+    elif found.get("webgl"):
+        lines.append("The canvas is WebGL: it is copied each frame to read "
+                     "its pixels, so px, find and blobs work on it too.")
+    if found.get("error"):
+        lines.append(f"The policy threw: {found['error']}")
+    if found.get("log"):
+        lines.append("What it logged:\n" + "\n".join(found["log"]))
+    video = str(found.get("video") or "")
+    if record and "," in video:
+        import base64
+
+        try:
+            Path(record).write_bytes(
+                base64.b64decode(video.split(",", 1)[1]))
+            lines.append(f"Recording: {record}")
+        except (OSError, ValueError):
+            pass
+    lines.extend(_said_lines(found.get("said")))
+    return "\n".join(lines)
+
+
+def _said_lines(said: Any) -> list[str]:
+    out = []
+    for one in said or []:
+        where = "in the game" if one.get("shown") else "in the chat"
+        out.append(f"Said {where}: {one.get('text')}")
+    return out
+
+
+# Live: the reflex plays on in the page while the model thinks -------------
+
+# A reflex alone plays fast but never thinks; a model alone thinks but is
+# far too slow for a frame. Live runs are both: the reflex keeps playing
+# every frame, and every few seconds the model looks in, at the screen and
+# at what the reflex noticed, and decides: a new plan the reflex reads
+# (api.plan), a new reflex, a word to whoever it is playing with. The game
+# never waits for it.
+MOST_LIVE_SECONDS = 600
+
+_LIVE_START = """async (args) => {
+  if (window.__flashPlay && !window.__flashPlay.done) { window.__flashPlay.stop(); await window.__flashPlay.promise; }
+  window.__flashPlay = null;
+  const going = (RUN)(args);
+  if (!window.__flashPlay) { const r = await going; return r.error || "It did not start."; }
+  window.__flashPlay.promise = going;
+  return "";
+}"""
+
+_LIVE_LOOK = """async ([ms, plan, policy, say, stop]) => {
+  const P = window.__flashPlay;
+  if (!P) return { gone: true };
+  let problem = "";
+  if (!P.done) {
+    if (plan !== null) P.api.plan = plan;
+    if (policy) problem = P.setPolicy(policy);
+    if (say) P.api.say(say);
+    if (stop) P.stop();
+    await Promise.race([P.promise, new Promise((r) => setTimeout(r, stop ? 0 : ms))]);
+    if (stop) await P.promise;
+  }
+  if (P.done) { const result = P.result; window.__flashPlay = null; return { done: true, result, problem }; }
+  let memory = "";
+  try { memory = JSON.stringify(P.api.memory, (k, v) => typeof v === "number" ? Math.round(v * 10) / 10 : v); } catch { memory = "(not JSON)"; }
+  return { done: false, problem, frames: P.api.frame, t: +P.api.t.toFixed(1), title: document.title,
+    log: P.fresh.splice(0), said: P.said.splice(0), memory: memory.slice(0, 2500), plan: P.api.plan,
+    actions: P.actions(), threw: P.threw() };
+}"""
+
+
+def _game_card() -> dict:
+    """What a game made for playing with Flash says about itself, in its
+    page: <meta name="flash-game"> (how to play it, for the model),
+    <meta name="flash-invite"> (the address the user opens to join, made
+    whole against the page's), and <script type="text/flash-reflex"> (a
+    reflex to start from). Empty for any other page."""
+
+    if not is_open():
+        return {}
+    try:
+        return _session.page.evaluate("""() => {
+          const meta = (n) => document.querySelector(`meta[name="${n}"]`)?.content?.trim() || "";
+          const invite = meta("flash-invite");
+          let link = "";
+          if (invite) { try { const u = new URL(invite, location.href); link = u.href; } catch { link = ""; } }
+          const reflex = document.querySelector('script[type="text/flash-reflex"]')?.textContent?.trim() || "";
+          return { about: meta("flash-game").slice(0, 3000), invite: link, reflex: reflex.slice(0, 20000) };
+        }""") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_running() -> bool:
+    if not is_open():
+        return False
+    try:
+        return bool(_session.page.evaluate(
+            "() => !!(window.__flashPlay && !window.__flashPlay.done)"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _play_live(policy: str = "", seconds: float = 120, until: str = "",
+               canvas: str = "", start_keys: Optional[list] = None,
+               record: str = "", look_every: float = 4, plan: Any = None,
+               say: str = "", stop: bool = False) -> tuple[str, str]:
+    """Start a live run of POLICY, or carry on the one going: set PLAN
+    (what api.plan holds), swap in POLICY if given, SAY something, then
+    let it play LOOK_EVERY seconds and say how it is going. STOP ends it.
+    Returns (what happened, "") or ("", why not)."""
+
+    if not is_open():
+        return "", NO_PAGE
+    if taken():
+        return "", TAKEN
+    page = _session.page
+    going = _live_running()
+    started = False
+    if not going:
+        if stop:
+            return "", "There is no live run going to stop."
+        if not str(policy or "").strip():
+            return "", "Start a live run with a policy."
+        seconds = max(1.0, min(float(seconds or 120), MOST_LIVE_SECONDS))
+        args = [policy, seconds, until or "", canvas or "",
+                [str(k) for k in start_keys or []], bool(record), 1, "",
+                [], "", True]
+        try:
+            why = page.evaluate(
+                _LIVE_START.replace("(RUN)", "(" + _play_js().strip() + ")"),
+                args)
+        except Exception as exc:  # noqa: BLE001
+            return "", _first_line(exc)
+        if why:
+            return "", why
+        started, policy = True, ""
+    wait = max(0.0, min(float(look_every if look_every is not None else 4),
+                        30.0))
+    try:
+        seen = page.evaluate(_LIVE_LOOK, [
+            int(wait * 1000), plan if plan is not None else None,
+            str(policy or ""), str(say or ""), bool(stop)])
+    except Exception as exc:  # noqa: BLE001
+        return "", _first_line(exc)
+    if seen.get("gone"):
+        return "", "The live run is gone: the page was left or reloaded."
+    lines = []
+    if seen.get("problem"):
+        lines.append(seen["problem"] + " The old policy plays on.")
+    if seen.get("done"):
+        lines.append("The live run is over.")
+        lines.append(_played(seen.get("result") or {}, record))
+        return "\n".join(lines), ""
+    lines.insert(0, (
+        ("Started a live run: it plays on in the page between your looks. "
+         if started else "Still playing. ")
+        + f"{seen.get('t')}s in, {seen.get('frames')} frames, "
+        f"{seen.get('actions')} actions."))
+    lines.append(f"The page's title now: {seen.get('title') or '(none)'}")
+    lines.append("api.plan: " + json.dumps(seen.get("plan"))[:600])
+    lines.append("api.memory: " + str(seen.get("memory") or "{}"))
+    if seen.get("threw"):
+        lines.append(f"The policy is throwing: {seen['threw']}")
+    if seen.get("log"):
+        lines.append("Logged since you last looked:\n"
+                     + "\n".join(seen["log"][-30:]))
+    lines.extend(_said_lines(seen.get("said")))
+    return "\n".join(lines), ""
+
+
+play = None  # made below, on the browser's thread
+
+
+# One thread for the browser ------------------------------------------------
+
+# Playwright's objects answer only on the thread that made them, and the
+# page outlives the turn that opened it: the user can take it over from
+# the web page, on a thread of the server's. So every call that touches
+# the browser runs on this one thread, whoever asks.
+_worker: dict[str, Any] = {"pool": None, "ident": None}
+
+
+def _pool():
+    from concurrent.futures import ThreadPoolExecutor
+
+    if _worker["pool"] is None:
+        def mark() -> None:
+            _worker["ident"] = threading.get_ident()
+
+        _worker["pool"] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="flash-browser",
+            initializer=mark)
+    return _worker["pool"]
+
+
+def _on_browser_thread(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        if threading.get_ident() == _worker["ident"]:
+            return fn(*args, **kwargs)
+        try:
+            return _pool().submit(fn, *args, **kwargs).result()
+        except RuntimeError as exc:
+            # Flash is exiting and the thread is gone: do it here.
+            if "shutdown" not in str(exc):
+                raise
+            return fn(*args, **kwargs)
+
+    return run
+
+
+# Taking it over --------------------------------------------------------------
+
+# While the user has the browser, the agent's actions wait: each is told
+# so, and to look again once it is handed back.
+_control = {"taken": False, "since": 0.0}
+TAKEN = ("The user has taken control of the browser. Do nothing to it "
+         "until they hand it back; then look again, as they may have "
+         "changed the page.")
+
+
+def taken() -> bool:
+    return bool(_control["taken"])
+
+
+def take_control(on: bool = True) -> dict:
+    """The user takes the browser (ON) or hands it back. Says where it
+    is."""
+
+    if on and not is_open():
+        raise PageProblem("There is no browser open to take over.")
+    _control["taken"] = bool(on)
+    _control["since"] = time.time() if on else 0.0
+    url, title = where()
+    size = viewport()
+    return {"taken": taken(), "url": url, "title": title, **size}
+
+
+def _viewport() -> dict:
+    page = _session.page if is_open() else None
+    size = getattr(page, "viewport_size", None) or {}
+    return {"width": int(size.get("width") or 0),
+            "height": int(size.get("height") or 0)}
+
+
+def _live_frame(quality: int = 60) -> bytes:
+    """What the page looks like now, as a JPEG, for the user to watch."""
+
+    if not is_open():
+        return b""
+    try:
+        return _session.page.screenshot(type="jpeg", quality=quality)
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def _user_act(kind: str, x: float = 0, y: float = 0, text: str = "",
+              key: str = "", dx: float = 0, dy: float = 0) -> str:
+    """Something the user did to the page while it is theirs."""
+
+    if not taken():
+        raise PageProblem("Take control of the browser first.")
+    if not is_open():
+        raise PageProblem(NO_PAGE)
+    page = _session.page
+    if kind == "click":
+        page.mouse.click(x, y)
+    elif kind == "dblclick":
+        page.mouse.dblclick(x, y)
+    elif kind == "move":
+        page.mouse.move(x, y)
+    elif kind == "scroll":
+        page.mouse.move(x, y)
+        page.mouse.wheel(dx, dy)
+    elif kind == "type":
+        page.keyboard.type(text[:2000])
+    elif kind == "key":
+        page.keyboard.press(key[:40])
+    elif kind == "goto":
+        target = text.strip()
+        if not re.match(r"^https?://", target):
+            target = "https://" + target
+        page.goto(target, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
+    elif kind == "back":
+        page.go_back(timeout=NAVIGATION_TIMEOUT_MS)
+    else:
+        raise PageProblem(f"Unknown action {kind!r}.")
+    return page.url
+
+
+viewport = _on_browser_thread(_viewport)
+play = _on_browser_thread(_play)
+play_live = _on_browser_thread(_play_live)
+live_running = _on_browser_thread(_live_running)
+game_card = _on_browser_thread(_game_card)
+live_frame = _on_browser_thread(_live_frame)
+user_act = _on_browser_thread(_user_act)
+
+_interact = interact
+
+
+def _interact_unless_taken(action: str, **kwargs) -> tuple[str, str]:
+    if taken():
+        return "", TAKEN
+    return _interact(action, **kwargs)
+
+
+interact = _interact_unless_taken
+
+for _name in ("open_page", "interact", "snapshot", "elements", "where",
+              "close_session", "network", "request", "console",
+              "run_script", "inspect"):
+    globals()[_name] = _on_browser_thread(globals()[_name])

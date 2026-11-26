@@ -1,12 +1,13 @@
 """Speech recognition and speech synthesis for voice mode.
 
-Both models run locally and are downloaded on first use: Vosk for
-listening (a small English acoustic model) and Piper for speaking (an
-ONNX voice). Nothing here prints; the caller is handed progress and
-state through callbacks so the CLI keeps one voice for its output.
+Both models run locally and are downloaded on first use: Vosk or
+Moonshine for listening and Piper or Kokoro for speaking. Nothing here
+prints; the caller is handed progress and state through callbacks so the
+CLI keeps one voice for its output.
 """
 
 import array
+import difflib
 import io
 import json
 import logging
@@ -16,6 +17,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import unicodedata
 import wave
 import zipfile
@@ -26,6 +28,7 @@ from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from . import apple_listen, serif, siri, visuals
 from .paths import MODELS_DIR
 
 
@@ -47,6 +50,24 @@ INSTALL_HINT = (
     f"Install them with `{_install_command()}`."
 )
 
+KOKORO_PACKAGE = "kokoro-onnx"
+_ADD = "pipx inject flash" if "pipx" in sys.prefix.lower() else "pip install"
+KOKORO_HINT = (
+    f"Kokoro voices need the {KOKORO_PACKAGE} package. Install it with "
+    f"`{_ADD} {KOKORO_PACKAGE}`."
+)
+
+PHONON_PACKAGE = "ptts"
+PHONON_HINT = (
+    f"Phonon voices need the {PHONON_PACKAGE} package. Install it with "
+    f"`{_ADD} {PHONON_PACKAGE}`."
+)
+MOONSHINE_PACKAGE = "moonshine-voice"
+MOONSHINE_HINT = (
+    f"Moonshine listening needs the {MOONSHINE_PACKAGE} package. Install "
+    f"it with `{_ADD} {MOONSHINE_PACKAGE}`."
+)
+
 MIC_HINT = (
     "No microphone is available. Check that one is connected and that "
     "this terminal is allowed to use it."
@@ -66,6 +87,28 @@ def _setting(name: str, default: str) -> str:
     return value or default
 
 
+def _device(name: str) -> Optional[str]:
+    """A sound device named in a setting, or None for the system default.
+
+    sounddevice matches the name, or any part of it, so a virtual device
+    such as BlackHole, Loopback or VB-Cable can carry Flash's voice.
+    """
+
+    return _setting(name, "") or None
+
+
+def input_device() -> Optional[str]:
+    """Where Flash listens: VOICE_INPUT_DEVICE, else the system microphone."""
+
+    return _device("VOICE_INPUT_DEVICE")
+
+
+def output_device() -> Optional[str]:
+    """Where Flash speaks: VOICE_OUTPUT_DEVICE, else the system speakers."""
+
+    return _device("VOICE_OUTPUT_DEVICE")
+
+
 def _number(name: str, default: float, *, minimum: float) -> float:
     """A numeric setting that falls back rather than crashing on nonsense.
 
@@ -80,15 +123,66 @@ def _number(name: str, default: float, *, minimum: float) -> float:
 
 
 def vosk_model() -> str:
-    """Name of the Vosk model used for listening."""
+    """Name of the model used for listening: a Vosk one, or Moonshine."""
 
     return _setting("VOICE_VOSK_MODEL", DEFAULT_VOSK_MODEL)
+
+
+def wake_model() -> str:
+    """The Vosk model that listens for "Hey Flash": the one in use, or,
+    while Moonshine listens, a Vosk model already here, the small one
+    first."""
+
+    name = vosk_model()
+    if not is_moonshine(name) and not is_extension(name) and not apple_listen.is_apple(name):
+        return name
+    for choice in LISTENING:
+        if not is_moonshine(choice.name) and listening_installed(
+            choice.name
+        ):
+            return choice.name
+    return DEFAULT_VOSK_MODEL
 
 
 def piper_voice() -> str:
     """Name of the Piper voice used for speaking."""
 
     return _setting("VOICE_PIPER_VOICE", DEFAULT_PIPER_VOICE)
+
+
+# How a reply read aloud is cut off: by the interrupt word only, or by
+# anything the user says over it. One for Flash's own voice mode, one for
+# calls with sparks.
+INTERRUPT_HOWS = ("word", "anything")
+INTERRUPT_SETTINGS = {"voice": ("VOICE_INTERRUPT", "word"),
+                      "calls": ("CALL_INTERRUPT", "anything")}
+
+
+def interrupt_how(kind: str) -> str:
+    """How talking over a reply cuts it off for KIND, "voice" (Flash's
+    voice mode) or "calls" (a call with a spark): "word" or "anything"."""
+
+    name, default = INTERRUPT_SETTINGS[kind]
+    how = _setting(name, default).lower()
+    return how if how in INTERRUPT_HOWS else default
+
+
+def _talked_over(said: str, line: str) -> bool:
+    """Whether SAID, heard while LINE is read out, is the user talking
+    over it: a few words, most of them not LINE's own coming back."""
+
+    words = re.sub(r"[^a-z0-9' ]", " ", (said or "").lower()).split()
+    if len(words) < 2:
+        return False
+    spoken = set(re.sub(r"[^a-z0-9' ]", " ", (line or "").lower()).split())
+    return sum(w in spoken for w in words) / len(words) <= 0.6
+
+
+def voice_style() -> str:
+    """How Flash's voice delivers what it says: one of STYLES."""
+
+    style = _setting("VOICE_STYLE", DEFAULT_STYLE).lower()
+    return style if style in STYLES else DEFAULT_STYLE
 
 
 def silence_seconds() -> float:
@@ -119,6 +213,14 @@ def max_speech_chars() -> int:
     return int(_number("VOICE_MAX_CHARS", 700.0, minimum=80.0))
 
 
+def wake_sensitivity() -> int:
+    """How readily "Hey Flash" wakes Flash, from 0 (only a clear one,
+    said in full) to 100 (the moment it is heard)."""
+
+    return int(min(100.0, _number("VOICE_WAKE_SENSITIVITY", 50.0,
+                                  minimum=0.0)))
+
+
 def interrupt_word() -> str:
     """The word that stops a reply when said over the top of it."""
 
@@ -133,6 +235,88 @@ VOSK_BASE = "https://alphacephei.com/vosk/models"
 # Piper voices are a pair of files: the ONNX network and its config.
 DEFAULT_PIPER_VOICE = "en_US-amy-medium"
 PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+
+# Kokoro speaks far more naturally than Piper, at a little more cost: one
+# network and one file of voices, shared by every Kokoro voice, so the
+# second voice tried downloads nothing. A voice is named kokoro-<its own
+# name>, its first letter its accent (a American, b British).
+KOKORO = "kokoro-"
+KOKORO_BASE = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+    "model-files-v1.0"
+)
+KOKORO_FILES = ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin")
+KOKORO_SIZE = 92_361_271 + 28_214_398
+KOKORO_RATE = 24000
+KOKORO_ACCENTS = {"a": "en-us", "b": "en-gb"}
+
+# Phonon speaks the most naturally of them, and the quickest: a small
+# network that starts talking before a sentence is done, on any CPU. One
+# model shared by every Phonon voice, and a small file for each voice,
+# all fetched together, so a spark's own voice is there when it calls. A
+# voice is named phonon-<its own name>.
+PHONON = "phonon-"
+PHONON_BASE = "https://huggingface.co/gradium/phonon-31m-en/resolve/main"
+PHONON_VOICES_BASE = (
+    "https://huggingface.co/gradium/phonon-voices/resolve/main/voices"
+)
+PHONON_REMOTE = "hf://gradium/phonon-31m-en"
+# The model's files, and their sizes.
+PHONON_FILES = {
+    "config.json": 4_634, "model.q8.gguf": 64_512_352,
+    "tokenizer.model": 65_045, "tokenizer.json": 277_967,
+}
+# Flash's name for each voice: the catalog's name for it, its file, and
+# its accent.
+PHONON_VOICES = {
+    "harper": ("Harper", "4SZHfMpw-p46Ywgs", "en-us"),
+    "juniper": ("Juniper", "NIWIOv5vTi5eRMj8", "en-us"),
+    "hadley": ("Hadley", "bXwrkHhURL1VFJdG", "en-us"),
+    "miles": ("Miles", "d9XCyhjo4JhkHF1d", "en-us"),
+    "easton": ("Easton", "LMDIYE0Oa377Qh6Z", "en-us"),
+    "maeve": ("Maeve", "6PWnV0Nq4wu7RVBT", "en-gb"),
+    "spencer": ("Spencer", "JOW0vchyswkQUMDS", "en-gb"),
+    "edwin": ("Edwin", "zUCxzrOrugTSis03", "en-gb"),
+}
+PHONON_VOICE_SIZE = 256_136
+PHONON_SIZE = sum(PHONON_FILES.values()) + \
+    PHONON_VOICE_SIZE * len(PHONON_VOICES)
+PHONON_RATE = 24000
+
+# Moonshine hears more accurately than Vosk, and streams: the words while
+# someone talks come from the same model that hears them in the end. A
+# model is a folder of files from Moonshine's own server, pinned here as
+# Kokoro's are; named moonshine-<its size>. "Hey Flash" stays with a Vosk
+# model, which can be held to the wake phrases.
+MOONSHINE = "moonshine-"
+MOONSHINE_BASE = "https://download.moonshine.ai/model"
+MOONSHINE_RELEASE = "quantized_26_08_21"
+MOONSHINE_FILES = (
+    "adapter.ort", "cross_kv.ort", "decoder_kv.ort", "encoder.ort",
+    "frontend.model.ort", "frontend.weights.ort", "streaming_config.json",
+    "tokenizer.bin",
+)
+# Each one's architecture, as moonshine_voice.ModelArch names it, and
+# the size of each of its files, in MOONSHINE_FILES' order.
+MOONSHINE_MODELS = {
+    f"{MOONSHINE}tiny": ("TINY_STREAMING", (
+        1_319_664, 1_287_544, 32_583_720, 7_675_440, 23_344, 2_093_464,
+        509, 249_974,
+    )),
+    f"{MOONSHINE}small": ("SMALL_STREAMING", (
+        2_870_368, 5_356_536, 81_878_600, 44_148_576, 26_944, 7_769_464,
+        512, 249_974,
+    )),
+    f"{MOONSHINE}medium": ("MEDIUM_STREAMING", (
+        3_651_296, 11_643_776, 146_972_408, 94_705_376, 28_720, 11_889_560,
+        513, 249_974,
+    )),
+}
+
+
+def _moonshine_size(name: str) -> int:
+    return sum(MOONSHINE_MODELS[name][1])
+
 
 # Vosk is trained on 16 kHz mono audio and resamples nothing itself.
 SAMPLE_RATE = 16000
@@ -155,19 +339,84 @@ class Choice:
 LISTENING = (
     Choice(DEFAULT_VOSK_MODEL, 41_205_931,
            "Small and quick, for weaker machines"),
+    Choice(f"{MOONSHINE}tiny", _moonshine_size(f"{MOONSHINE}tiny"),
+           "Moonshine Tiny, quick and far more accurate"),
     Choice("vosk-model-en-us-0.22-lgraph", 130_557_655,
            "Balanced, noticeably more accurate"),
+    Choice(f"{MOONSHINE}small", _moonshine_size(f"{MOONSHINE}small"),
+           "Moonshine Small, the best balance"),
+    Choice(f"{MOONSHINE}medium", _moonshine_size(f"{MOONSHINE}medium"),
+           "Moonshine Medium, the most accurate"),
     Choice("vosk-model-en-us-0.22", 1_913_365_522,
-           "Most accurate, for strong machines"),
+           "Vosk's largest, for strong machines"),
 )
 
-# And to speak with.
+# And to speak with: the best first, Phonon, then the second best, Kokoro,
+# then Piper's, lightest first.
 SPEAKING = (
+    # One download for all of them.
+    Choice(f"{PHONON}harper", PHONON_SIZE,
+           "Phonon Harper, the best: confident and friendly"),
+    Choice(f"{PHONON}juniper", PHONON_SIZE, "Phonon Juniper, cheerful"),
+    Choice(f"{PHONON}hadley", PHONON_SIZE, "Phonon Hadley, calm and kind"),
+    Choice(f"{PHONON}miles", PHONON_SIZE, "Phonon Miles, warm and decisive"),
+    Choice(f"{PHONON}easton", PHONON_SIZE, "Phonon Easton, crisp and close"),
+    Choice(f"{PHONON}maeve", PHONON_SIZE, "Phonon Maeve, British, sparky"),
+    Choice(f"{PHONON}spencer", PHONON_SIZE,
+           "Phonon Spencer, British, patient"),
+    Choice(f"{PHONON}edwin", PHONON_SIZE, "Phonon Edwin, British, firm"),
+    # One download for all of them.
+    Choice(f"{KOKORO}af_heart", KOKORO_SIZE,
+           "Kokoro Heart, second best: natural and warm"),
+    Choice(f"{KOKORO}af_bella", KOKORO_SIZE, "Kokoro Bella, bright"),
+    Choice(f"{KOKORO}am_michael", KOKORO_SIZE, "Kokoro Michael, calm"),
+    Choice(f"{KOKORO}bf_emma", KOKORO_SIZE, "Kokoro Emma, British"),
+    Choice(f"{KOKORO}bm_george", KOKORO_SIZE, "Kokoro George, British"),
     Choice("en_US-amy-low", 63_104_526, "Amy, fastest, for weaker machines"),
     Choice(DEFAULT_PIPER_VOICE, 63_201_294, "Amy, balanced"),
+    # Every medium voice is the same size of model.
+    Choice("en_US-kristin-medium", 63_201_294, "Kristin, warm and gentle"),
+    Choice("en_US-hfc_female-medium", 63_201_294,
+           "HFC, bright and friendly"),
     Choice("en_US-lessac-high", 113_895_201, "Lessac, clearest"),
     Choice("en_US-ryan-high", 120_786_792,
            "Ryan, clearest, for strong machines"),
+)
+
+# How the voice delivers a reply: its pace (Piper's length scale, above 1
+# slower), how much its intonation and voice vary from the flat reading
+# (noise scale), how much its rhythm does (noise width), and the breath
+# between sentences, in seconds. "plain" is Piper's own reading, as Flash
+# spoke before it had styles.
+
+
+@dataclass(frozen=True)
+class Style:
+    label: str
+    pace: float = 1.0
+    feeling: float = 0.0
+    rhythm: float = 0.0
+    breath: float = 0.0
+
+
+STYLES = {
+    "warm": Style("Warm: unhurried and friendly, with room to breathe",
+                  pace=1.06, feeling=0.74, rhythm=0.9, breath=0.32),
+    "lively": Style("Lively: brighter and quicker, with more bounce",
+                    pace=0.95, feeling=0.86, rhythm=1.0, breath=0.22),
+    "calm": Style("Calm: slow, soft and even",
+                  pace=1.16, feeling=0.6, rhythm=0.72, breath=0.45),
+    "plain": Style("Plain: the voice's own reading"),
+}
+DEFAULT_STYLE = "warm"
+
+# A sentence's own shape on top of the style: a question lifts and takes
+# its time, an exclamation comes a little quicker and more alive, and a
+# trailing-off sentence leaves a longer pause after it.
+# Where one sentence ends and the next starts: a mark, maybe a closing
+# quote or bracket, then a space; not the point in "3.5".
+_SENTENCE_BREAK = re.compile(
+    r"(?<=[.!?\u2026][\"')\]])\s+|(?<=[.!?\u2026])\s+"
 )
 
 DOWNLOAD_TIMEOUT = 30
@@ -180,7 +429,7 @@ State = Callable[[str], None]
 def vosk_model_dir(name: str = "") -> Path:
     """Where an unpacked Vosk model lives once downloaded."""
 
-    return MODELS_DIR / (name or vosk_model())
+    return MODELS_DIR / (name or wake_model())
 
 
 def piper_paths(name: str = "") -> tuple[Path, Path]:
@@ -191,13 +440,179 @@ def piper_paths(name: str = "") -> tuple[Path, Path]:
     return onnx, onnx.with_suffix(".onnx.json")
 
 
+def is_extension(name: str) -> bool:
+    """A voice or listening model from an extension: @extension/name."""
+
+    return str(name or "").startswith("@")
+
+
+def _extension_speech(name: str, kind: str):
+    from . import extensions
+
+    return extensions.find_speech(name, kind)
+
+
+def extension_choices(kind: str) -> list[Choice]:
+    """What extensions add to KIND ("listening" or "speaking"): nothing
+    to download, so no size."""
+
+    from . import extensions
+
+    return [Choice(extensions.speech_name(e, s), 0, s.label)
+            for e, s in extensions.speech_models(kind)]
+
+
+def siri_choices() -> list[Choice]:
+    """The Siri voices installed on this Mac: nothing to download, so no
+    size. None off a Mac, or with none installed."""
+
+    return [Choice(v["name"], 0, v["label"]) for v in siri.voices()]
+
+
+def offered(kind: str) -> tuple[Choice, ...]:
+    """Every model of KIND Settings offers: extensions' first, then
+    Flash's own, then this Mac's Siri voices."""
+
+    return (*extension_choices(kind), *KINDS[kind],
+            *(siri_choices() if kind == "speaking" else ()),
+            *(apple_choices() if kind == "listening" else ()))
+
+
+def apple_choices() -> list[Choice]:
+    """This Mac's own speech recognition, on a Mac that can build its helper; nothing to download."""
+
+    return [Choice(apple_listen.NAME, 0, apple_listen.LABEL)] if apple_listen.available() else []
+
+
+def engine_of(name: str) -> str:
+    """What runs model NAME: Vosk or Moonshine to listen, Piper or Kokoro
+    to speak, or the extension it comes from."""
+
+    if is_extension(name):
+        return str(name)[1:].split("/", 1)[0]
+    if siri.is_siri(name):
+        return "Siri"
+    if apple_listen.is_apple(name):
+        return "Apple"
+    if is_phonon(name):
+        return "Phonon"
+    if is_kokoro(name):
+        return "Kokoro"
+    if is_moonshine(name):
+        return "Moonshine"
+    return "Vosk" if str(name or "").startswith("vosk") else "Piper"
+
+
+def engine_label(name: str) -> str:
+    """What runs model NAME, said for a person: the engine, or "From the
+    NAME extension" for one an extension adds."""
+
+    if is_extension(name):
+        return f"From the {engine_of(name)} extension"
+    # The voices to speak with, ranked: the best, and the second best.
+    ranked = {"Phonon": "Phonon, the best", "Kokoro": "Kokoro, second best",
+              "Siri": "Siri, built into this Mac", "Apple": "Apple, built into this Mac"}
+    return ranked.get(engine_of(name), engine_of(name))
+
+
+def by_engine(choices) -> list:
+    """CHOICES with each engine's together, in the order they first come,
+    and their own order kept within each."""
+
+    order: list[str] = []
+    for choice in choices:
+        if engine_of(choice.name) not in order:
+            order.append(engine_of(choice.name))
+    return sorted(choices, key=lambda c: order.index(engine_of(c.name)))
+
+
+def is_kokoro(name: str) -> bool:
+    return str(name or "").startswith(KOKORO)
+
+
+def is_phonon(name: str) -> bool:
+    return str(name or "").startswith(PHONON)
+
+
+def phonon_dir() -> Path:
+    """Where Phonon's model and voices are kept, laid out as the model's
+    own folder, with its voices and their catalog beside it."""
+
+    return MODELS_DIR / "phonon"
+
+
+def phonon_paths() -> list[Path]:
+    """Every file Phonon voices run on: the model's and each voice's."""
+
+    folder = phonon_dir()
+    return [*(folder / name for name in PHONON_FILES),
+            *(folder / "voices" / f"{file}.safetensors"
+              for _name, file, _accent in PHONON_VOICES.values())]
+
+
+def phonon_ready() -> bool:
+    """Whether the package Phonon voices run on is installed."""
+
+    try:
+        import ptts  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def kokoro_paths() -> tuple[Path, Path]:
+    """Kokoro's network and its voices, shared by every Kokoro voice."""
+
+    folder = MODELS_DIR / "kokoro"
+    return folder / KOKORO_FILES[0], folder / KOKORO_FILES[1]
+
+
+def kokoro_ready() -> bool:
+    """Whether the package Kokoro voices run on is installed."""
+
+    try:
+        import kokoro_onnx  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def is_moonshine(name: str) -> bool:
+    return str(name or "").startswith(MOONSHINE)
+
+
+def moonshine_ready() -> bool:
+    """Whether the package Moonshine runs on is installed."""
+
+    try:
+        import moonshine_voice  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def listening_installed(name: str) -> bool:
+    if apple_listen.is_apple(name):
+        return apple_listen.available()
+    if is_extension(name):
+        return _extension_speech(name, "listening") is not None
+    if is_moonshine(name):
+        return name in MOONSHINE_MODELS and all(
+            (MODELS_DIR / name / file).is_file() for file in MOONSHINE_FILES
+        )
     return (vosk_model_dir(name) / "am").is_dir()
 
 
 def voice_installed(name: str) -> bool:
-    onnx, config = piper_paths(name)
-    return onnx.is_file() and config.is_file()
+    if is_extension(name):
+        return _extension_speech(name, "speaking") is not None
+    if siri.is_siri(name):
+        return siri.installed(name)
+    if is_phonon(name):
+        return name[len(PHONON):] in PHONON_VOICES and all(
+            path.is_file() for path in phonon_paths())
+    paths = kokoro_paths() if is_kokoro(name) else piper_paths(name)
+    return all(path.is_file() for path in paths)
 
 
 def _piper_urls(name: str = "") -> tuple[str, str]:
@@ -218,15 +633,12 @@ def _piper_urls(name: str = "") -> tuple[str, str]:
 
 
 def models_present() -> bool:
-    """True when both models are already downloaded."""
+    """True when every model voice mode uses is already downloaded:
+    Moonshine's listening needs a Vosk model too, for "Hey Flash"."""
 
-    onnx, config = piper_paths()
-
-    return (
-        (vosk_model_dir() / "am").is_dir()
-        and onnx.is_file()
-        and config.is_file()
-    )
+    return (listening_installed(vosk_model())
+            and listening_installed(wake_model())
+            and voice_installed(piper_voice()))
 
 
 def missing_packages() -> list[str]:
@@ -234,9 +646,23 @@ def missing_packages() -> list[str]:
 
     missing = []
 
+    # The voice in use decides which speaks: Piper, Kokoro or Phonon. A
+    # Siri voice is the Mac's own: no package.
+    speaking = (
+        None if siri.is_siri(piper_voice())
+        else ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
+        else ("ptts", PHONON_PACKAGE) if is_phonon(piper_voice())
+        else ("piper", "piper-tts")
+    )
+    # Vosk listens for "Hey Flash" even while Moonshine does the rest.
+    hearing = (
+        [("moonshine_voice", MOONSHINE_PACKAGE)]
+        if is_moonshine(vosk_model()) else []
+    )
     for module, package in (
         ("vosk", "vosk"),
-        ("piper", "piper-tts"),
+        *hearing,
+        *([speaking] if speaking else []),
         ("sounddevice", "sounddevice"),
     ):
         try:
@@ -247,6 +673,25 @@ def missing_packages() -> list[str]:
             missing.append(package)
 
     return missing
+
+
+def install_hint() -> str:
+    """How to install what voice mode is missing."""
+
+    missing = missing_packages()
+    if MOONSHINE_PACKAGE in missing:
+        return MOONSHINE_HINT
+    if PHONON_PACKAGE in missing:
+        return PHONON_HINT
+    return KOKORO_HINT if KOKORO_PACKAGE in missing else INSTALL_HINT
+
+
+def listening_missing() -> list[str]:
+    """What hearing alone still needs installed: no voice to speak with,
+    and no sounddevice, since the page has the microphone."""
+
+    hearing = MOONSHINE_PACKAGE if is_moonshine(vosk_model()) else "vosk"
+    return [p for p in missing_packages() if p == hearing]
 
 
 def web_missing() -> list[str]:
@@ -345,16 +790,21 @@ def ensure_models(
         return ""
 
     return (download_listening(vosk_model(), on_progress, stop)
+            or download_listening(wake_model(), on_progress, stop)
             or download_voice(piper_voice(), on_progress, stop))
 
 
 def download_listening(
     name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
 ) -> str:
-    """Fetch and unpack the Vosk model NAME. Returns "" once it is in."""
+    """Fetch and unpack the Vosk model NAME, or fetch the Moonshine one.
+    Returns "" once it is in."""
 
     if listening_installed(name):
         return ""
+
+    if is_moonshine(name):
+        return _download_moonshine(name, on_progress, stop)
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     archive = MODELS_DIR / f"{name}.zip"
@@ -386,6 +836,14 @@ def download_voice(
     if voice_installed(name):
         return ""
 
+    if siri.is_siri(name):
+        # Macs download them, in System Settings.
+        return siri.HOW_TO_GET
+    if is_kokoro(name):
+        return _download_kokoro(on_progress, stop)
+    if is_phonon(name):
+        return _download_phonon(on_progress, stop)
+
     try:
         onnx_url, config_url = _piper_urls(name)
     except ValueError:
@@ -405,12 +863,169 @@ def download_voice(
     return why
 
 
+def _download_kokoro(
+    on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch what every Kokoro voice runs on, what of it is not here."""
+
+    for path, label in zip(kokoro_paths(), ("Kokoro", "Kokoro voices")):
+        if path.is_file():
+            continue
+        why = _download(f"{KOKORO_BASE}/{path.name}", path, label,
+                        on_progress, stop)
+        if why:
+            return why
+    return ""
+
+
+def _download_phonon(
+    on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch Phonon's model and every voice Flash offers in it, what of
+    them is not here, and write the catalog that names the voices."""
+
+    folder = phonon_dir()
+    (folder / "voices").mkdir(parents=True, exist_ok=True)
+    wanted = [(f"{PHONON_BASE}/{name}", folder / name, "Phonon")
+              for name in PHONON_FILES]
+    wanted += [(f"{PHONON_VOICES_BASE}/{file}.safetensors",
+                folder / "voices" / f"{file}.safetensors",
+                f"Phonon voice {shown}")
+               for shown, file, _accent in PHONON_VOICES.values()]
+    for url, path, label in wanted:
+        if path.is_file():
+            continue
+        why = _download(url, path, label, on_progress, stop)
+        if why:
+            return why
+    _write_phonon_catalog()
+    return ""
+
+
+def _write_phonon_catalog() -> None:
+    """The voices Phonon is given, one a line, as its catalogs are."""
+
+    lines = [json.dumps({
+        "name": shown, "voice_id": file, "language": "en",
+        "locale": accent, "filename": f"voices/{file}.safetensors",
+    }) for shown, file, accent in PHONON_VOICES.values()]
+    phonon_dir().mkdir(parents=True, exist_ok=True)
+    (phonon_dir() / "voices.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _download_moonshine(
+    name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch the files of the Moonshine model NAME not here yet, shown as
+    one download."""
+
+    if name not in MOONSHINE_MODELS:
+        return f"{name!r} is not a Moonshine model Flash offers."
+    folder = MODELS_DIR / name
+    size = name[len(MOONSHINE):]
+    base = f"{MOONSHINE_BASE}/{size}-streaming-en/{MOONSHINE_RELEASE}"
+    sizes = MOONSHINE_MODELS[name][1]
+    total = sum(sizes)
+    done = 0
+    for file, file_size in zip(MOONSHINE_FILES, sizes):
+        path = folder / file
+        if not path.is_file():
+            def overall(label: str, percent: int) -> None:
+                on_progress(label, min(100, int(
+                    (done + file_size * percent / 100) * 100 / total
+                )))
+
+            why = _download(f"{base}/{file}", path, "Moonshine", overall,
+                            stop)
+            if why:
+                return why
+        done += file_size
+    return ""
+
+
+# The two kinds of model voice mode runs on, and the setting that names
+# the one in use of each.
+KINDS = {"listening": LISTENING, "speaking": SPEAKING}
+SETTINGS = {"listening": "VOICE_VOSK_MODEL", "speaking": "VOICE_PIPER_VOICE"}
+
+
+def find_model(query: str) -> tuple[str, Choice]:
+    """The model Flash offers that QUERY names, and its kind: its whole
+    name, or any part of it that only one has ("ryan", "lgraph"), any
+    case. Raises ValueError saying why not."""
+
+    wanted = " ".join(str(query or "").split()).lower()
+    if not wanted:
+        raise ValueError("Name a model. /voice models lists them.")
+    every = [(kind, c) for kind in KINDS for c in offered(kind)]
+    exact = [(kind, c) for kind, c in every if c.name.lower() == wanted]
+    if exact:
+        return exact[0]
+    found = [(kind, c) for kind, c in every if wanted in c.name.lower()]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise ValueError(
+            f"No voice model called {query!r}. /voice models lists them."
+        )
+    raise ValueError(
+        f"{query!r} could be {', '.join(c.name for _, c in found)}. "
+        "Name one of them."
+    )
+
+
+def model_in_use(kind: str) -> str:
+    return vosk_model() if kind == "listening" else piper_voice()
+
+
+def model_installed(kind: str, name: str) -> bool:
+    return (listening_installed(name) if kind == "listening"
+            else voice_installed(name))
+
+
+def download_model(
+    kind: str, name: str, on_progress: Progress,
+    stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch the model NAME of KIND. Returns "" once it is in, CANCELLED
+    when called off, or why it could not be had."""
+
+    if is_extension(name):
+        # Its extension runs it: nothing to fetch.
+        return "" if model_installed(kind, name) else \
+            f"{name} is not installed: its extension is gone."
+    fetch = download_listening if kind == "listening" else download_voice
+    return fetch(name, on_progress, stop)
+
+
+def remove_model(kind: str, name: str) -> None:
+    if is_extension(name):
+        raise ValueError(
+            f"{name} comes with an extension: remove the extension to take "
+            "it out.")
+    if siri.is_siri(name):
+        raise ValueError(
+            f"{name} belongs to macOS: remove it in System Settings, "
+            "Accessibility, Spoken Content, System Voice, Manage Voices.")
+    if apple_listen.is_apple(name):
+        raise ValueError("This Mac's speech recognition belongs to macOS: there is nothing to remove.")
+    (remove_listening if kind == "listening" else remove_voice)(name)
+
+
 def remove_listening(name: str) -> None:
-    """Delete the Vosk model NAME, which must be one Settings offers."""
+    """Delete the listening model NAME, which must be one Settings
+    offers."""
 
     if name not in {c.name for c in LISTENING}:
         raise ValueError(f"{name!r} is not a listening model Flash offers")
-    shutil.rmtree(vosk_model_dir(name), ignore_errors=True)
+    if (is_moonshine(vosk_model()) and name == wake_model()
+            and listening_installed(name)):
+        raise ValueError(
+            f"{name} listens for \"Hey Flash\" while Moonshine does the "
+            "rest. Pick a Vosk model first."
+        )
+    shutil.rmtree(MODELS_DIR / name, ignore_errors=True)
 
 
 def remove_voice(name: str) -> None:
@@ -418,6 +1033,26 @@ def remove_voice(name: str) -> None:
 
     if name not in {c.name for c in SPEAKING}:
         raise ValueError(f"{name!r} is not a voice Flash offers")
+    if is_phonon(name):
+        # Shared by them all, as Kokoro's is.
+        if is_phonon(piper_voice()):
+            raise ValueError(
+                "Every Phonon voice shares one download, and one of them "
+                "is in use. Pick another voice first."
+            )
+        for path in [*phonon_paths(), phonon_dir() / "voices.jsonl"]:
+            path.unlink(missing_ok=True)
+        return
+    if is_kokoro(name):
+        # Shared by them all: not from under the one speaking now.
+        if is_kokoro(piper_voice()):
+            raise ValueError(
+                "Every Kokoro voice shares one download, and one of them "
+                "is in use. Pick another voice first."
+            )
+        for path in kokoro_paths():
+            path.unlink(missing_ok=True)
+        return
     for path in piper_paths(name):
         path.unlink(missing_ok=True)
 
@@ -443,6 +1078,10 @@ def _level(block: bytes) -> float:
 # never arrive. These are what "stop the conversation" sounds like
 # instead; leaving voice mode for good stays a typed command.
 EXIT_PHRASES = {
+    "close",
+    "close voice",
+    "close voice mode",
+    "close it",
     "voice off",
     "voice ah",
     "voice mode off",
@@ -460,6 +1099,29 @@ EXIT_PHRASES = {
     "disable voice",
     "disable voice mode",
 }
+
+
+# Said first, straight after the wake word, these mean it woke by mistake
+# or is not wanted after all: no chat, no reply, back to waiting.
+DISMISS_PHRASES = {
+    "stop", "cancel", "never mind", "nevermind", "nothing", "no",
+    "go away", "go back to sleep", "false alarm", "not you", "sorry",
+    "wrong", "ignore that", "ignore me", "forget it", "bye", "goodbye",
+    "nope", "not now", "nah",
+}
+
+
+def is_dismissal(text: str) -> bool:
+    """True when the first words after the wake word say it is not wanted:
+    an exit phrase, or one of DISMISS_PHRASES, with or without a greeting
+    or the name in front ("okay never mind", "flash stop")."""
+
+    words = re.sub(r"[^a-z ]", " ", (text or "").lower()).split()
+    names = set(WAKE_GREETINGS) | wake_words()
+    while words and words[0] in names:
+        words = words[1:]
+    said = " ".join(words)
+    return is_exit_phrase(said) or said in DISMISS_PHRASES
 
 
 def is_exit_phrase(text: str) -> bool:
@@ -496,8 +1158,228 @@ def _load_listener():
     return _listener[1]
 
 
-def listen(on_state: State) -> tuple[str, str]:
-    """Record until the speaker stops, and return what was said.
+class Hearing:
+    """Speech turned into words as it comes in: the words so far while
+    the speaker talks, and all of them once they stop."""
+
+    def __init__(self, recognizer, live: bool = True) -> None:
+        self._recognizer = recognizer
+        self._said: list[str] = []
+        self._partial = ""
+        # Only worth working out when someone is shown them.
+        self._live = live
+
+    def feed(self, pcm: bytes) -> str:
+        """Hear PCM, 16 kHz mono 16-bit, and return the words so far."""
+
+        if self._recognizer.AcceptWaveform(pcm):
+            # A stretch of speech the model is done with: kept, since
+            # the final result only has the stretch after it.
+            piece = _result_text(self._recognizer.Result(), "text")
+            if piece:
+                self._said.append(piece)
+            self._partial = ""
+        elif self._live:
+            self._partial = _result_text(
+                self._recognizer.PartialResult(), "partial",
+            )
+        return self.words()
+
+    def words(self) -> str:
+        return " ".join([*self._said, self._partial]).strip()
+
+    def pieces(self) -> list[str]:
+        """What was said so far, a stretch at a time, the last one still
+        being heard."""
+
+        return [*self._said, self._partial]
+
+    def ended(self) -> list[str]:
+        """Every stretch of what was said, now it is over."""
+
+        piece = _result_text(self._recognizer.FinalResult(), "text")
+        return [*self._said, piece]
+
+    def final(self) -> str:
+        """Everything that was said."""
+
+        return " ".join(p for p in self.ended() if p).strip()
+
+    def close(self) -> None:
+        """Let it go: a Vosk recognizer has nothing to free."""
+
+
+def _result_text(result: str, key: str) -> str:
+    try:
+        return str(json.loads(result).get(key) or "").strip()
+    except (ValueError, AttributeError):
+        return ""
+
+
+# Moonshine's transcriber is one native model; its streams are fed one
+# at a time.
+_moonshine = None
+_moonshine_lock = threading.Lock()
+
+
+def _load_moonshine():
+    """Load and cache the Moonshine model in use, as _load_listener
+    does Vosk's."""
+
+    global _moonshine
+
+    name = vosk_model()
+    if _moonshine is None or _moonshine[0] != name:
+        from moonshine_voice import ModelArch, Transcriber
+
+        arch = ModelArch[MOONSHINE_MODELS[name][0]]
+        _moonshine = (name, Transcriber(str(MODELS_DIR / name), arch))
+
+    return _moonshine[1]
+
+
+def _floats(pcm: bytes) -> list[float]:
+    """16-bit PCM as the -1 to 1 samples Moonshine takes."""
+
+    samples = array.array("h")
+    samples.frombytes(pcm[:len(pcm) - len(pcm) % 2])
+    return [sample / 32768.0 for sample in samples]
+
+
+class MoonshineHearing:
+    """Hearing, with Moonshine: the words so far come from its stream as
+    it works through them, a line at a time."""
+
+    def __init__(self, transcriber) -> None:
+        self._lines: dict[int, str] = {}
+        with _moonshine_lock:
+            self._stream = transcriber.create_stream()
+            self._stream.add_listener(self._heard)
+            self._stream.start()
+
+    def _heard(self, event) -> None:
+        line = getattr(event, "line", None)
+        if line is not None:
+            self._lines[line.line_id] = str(line.text or "").strip()
+
+    def _take(self, transcript) -> None:
+        for line in getattr(transcript, "lines", None) or ():
+            self._lines[line.line_id] = str(line.text or "").strip()
+
+    def feed(self, pcm: bytes) -> str:
+        samples = _floats(pcm)
+        if samples:
+            with _moonshine_lock:
+                self._stream.add_audio(samples, SAMPLE_RATE)
+        return self.words()
+
+    def words(self) -> str:
+        return " ".join(text for text in self._lines.values() if text)
+
+    def pieces(self) -> list[str]:
+        return list(self._lines.values())
+
+    def ended(self) -> list[str]:
+        with _moonshine_lock:
+            self._take(self._stream.stop())
+        self.close()
+        return self.pieces()
+
+    def final(self) -> str:
+        return " ".join(p for p in self.ended() if p).strip()
+
+    def close(self) -> None:
+        with _moonshine_lock:
+            self._stream.close()
+
+
+class ExtensionHearing:
+    """Hearing through an extension's listening model: the audio is kept
+    as it comes, and heard whole once the speaker stops, so there are no
+    words while they talk."""
+
+    def __init__(self, found) -> None:
+        self._extension, self._speech = found
+        self._pcm = bytearray()
+
+    def feed(self, pcm: bytes) -> str:
+        self._pcm += pcm
+        return ""
+
+    def words(self) -> str:
+        return ""
+
+    def pieces(self) -> list[str]:
+        return []
+
+    def ended(self) -> list[str]:
+        return [self.final()]
+
+    def final(self) -> str:
+        from . import extensions
+
+        if not self._pcm:
+            return ""
+        try:
+            return extensions.transcribe_pcm(
+                self._extension, self._speech, bytes(self._pcm))
+        except extensions.ExtensionError:
+            return ""
+        finally:
+            self._pcm = bytearray()
+
+    def close(self) -> None:
+        self._pcm = bytearray()
+
+
+def _hearing(live: bool = True):
+    """What hears speech with the listening model in use. Returns
+    `(hearing, "")`, or `(None, reason)` when it cannot be used."""
+
+    if apple_listen.is_apple(vosk_model()):
+        if not apple_listen.available():
+            return None, "This Mac's speech recognition needs a Mac with Xcode's command line tools."
+        return apple_listen.AppleHearing(), ""
+
+    if is_extension(vosk_model()):
+        found = _extension_speech(vosk_model(), "listening")
+        if found is None:
+            return None, (f"{vosk_model()} is not installed: its extension "
+                          "is gone. Pick another listening model.")
+        return ExtensionHearing(found), ""
+
+    moonshine = is_moonshine(vosk_model())
+    try:
+        if moonshine:
+            import moonshine_voice  # noqa: F401
+        else:
+            import vosk
+    except Exception:  # noqa: BLE001
+        return None, install_hint() if moonshine else INSTALL_HINT
+
+    try:
+        with _models_lock:
+            if moonshine:
+                return MoonshineHearing(_load_moonshine()), ""
+            model = _load_listener()
+    except Exception as exc:  # noqa: BLE001
+        return None, f"could not load the listening model: {exc}"
+
+    return Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE), live=live), ""
+
+
+def listen(
+    on_state: State, on_words: Optional[Callable[[str], None]] = None,
+    settle: bool = False, limit: float = MAX_TURN_SECONDS,
+    stop: Optional[Callable[[], bool]] = None,
+) -> tuple[str, str]:
+    """Record until the speaker stops, and return what was said. ON_WORDS
+    is told the words so far, as they change, while they talk. SETTLE
+    also ends the turn once the words have stopped changing for a
+    pause, for a room that is never quiet (a video playing). LIMIT is
+    the longest a turn can run, in seconds. STOP, asked about once a
+    second, ends the turn at once with nothing heard when it says so
+    (a call that went on elsewhere).
 
     Returns `(text, "")`, where `text` is empty when nothing was heard,
     or `("", reason)` when the microphone or the model was not usable.
@@ -505,19 +1387,19 @@ def listen(on_state: State) -> tuple[str, str]:
 
     try:
         import sounddevice
-        import vosk
     except Exception:  # noqa: BLE001
         return "", INSTALL_HINT
 
-    try:
-        model = _load_listener()
-    except Exception as exc:  # noqa: BLE001
-        return "", f"could not load the listening model: {exc}"
-
-    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+    hearing, why = _hearing(live=on_words is not None or settle)
+    if hearing is None:
+        return "", why
+    shown = ""
     heard = False
     quiet = 0.0
     elapsed = 0.0
+    # When the words last changed.
+    changed = 0.0
+    asked = 0.0
     step = BLOCK_FRAMES / SAMPLE_RATE
 
     # Read once per turn so a /set during the session takes effect.
@@ -527,6 +1409,7 @@ def listen(on_state: State) -> tuple[str, str]:
 
     try:
         with sounddevice.RawInputStream(
+            device=input_device(),
             samplerate=SAMPLE_RATE,
             blocksize=BLOCK_FRAMES,
             dtype="int16",
@@ -534,11 +1417,25 @@ def listen(on_state: State) -> tuple[str, str]:
         ) as stream:
             on_state("listening")
 
-            while elapsed < MAX_TURN_SECONDS:
+            while elapsed < limit:
                 block, _overflowed = stream.read(BLOCK_FRAMES)
                 block = bytes(block)
-                recognizer.AcceptWaveform(block)
+                words = hearing.feed(block)
+                if words != shown:
+                    shown = words
+                    changed = elapsed
+                    if on_words is not None:
+                        on_words(words)
                 elapsed += step
+
+                if stop is not None and elapsed - asked >= 1.0:
+                    asked = elapsed
+                    if stop():
+                        hearing.close()
+                        return "", ""
+
+                if settle and shown and elapsed - changed >= pause:
+                    break
 
                 if _level(block) >= threshold:
                     heard = True
@@ -551,22 +1448,20 @@ def listen(on_state: State) -> tuple[str, str]:
                     break
 
                 if not heard and elapsed >= patience:
+                    hearing.close()
                     return "", ""
     except KeyboardInterrupt:
         # Cancelling a turn is not a microphone fault, and the caller
         # says so differently, so it goes straight up.
+        hearing.close()
         raise
     except Exception as exc:  # noqa: BLE001
+        hearing.close()
         return "", f"{MIC_HINT} ({exc})"
 
     on_state("transcribing")
 
-    try:
-        result = json.loads(recognizer.FinalResult())
-    except ValueError:
-        return "", "the listening model returned nothing usable."
-
-    return str(result.get("text") or "").strip(), ""
+    return hearing.final(), ""
 
 
 # Said while Flash is talking, the interrupt word cuts the reply off. It
@@ -602,10 +1497,13 @@ class _Barge:
     be talked over.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, how: str = "word", line: str = "") -> None:
         self.heard = threading.Event()
         self._done = threading.Event()
         self._thread = None
+        # "anything": any words said over LINE, not LINE's own, cut it.
+        self.how = how
+        self.line = line
 
     def __enter__(self):
         try:
@@ -638,6 +1536,7 @@ class _Barge:
 
         try:
             with sounddevice.RawInputStream(
+                device=input_device(),
                 samplerate=SAMPLE_RATE,
                 blocksize=BLOCK_FRAMES,
                 dtype="int16",
@@ -655,7 +1554,9 @@ class _Barge:
                             recognizer.PartialResult()
                         ).get("partial")
 
-                    if _heard_interruption(said):
+                    if _heard_interruption(said) or (
+                            self.how == "anything"
+                            and _talked_over(said, self.line)):
                         self.heard.set()
                         return
         except Exception:  # noqa: BLE001, S110  # nosec B110
@@ -671,6 +1572,25 @@ def _load_speaker():
     """
 
     global _speaker
+
+    name = piper_voice()
+    if is_extension(name):
+        found = _extension_speech(name, "speaking")
+        if found is None:
+            raise RuntimeError(f"{name} is not installed: its extension is "
+                               "gone. Pick another voice.")
+        voice = _ExtensionVoice(*found)
+        return voice, voice.rate
+    if siri.is_siri(name):
+        return _SiriVoice(name), SIRI_RATE
+    if is_kokoro(name):
+        if _speaker is None or _speaker[0] != name:
+            _speaker = (name, _KokoroVoice(name), KOKORO_RATE)
+        return _speaker[1], _speaker[2]
+    if is_phonon(name):
+        if _speaker is None or _speaker[0] != name:
+            _speaker = (name, _PhononVoice(name), PHONON_RATE)
+        return _speaker[1], _speaker[2]
 
     onnx, config = piper_paths()
 
@@ -724,24 +1644,291 @@ def fit_for_voice(text: str) -> str:
     return " ".join(text.split())
 
 
-def _pcm_chunks(voice, text: str):
-    """Yield raw 16-bit audio for `text`, across Piper's two APIs."""
+def sentences(text: str) -> list[str]:
+    """TEXT in sentences, each with the mark that ends it."""
 
-    text = fit_for_voice(text)
-    if not text:
+    return [s.strip() for s in _SENTENCE_BREAK.split(text or "") if s.strip()]
+
+
+def delivery(sentence: str, style: Style) -> tuple[dict, float]:
+    """How SENTENCE is said in STYLE: Piper's settings for it, and the
+    seconds of quiet after it. Empty settings leave the voice's own."""
+
+    if not style.feeling:
+        return {}, 0.0
+    pace, feeling, breath = style.pace, style.feeling, style.breath
+    end = sentence.rstrip("\"')] ")
+    if end.endswith("?"):
+        pace *= 1.04
+        feeling += 0.04
+    elif end.endswith("!"):
+        pace *= 0.95
+        feeling += 0.08
+    elif end.endswith(("...", "\u2026")):
+        pace *= 1.06
+        breath *= 1.6
+    return {
+        "length_scale": round(pace, 3),
+        "noise_scale": round(feeling, 3),
+        "noise_w": style.rhythm,
+    }, breath
+
+
+# A voice that makes a whole piece before any of it plays (Kokoro, an
+# extension's) starts sooner on a short one: a long sentence is said in
+# parts, cut at a comma or the like past this many characters.
+FIRST_PART_CHARS = 90
+
+
+def _parts(sentence: str) -> list[str]:
+    if len(sentence) <= FIRST_PART_CHARS:
+        return [sentence]
+    out, rest = [], sentence
+    while len(rest) > FIRST_PART_CHARS:
+        cut = max(rest.rfind(mark, 30, FIRST_PART_CHARS + 40)
+                  for mark in (", ", "; ", ": ", " - "))
+        if cut < 0:
+            break
+        out.append(rest[:cut + 1].strip())
+        rest = rest[cut + 1:].strip()
+    return [*out, rest] if rest else out
+
+
+def _pcm_chunks(voice, text: str, rate: int = 22050):
+    """Yield raw 16-bit audio for `text`, across Piper's two APIs: a
+    sentence at a time, each said as the voice style has it, with a
+    breath after it."""
+
+    from . import humanvoice
+
+    text = humanvoice.for_ear(text or "")
+    if not fit_for_voice(humanvoice.strip(text)) and \
+            not humanvoice.pieces(text)[1]:
+        return
+
+    whole = isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice,
+                               _SiriVoice))
+    style = STYLES[voice_style()]
+    if not style.feeling and not whole and text == humanvoice.strip(text):
+        yield from _said(voice, fit_for_voice(text), {})
+        return
+    for sentence in sentences(text):
+        mood, pieces = humanvoice.pieces(sentence)
+        said = humanvoice.strip(sentence)
+        settings, breath = delivery(said, style) if style.feeling \
+            else ({}, 0.0)
+        how = humanvoice.delivery(mood, said, vary=bool(style.feeling))
+        if how.pace != 1.0:
+            settings = {**settings, "length_scale": round(
+                settings.get("length_scale", 1.0) * how.pace, 3)}
+        for kind, piece in pieces:
+            if kind == "sound":
+                yield from _sound(voice, piece, rate, settings)
+                continue
+            piece = fit_for_voice(piece)
+            for part in (_parts(piece) if whole else [piece]):
+                if part:
+                    yield humanvoice.louder(
+                        b"".join(_said(voice, part, settings)), how.gain)
+        if breath:
+            yield b"\x00\x00" * int(rate * breath)
+
+
+def _sound(voice, name: str, rate: int, settings: dict):
+    """The sound NAME a person makes ([laugh], [sigh], ...): a rush of
+    air, or a word said as the sound, a little quicker and softer than
+    the words around it. Breathing is not voiced."""
+
+    from . import humanvoice
+
+    if name in humanvoice.SILENT_SOUNDS:
+        return
+    if name in humanvoice.SAID_SOUNDS:
+        quicker = {**settings, "length_scale": round(
+            settings.get("length_scale", 1.0) * 0.9, 3)}
+        yield humanvoice.louder(b"".join(_said(
+            voice, humanvoice.SAID_SOUNDS[name], quicker)), 0.8)
+        return
+    yield humanvoice.air(rate, name)
+    yield b"\x00\x00" * int(rate * 0.08)
+
+
+# Kokoro's network, once loaded: every Kokoro voice speaks with it.
+_kokoro = None
+
+
+class _KokoroVoice:
+    """A Kokoro voice, speaking as Flash asks a Piper voice to: 16-bit
+    audio for each piece of text, at a pace."""
+
+    def __init__(self, name: str) -> None:
+        global _kokoro
+
+        try:
+            from kokoro_onnx import Kokoro
+        except Exception:  # noqa: BLE001
+            raise RuntimeError(KOKORO_HINT) from None
+        onnx, voices = kokoro_paths()
+        if _kokoro is None or _kokoro[0] != onnx:
+            _kokoro = (onnx, Kokoro(str(onnx), str(voices)))
+        self.model = _kokoro[1]
+        self.voice = name[len(KOKORO):]
+        self.lang = KOKORO_ACCENTS.get(self.voice[:1], "en-us")
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        import numpy
+
+        samples, _rate = self.model.create(
+            text, voice=self.voice, speed=1.0 / max(pace, 0.5),
+            lang=self.lang,
+        )
+        clipped = numpy.clip(samples, -1.0, 1.0)
+        return (clipped * 32767).astype("<i2").tobytes()
+
+
+# Phonon's model, once loaded: every Phonon voice speaks with it.
+_phonon = None
+
+
+def _phonon_model():
+    """Phonon's model, from its folder here; from its own download if that
+    will not load, which it keeps in a cache of its own."""
+
+    global _phonon
+
+    try:
+        import ptts
+    except Exception:  # noqa: BLE001
+        raise RuntimeError(PHONON_HINT) from None
+    if _phonon is None:
+        folder = phonon_dir()
+        catalog = folder / "voices.jsonl"
+        if not catalog.is_file():
+            _write_phonon_catalog()
+        try:
+            _phonon = ptts.TTS(str(folder), lang="en", quant="q8",
+                               voice_catalog=str(catalog))
+        except Exception:  # noqa: BLE001
+            _phonon = ptts.TTS(PHONON_REMOTE, lang="en", quant="q8",
+                               voice_catalog=str(catalog))
+    return _phonon
+
+
+class _PhononVoice:
+    """A Phonon voice, speaking as Flash asks a Piper voice to: 16-bit
+    audio for each piece of text. It keeps its own pace: Phonon has no
+    setting for one."""
+
+    def __init__(self, name: str) -> None:
+        key = name[len(PHONON):]
+        if key not in PHONON_VOICES:
+            raise RuntimeError(f"{name} is not a Phonon voice Flash has.")
+        self.voice = PHONON_VOICES[key][0]
+        self.model = _phonon_model()
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        import numpy
+
+        samples = self.model.synth(text, voice=self.voice)
+        clipped = numpy.clip(numpy.asarray(samples, dtype="float32"),
+                             -1.0, 1.0)
+        return (clipped * 32767).astype("<i2").tobytes()
+
+
+class _ExtensionVoice:
+    """An extension's voice, speaking as a Piper voice is asked to."""
+
+    def __init__(self, extension, speech) -> None:
+        self.extension = extension
+        self.speech = speech
+        self.rate = speech.rate
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        from . import extensions
+
+        try:
+            pcm, rate = extensions.speak_pcm(
+                self.extension, self.speech, text, pace)
+        except extensions.ExtensionError as exc:
+            raise RuntimeError(str(exc)) from None
+        if rate != self.rate:
+            pcm = _resample(pcm, rate, self.rate)
+        return pcm
+
+
+SIRI_RATE = 48000
+
+
+class _SiriVoice:
+    """A Siri voice of this Mac, speaking as a Piper voice is asked to. It
+    keeps its own delivery: only the pace is passed on."""
+
+    rate = SIRI_RATE
+
+    def __init__(self, name: str) -> None:
+        if not siri.installed(name):
+            raise RuntimeError(f"{name} is not installed. {siri.HOW_TO_GET}")
+        self.name = name
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        try:
+            pcm, rate = siri.speak_pcm(self.name, text, pace)
+        except siri.SiriError as exc:
+            raise RuntimeError(str(exc)) from None
+        if rate != self.rate:
+            pcm = _resample(pcm, rate, self.rate)
+        return pcm
+
+
+def _resample(pcm: bytes, rate: int, wanted: int) -> bytes:
+    """16-bit mono PCM at RATE, at WANTED instead: the nearest sample."""
+
+    import array
+
+    samples = array.array("h", pcm[:len(pcm) - len(pcm) % 2])
+    count = int(len(samples) * wanted / rate)
+    out = array.array("h", (samples[min(len(samples) - 1,
+                                        int(i * rate / wanted))]
+                            for i in range(count)))
+    return out.tobytes()
+
+
+def _said(voice, text: str, settings: dict):
+    """TEXT in VOICE, with SETTINGS, in whichever API this Piper has, or
+    in Kokoro or an extension's voice, which take the pace and leave the
+    rest."""
+
+    if isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice,
+                          _SiriVoice)):
+        yield voice.pcm(text, settings.get("length_scale", 1.0))
         return
 
     if hasattr(voice, "synthesize_stream_raw"):
-        yield from voice.synthesize_stream_raw(text)
+        yield from voice.synthesize_stream_raw(text, **settings)
         return
 
-    for chunk in voice.synthesize(text):
+    config = None
+    if settings:
+        try:
+            from piper import SynthesisConfig
+        except ImportError:  # a Piper without it reads in its own way
+            SynthesisConfig = None
+        if SynthesisConfig is not None:
+            config = SynthesisConfig(
+                length_scale=settings["length_scale"],
+                noise_scale=settings["noise_scale"],
+                noise_w_scale=settings["noise_w"],
+            )
+    for chunk in voice.synthesize(text, syn_config=config):
         audio = getattr(chunk, "audio_int16_bytes", None)
         yield audio if audio is not None else bytes(chunk)
 
 
-def speak(text: str) -> tuple[str, bool]:
-    """Read `text` aloud, stopping if it is interrupted.
+def speak(text: str, speaker: str = "",
+          kind: str = "voice") -> tuple[str, bool]:
+    """Read `text` aloud, stopping if it is interrupted: in Flash's voice,
+    or in SPEAKER, another Kokoro voice (a spark's, on a call). KIND
+    "voice" or "calls" says which interrupting setting applies.
 
     Returns `(reason, interrupted)`: `reason` is "" unless the reply
     could not be played at all, and `interrupted` says whether saying
@@ -759,7 +1946,12 @@ def speak(text: str) -> tuple[str, bool]:
         return INSTALL_HINT, False
 
     try:
-        voice, rate = _load_speaker()
+        if speaker and is_kokoro(speaker) and is_kokoro(piper_voice()):
+            voice, rate = _KokoroVoice(speaker), KOKORO_RATE
+        elif speaker and is_phonon(speaker) and is_phonon(piper_voice()):
+            voice, rate = _PhononVoice(speaker), PHONON_RATE
+        else:
+            voice, rate = _load_speaker()
     except Exception as exc:  # noqa: BLE001
         return f"could not load the voice: {exc}", False
 
@@ -769,12 +1961,15 @@ def speak(text: str) -> tuple[str, bool]:
     interrupted = False
 
     try:
-        with _Barge() as barge, sounddevice.RawOutputStream(
+        with _Barge(interrupt_how(kind), text) as barge, \
+                sounddevice.RawOutputStream(
+            device=output_device(),
             samplerate=rate,
             dtype="int16",
             channels=1,
         ) as stream:
-            for chunk in _pcm_chunks(voice, text):
+            for chunk in ahead(_pcm_chunks(voice, text, rate),
+                               barge.heard):
                 for start in range(0, len(chunk or b""), slice_bytes):
                     if barge.heard.is_set():
                         interrupted = True
@@ -787,6 +1982,10 @@ def speak(text: str) -> tuple[str, bool]:
                     # the device finish the buffered sentence.
                     _abort(stream)
                     break
+            # Cut off while the next piece was still being made.
+            if not interrupted and barge.heard.is_set():
+                interrupted = True
+                _abort(stream)
     except KeyboardInterrupt:
         # Cutting the reply short is a normal way to use voice mode, not
         # a failure worth reporting.
@@ -795,6 +1994,54 @@ def speak(text: str) -> tuple[str, bool]:
         return f"could not play the reply: {exc}", False
 
     return "", interrupted
+
+
+# How many pieces of speech are made ahead of the one playing: the next
+# sentence is being made while this one is said, so there is no gap.
+AHEAD = 2
+
+
+def ahead(pieces, stop: Optional[threading.Event] = None):
+    """PIECES, made on a thread of their own, AHEAD of the one being
+    taken: while one plays, the next is made. Stops making them when
+    STOP is set."""
+
+    import queue
+
+    made: queue.Queue = queue.Queue(maxsize=AHEAD)
+    done = object()
+    failed: list = []
+
+    def make() -> None:
+        try:
+            for piece in pieces:
+                while True:
+                    if stop is not None and stop.is_set():
+                        return
+                    try:
+                        made.put(piece, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+        except Exception as exc:  # noqa: BLE001  (raised where it is taken)
+            failed.append(exc)
+        finally:
+            while True:
+                try:
+                    made.put(done, timeout=0.1)
+                    return
+                except queue.Full:
+                    if stop is not None and stop.is_set():
+                        return
+
+    threading.Thread(target=make, daemon=True).start()
+    while True:
+        piece = made.get()
+        if piece is done:
+            break
+        yield piece
+    if failed:
+        raise failed[0]
 
 
 def _abort(stream) -> None:
@@ -819,46 +2066,458 @@ def transcribe(pcm: bytes) -> tuple[str, str]:
     records it. Returns `(text, "")`, or `("", reason)` when the listening
     model cannot be used."""
 
-    try:
-        import vosk
-    except Exception:  # noqa: BLE001
-        return "", INSTALL_HINT
+    hearing, why = _hearing(live=False)
+    if hearing is None:
+        return "", why
 
+    block = BLOCK_FRAMES * 2
+    for start in range(0, len(pcm) - len(pcm) % 2, block):
+        hearing.feed(pcm[start:start + block])
+
+    return hearing.final(), ""
+
+
+# The web page's words as they are spoken: it sends the microphone a
+# piece at a time while the speaker talks, and shows what comes back.
+# What it sends once they stop is still heard whole, by transcribe().
+LIVE_IDLE_SECONDS = 60.0
+LIVE_STREAMS = 8
+_live: dict[str, tuple[float, object, threading.Lock]] = {}
+_live_lock = threading.Lock()
+
+
+def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
+    """The words so far in STREAM, once PCM (16 kHz mono 16-bit) is
+    heard too. END lets it go. Returns `(words, "")`, or `("", reason)`
+    when the listening model cannot be used."""
+
+    now = time.monotonic()
+    with _live_lock:
+        # A page that went away without saying it was done.
+        gone = [_live.pop(k) for k, v in list(_live.items())
+                if now - v[0] > LIVE_IDLE_SECONDS]
+        if end and stream in _live:
+            gone.append(_live.pop(stream))
+        found = None if end else _live.get(stream)
+    _let_go(gone)
+    if end:
+        return "", ""
+    if found is None:
+        hearing, why = _hearing()
+        if hearing is None:
+            return "", why
+        found = (now, hearing, threading.Lock())
+        with _live_lock:
+            while len(_live) >= LIVE_STREAMS:
+                oldest = min(_live, key=lambda k: _live[k][0])
+                gone.append(_live.pop(oldest))
+            kept = _live.setdefault(stream, found)
+        if kept is not found:
+            gone.append(found)
+        _let_go(gone)
+        found = kept
+    _, hearing, lock = found
+    with lock:
+        block = BLOCK_FRAMES * 2
+        words = hearing.words()
+        for start in range(0, len(pcm) - len(pcm) % 2, block):
+            words = hearing.feed(pcm[start:start + block])
+    with _live_lock:
+        if stream in _live:
+            _live[stream] = (time.monotonic(), hearing, lock)
+    return words, ""
+
+
+def _let_go(gone: list) -> None:
+    """Close the live hearings that were let go, each once it is not
+    being fed."""
+
+    for _, hearing, lock in gone:
+        with lock:
+            hearing.close()
+    gone.clear()
+
+
+# Listening for "Hey Flash" while the web page is open, so voice mode
+# starts without a click. The page sends the microphone a piece at a time;
+# the recognizer here is held to the wake phrases, which keeps it light
+# and keeps everything else said out of it. Nothing it hears is kept.
+WAKE_PHRASES = ("hey flash", "hi flash", "okay flash", "ok flash")
+WAKE_SETTING = "VOICE_WAKE_WORD"
+DEFAULT_WAKE_WORD = "hey flash"
+WAKE_GREETINGS = ("hey", "hi", "okay", "ok")
+MAX_WAKE_WORDS = 4
+WAKE_IDLE_SECONDS = 30.0
+WAKE_STREAMS = 4
+_wake: dict[str, tuple[float, object, threading.Lock]] = {}
+_wake_lock = threading.Lock()
+# The last few seconds each stream heard, to hear again when it seems to
+# have said the wake word.
+WAKE_CONFIRM_SECONDS = 3.5
+_wake_audio: dict[str, bytearray] = {}
+# How close a word heard freely must sound to the name ("flesh" for "flash").
+WAKE_NAME_LIKENESS = 0.75
+
+
+# At this sensitivity and above, the phrase wakes Flash as soon as it is
+# heard, mid phrase. Below, only once it is said in full, and only when
+# the listening model is sure enough of its words: less sure at higher
+# sensitivity, so a video or a song sets it off less the lower it is.
+WAKE_EAGER = 80
+WAKE_WORDS = {"hey", "hi", "okay", "ok", "flash"}
+
+
+def _wake_clean(text: str) -> str:
+    return " ".join(re.findall(r"[a-z']+", str(text or "").lower()))
+
+
+def wake_word() -> str:
+    """What wakes Flash, as set (VOICE_WAKE_WORD): "hey flash" unless
+    changed, in lower case."""
+
+    return _wake_clean(_setting(WAKE_SETTING, DEFAULT_WAKE_WORD)) \
+        or DEFAULT_WAKE_WORD
+
+
+def wake_title() -> str:
+    """The wake word as the page and the terminal write it: Hey Flash."""
+
+    return " ".join(w.capitalize() for w in wake_word().split())
+
+
+def wake_phrases(word: str = "") -> tuple[str, ...]:
+    """Every phrase that wakes Flash: the wake word, and it after any
+    greeting, so "hey nova" also takes "hi nova" and "okay nova", and
+    "computer" also takes "hey computer"."""
+
+    word = _wake_clean(word) or wake_word()
+    first, _, rest = word.partition(" ")
+    if first in WAKE_GREETINGS and rest:
+        found = [f"{g} {rest}" for g in WAKE_GREETINGS]
+    else:
+        found = [word] + [f"{g} {word}" for g in WAKE_GREETINGS]
+    return tuple(dict.fromkeys(found))
+
+
+def wake_words() -> set[str]:
+    return {w for phrase in wake_phrases() for w in phrase.split()}
+
+
+def check_wake_word(word: str) -> str:
+    """Why WORD cannot wake Flash, or "": one to four plain words, each
+    one the listening model knows (it hears nothing else)."""
+
+    cleaned = _wake_clean(word)
+    if not cleaned:
+        return "Say a word or two, in letters."
+    if len(cleaned.split()) > MAX_WAKE_WORDS:
+        return f"At most {MAX_WAKE_WORDS} words."
+    if len(cleaned.replace(" ", "")) < 3:
+        return "Too short: it would wake on almost anything."
     try:
         with _models_lock:
             model = _load_listener()
-    except Exception as exc:  # noqa: BLE001
-        return "", f"could not load the listening model: {exc}"
+    except Exception:  # noqa: BLE001
+        return ""  # no model yet: it is checked again once there is one
+    finder = getattr(model, "find_word", None)
+    if finder is None:
+        return ""
+    unknown = [w for w in cleaned.split() if finder(w) < 0]
+    if unknown:
+        return (f"The listening model does not know "
+                f"{', '.join(repr(w) for w in unknown)}: pick words it "
+                "knows, like a common name or word.")
+    return ""
 
-    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
-    block = BLOCK_FRAMES * 2
-    for start in range(0, len(pcm) - len(pcm) % 2, block):
-        recognizer.AcceptWaveform(pcm[start:start + block])
+
+def _woke(result: str, key: str) -> bool:
+    said = " ".join(_result_text(result, key).lower().split())
+    return any(phrase in said for phrase in wake_phrases())
+
+
+def wake_confidence(sensitivity: int) -> float:
+    """How sure of each wake word the model has to be."""
+
+    return 0.97 - 0.006 * max(0, min(100, sensitivity))
+
+
+def _woke_surely(result: str, sensitivity: int) -> bool:
+    """Whether a finished RESULT holds a wake phrase, every word of it
+    heard surely enough for SENSITIVITY."""
+
+    if not _woke(result, "text"):
+        return False
+    try:
+        words = json.loads(result).get("result") or []
+    except (ValueError, AttributeError):
+        words = []
+    sure = [
+        float(word.get("conf", 1.0)) for word in words
+        if isinstance(word, dict)
+        and str(word.get("word", "")).lower() in wake_words()
+    ]
+    # A model that gives no confidences has only its words to go by.
+    return not sure or min(sure) >= wake_confidence(sensitivity)
+
+
+def _name_heard(said: str, phrases: list[str]) -> bool:
+    """Whether SAID, heard freely, holds a wake phrase's name: each of its
+    words other than a greeting, or something that sounds close to it."""
+
+    heard = re.sub(r"[^a-z ]", " ", said.lower()).split()
+    for phrase in phrases:
+        names = [w for w in phrase.split() if w not in WAKE_GREETINGS] \
+            or phrase.split()
+        if all(any(difflib.SequenceMatcher(None, name, w).ratio()
+                   >= WAKE_NAME_LIKENESS for w in heard) for name in names):
+            return True
+    return False
+
+
+def _confirm_wake(audio: bytes) -> bool:
+    """AUDIO heard again with every word the model knows: whether the
+    wake word's name is in it. A model that cannot hear freely is taken
+    at its word."""
 
     try:
-        result = json.loads(recognizer.FinalResult())
-    except ValueError:
-        return "", "the listening model returned nothing usable."
+        import vosk
 
-    return str(result.get("text") or "").strip(), ""
+        with _models_lock:
+            model = _load_listener()
+        free = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        free.AcceptWaveform(audio)
+        said = _result_text(free.FinalResult(), "text")
+    except Exception:  # noqa: BLE001
+        return True
+    return _name_heard(said, wake_phrases())
 
 
-def synthesize(text: str) -> tuple[bytes, str]:
-    """TEXT spoken, as a WAV file the web page can play. Returns
-    `(wav, "")`, or `(b"", reason)` when the voice cannot be used."""
+def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
+    """Whether the wake word was just said in STREAM, now PCM (16 kHz mono
+    16-bit) is heard too. END lets it go. Returns `(woke, "")`, or
+    `(False, reason)` when the listening model cannot be used."""
+
+    now = time.monotonic()
+    with _wake_lock:
+        for key in [k for k, v in _wake.items()
+                    if now - v[0] > WAKE_IDLE_SECONDS]:
+            del _wake[key]
+        for key in [k for k in _wake_audio if k not in _wake and k != stream]:
+            del _wake_audio[key]
+        if end:
+            _wake.pop(stream, None)
+            _wake_audio.pop(stream, None)
+            return False, ""
+        found = _wake.get(stream)
+        heard = _wake_audio.setdefault(stream, bytearray())
+        heard += pcm
+        del heard[:max(0, len(heard) - int(WAKE_CONFIRM_SECONDS * SAMPLE_RATE * 2))]
+        recent = bytes(heard)
+    phrases = wake_phrases()
+    if found is not None and found[3] != phrases:
+        # The wake word changed: a recognizer held to the old one goes.
+        found = None
+    if found is None:
+        try:
+            import vosk
+        except Exception:  # noqa: BLE001
+            return False, INSTALL_HINT
+        try:
+            with _models_lock:
+                model = _load_listener()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"could not load the listening model: {exc}"
+        # Only the wake phrases, and "[unk]" for everything else said,
+        # with how sure it is of each word.
+        grammar = json.dumps([*phrases, "[unk]"])
+        recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE, grammar)
+        if hasattr(recognizer, "SetWords"):
+            recognizer.SetWords(True)
+        found = (now, recognizer, threading.Lock(), phrases)
+        with _wake_lock:
+            while len(_wake) >= WAKE_STREAMS and stream not in _wake:
+                del _wake[min(_wake, key=lambda k: _wake[k][0])]
+            if stream in _wake and _wake[stream][3] == phrases:
+                found = _wake[stream]
+            else:
+                _wake[stream] = found
+    _, recognizer, lock, _ = found
+    woke = False
+    sensitivity = wake_sensitivity()
+    with lock:
+        block = BLOCK_FRAMES * 2
+        for start in range(0, len(pcm) - len(pcm) % 2, block):
+            piece = pcm[start:start + block]
+            if recognizer.AcceptWaveform(piece):
+                woke = _woke_surely(recognizer.Result(), sensitivity)
+            elif sensitivity >= WAKE_EAGER:
+                woke = _woke(recognizer.PartialResult(), "partial")
+            if woke:
+                # Heard once: the next phrase starts from nothing.
+                recognizer.Reset()
+                break
+    # Listening only for the wake word, the model hears it in anything a
+    # little like it (a TV, a cough, a word with the same vowels). So the
+    # last few seconds are heard again, with every word it knows, and it
+    # wakes only if the name is really in them.
+    # With the owner's own sayings of it kept (wake_voice), a close match to
+    # those can vouch for a phrase the free hearing missed in a noisy room,
+    # and a very close one wakes Flash even when the model missed it.
+    try:
+        from . import wake_voice
+
+        own = wake_voice.verdict(recent)
+    except Exception:  # noqa: BLE001
+        own = ""
+    if woke and own != "tight" and not _confirm_wake(recent):
+        woke = own == "loose"
+    elif not woke and own == "tight":
+        woke = True
+    if woke:
+        with _wake_lock:
+            if stream in _wake_audio:
+                _wake_audio[stream].clear()
+    with _wake_lock:
+        if stream in _wake:
+            _wake[stream] = (time.monotonic(), recognizer, lock, phrases)
+    return woke, ""
+
+
+# Kokoro voices a spark on a call can be given, one each: clear, and
+# unlike one another.
+SPARK_KOKORO = ("af_heart", "am_michael", "bf_emma", "am_adam", "af_nicole",
+                "bm_george", "af_sarah", "am_fenrir", "bf_isabella",
+                "bm_lewis")
+# With a voice that has no others, a spark's is Flash's set higher or
+# lower, by this many cents.
+SPARK_DETUNE = (-260, 220, -140, 320, -380, 120)
+
+
+def can_speak_with(name: str) -> bool:
+    """Whether voice NAME is ready to speak with now: downloaded, and
+    what it runs on installed."""
+
+    if not name or not voice_installed(name):
+        return False
+    if is_phonon(name):
+        return phonon_ready()
+    return kokoro_ready() if is_kokoro(name) else True
+
+
+def spark_voice(spark_id: str, chosen: Optional[str] = None,
+                pitch: Optional[int] = None) -> dict:
+    """The voice SPARK_ID speaks in on a call: {"voice": NAME} for a voice
+    of its own, and {"detune": cents} for the page to shift it by. The
+    one the user chose for it, when it can speak with that; else one
+    picked for it: another Kokoro voice when Flash speaks with Kokoro, or
+    Flash's own voice shifted. {} for Flash."""
+
+    if not spark_id:
+        return {}
+    import zlib
+
+    from . import sparks  # deferred: sparks imports half of Flash
+
+    # CHOSEN and PITCH: ones being tried, in place of what it has saved.
+    spark = sparks.find(spark_id)
+    if chosen is None:
+        chosen = (getattr(spark, "voice", "") or "") if spark else ""
+    if pitch is None:
+        pitch = int(getattr(spark, "pitch", 0) or 0) if spark else 0
+    found: dict
+    if chosen and can_speak_with(chosen):
+        found = {"voice": chosen}
+    else:
+        pick = zlib.crc32(spark_id.encode("utf-8"))
+        own = piper_voice()
+        if is_phonon(own):
+            others = [v for v in PHONON_VOICES if PHONON + v != own]
+            found = {"voice": PHONON + others[pick % len(others)]}
+        elif is_kokoro(own):
+            others = [v for v in SPARK_KOKORO if KOKORO + v != own]
+            found = {"voice": KOKORO + others[pick % len(others)]}
+        else:
+            found = {"detune": SPARK_DETUNE[pick % len(SPARK_DETUNE)]}
+    if pitch:
+        # Chosen by the user: in place of any picked shift.
+        found["detune"] = pitch * 100
+    return found
+
+
+_others: dict = {}  # name -> (voice, rate): voices besides Flash's own
+
+
+def _other_speaker(name: str):
+    """Voice NAME, loaded beside Flash's own, for a spark that speaks in
+    it: a Kokoro voice, an extension's, or another Piper voice."""
+
+    if is_kokoro(name):
+        return _KokoroVoice(name), KOKORO_RATE
+    if is_phonon(name):
+        return _PhononVoice(name), PHONON_RATE
+    if siri.is_siri(name):
+        return _SiriVoice(name), SIRI_RATE
+    if is_extension(name):
+        found = _extension_speech(name, "speaking")
+        if found is None:
+            raise RuntimeError(f"{name} is not installed: its extension is "
+                               "gone.")
+        speaker = _ExtensionVoice(*found)
+        return speaker, speaker.rate
+    if name not in _others:
+        from piper import PiperVoice
+
+        onnx, config = piper_paths(name)
+        settings = json.loads(config.read_text(encoding="utf-8"))
+        rate = int(settings.get("audio", {}).get("sample_rate", 22050))
+        _others[name] = (PiperVoice.load(str(onnx)), rate)
+    return _others[name]
+
+
+def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
+    """TEXT spoken, as a WAV file the web page can play: in Flash's voice,
+    or in SPEAKER, another voice ready to speak with (a spark's on a
+    call). Returns `(wav, "")`, or `(b"", reason)` when the voice cannot
+    be used."""
+
+    return synthesize_line(text, speaker)[:2]
+
+
+def pitch_of(text: str) -> int:
+    """How many cents higher or lower TEXT is said, for the page to shift
+    its audio by: its feeling's, and its own small variation."""
+
+    from . import humanvoice
+
+    if not STYLES[voice_style()].feeling:
+        return 0
+    first = next(iter(sentences(humanvoice.for_ear(text or ""))), "")
+    mood, _pieces = humanvoice.pieces(first)
+    return humanvoice.delivery(mood, humanvoice.strip(first)).detune
+
+
+def synthesize_line(text: str, speaker: str = "") -> tuple[bytes, str, int]:
+    """synthesize, and the cents the page shifts the line by (pitch_of):
+    a voice here has no pitch of its own to set."""
 
     text = (text or "").strip()
     if not text:
-        return b"", ""
+        return b"", "", 0
 
     try:
         with _models_lock:
-            voice, rate = _load_speaker()
-            pcm = b"".join(chunk or b"" for chunk in _pcm_chunks(voice, text))
+            if speaker and speaker != piper_voice() and \
+                    can_speak_with(speaker):
+                voice, rate = _other_speaker(speaker)
+            else:
+                voice, rate = _load_speaker()
+            pcm = b"".join(
+                chunk or b"" for chunk in _pcm_chunks(voice, text, rate)
+            )
     except ImportError:
-        return b"", INSTALL_HINT
+        return b"", INSTALL_HINT, 0
     except Exception as exc:  # noqa: BLE001
-        return b"", f"could not speak the reply: {exc}"
+        return b"", f"could not speak the reply: {exc}", 0
 
     out = io.BytesIO()
     with wave.open(out, "wb") as wav:
@@ -866,7 +2525,7 @@ def synthesize(text: str) -> tuple[bytes, str]:
         wav.setsampwidth(2)
         wav.setframerate(rate)
         wav.writeframes(pcm)
-    return out.getvalue(), ""
+    return out.getvalue(), "", pitch_of(text)
 
 
 def speakable(line: str) -> str:
@@ -874,7 +2533,10 @@ def speakable(line: str) -> str:
     to hear: an address is said as "a link", not spelled out, and emojis
     are left unsaid."""
 
-    return " ".join(_EMOJI.sub("", _URL.sub("a link", line or "")).split())
+    from . import humanvoice
+
+    line = humanvoice.drop_device_cues(line or "")
+    return " ".join(_EMOJI.sub("", _URL.sub("a link", line)).split())
 
 
 # Said to a paused session, these wake it; said as a whole turn, these
@@ -887,19 +2549,27 @@ def _words(text: str) -> list[str]:
     return re.sub(r"[^a-z' ]", "", (text or "").lower()).split()
 
 
-def voice_command(text: str, speaking: str = "") -> dict:
+def voice_command(text: str, speaking: str = "", first: bool = False) -> dict:
     """What a turn of speech asks of voice mode, beyond being a message.
 
     `speaking` is the line Flash was reading out when it was heard: said
     over a reply, "interrupt" cuts it off, but not when the word came
-    from the reply itself, echoing back through the microphone.
+    from the reply itself, echoing back through the microphone. `first`:
+    the first words after the wake word, where "never mind" and the like
+    end it too, before any chat is made.
     """
 
+    from . import music
+
     words = _words(text)
+    # "Pause the music" is for the music, not voice mode.
+    wants = music.intent(text)
     return {
-        "exit": is_exit_phrase(text),
-        "pause": " ".join(words) in PAUSE_PHRASES,
-        "resume": RESUME_WORD in words,
+        "music": wants,
+        "exit": (is_dismissal(text) if first else is_exit_phrase(text))
+        and not wants,
+        "pause": " ".join(words) in PAUSE_PHRASES and not wants,
+        "resume": RESUME_WORD in words and not wants,
         "interrupt": _heard_interruption(text)
         and not _heard_interruption(speaking),
         # Only the interrupt word, with nothing playing to cut off.
@@ -943,7 +2613,15 @@ def for_speech(text: str, limit: int = 0) -> str:
     # the reader can finish on screen.
     limit = limit or max_speech_chars()
 
-    stripped = _EMOJI.sub("", _FENCE.sub(" ", text or ""))
+    from . import humanvoice
+
+    # A passage set apart in Newsreader is prose, not code: its words
+    # are read like the rest. A device's cue ("[bot:love]") is not said.
+    text = serif.plain(humanvoice.drop_device_cues(text or ""))
+    # A rich answer's piece says its few spoken words; its numbers and
+    # boxes are on screen.
+    text = visuals.plain(text)
+    stripped = _EMOJI.sub("", _FENCE.sub(" ", text))
     stripped = _IMAGE.sub(" ", stripped)
     stripped = _LINK.sub(r"\1", stripped)
     stripped = _URL.sub("a link", stripped)

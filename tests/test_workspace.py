@@ -34,7 +34,7 @@ class TestHosts:
 
         assert listed == [{
             "name": "This computer", "url": "http://localhost:11434",
-            "saved": False,
+            "saved": False, "locked": False,
         }]
 
     def test_add_and_remove(self):
@@ -94,6 +94,108 @@ class TestHosts:
         assert health["Down"] is False
 
 
+class TestHostKeys:
+    def test_a_key_is_kept_but_never_listed(self):
+        added = workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert added == {"name": "Studio", "url": "http://10.0.0.5:11434",
+                         "locked": True}
+        listed = workspace.hosts()
+        assert listed[-1]["locked"] is True
+        assert "s3cret" not in repr(listed)
+        assert workspace.api_key("10.0.0.5") == "s3cret"
+
+    def test_the_file_with_keys_is_private(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        mode = (workspace.store() / "hosts.json").stat().st_mode & 0o777
+        if os.name != "nt":
+            assert mode == 0o600
+
+    def test_headers_carry_the_key(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert workspace.auth_headers("http://10.0.0.5:11434") == {
+            "authorization": "Bearer s3cret",
+        }
+        assert workspace.client_options("10.0.0.5") == {
+            "headers": {"authorization": "Bearer s3cret"},
+        }
+        # Another host gets nothing, and a client is made as before.
+        assert workspace.client_options("10.0.0.9") == {}
+
+    def test_the_environment_key_is_the_fallback(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_API_KEY", "from-env")
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert workspace.api_key("10.0.0.5") == "s3cret"
+        assert workspace.api_key("10.0.0.9") == "from-env"
+
+    def test_adding_again_without_a_key_drops_it(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+        workspace.add_host("Studio", "10.0.0.5")
+
+        assert workspace.api_key("10.0.0.5") == ""
+        assert workspace.hosts()[-1]["locked"] is False
+
+    def test_this_computer_can_have_a_key(self):
+        workspace.add_host("", "localhost:11434", "s3cret")
+
+        listed = workspace.hosts()
+        assert [h["name"] for h in listed] == ["This computer"]
+        assert listed[0]["locked"] is True
+        assert workspace.api_key("127.0.0.1:11434") == "s3cret"
+
+    def test_model_lookups_send_it(self, monkeypatch):
+        from flash import sysprompt
+
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+        seen = []
+
+        def urlopen(request, timeout):
+            seen.append(request.get_header("Authorization"))
+            raise OSError("not really there")
+
+        monkeypatch.setattr(sysprompt.urllib.request, "urlopen", urlopen)
+        sysprompt._show("http://10.0.0.5:11434", "alpha3.1")
+
+        assert seen == ["Bearer s3cret"]
+
+    def test_a_key_has_no_spaces(self):
+        with pytest.raises(WorkspaceError):
+            workspace.add_host("Studio", "10.0.0.5", "two words")
+
+    def test_a_server_behind_a_key(self):
+        class Guarded(BaseHTTPRequestHandler):
+            def do_GET(self):
+                ok = self.headers.get("Authorization") == "Bearer right"
+                self.send_response(200 if ok else 401)
+                self.end_headers()
+                self.wfile.write(b'{"version":"0.35.0"}' if ok else b"no")
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Guarded)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"127.0.0.1:{server.server_address[1]}"
+        try:
+            assert workspace.host_state(url) == "refused"
+            workspace.add_host("Guarded", url, "wrong")
+            assert workspace.host_state(url) == "refused"
+            workspace.add_host("Guarded", url, "right")
+            assert workspace.host_state(url) == "up"
+            health = {
+                h["name"]: h for h in workspace.hosts_with_health()
+            }
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert health["Guarded"]["up"] is True
+        assert health["Guarded"]["refused"] is False
+
+
 class TestProjects:
     def test_create_find_update_delete(self, tmp_path):
         made = workspace.create_project("", str(tmp_path), "Use pytest.")
@@ -109,6 +211,45 @@ class TestProjects:
         assert workspace.delete_project(made.id)
         assert workspace.project(made.id) is None
         assert tmp_path.is_dir()  # the folder itself is never touched
+
+    def test_a_project_takes_in_more_folders(self, tmp_path):
+        main, api, docs = (tmp_path / n for n in ("web", "api", "docs"))
+        for folder in (main, api, docs):
+            folder.mkdir()
+
+        made = workspace.create_project(
+            "App", str(main), folders=[str(api), "", str(api), str(main)],
+        )
+        # Blanks, repeats and the main folder itself are left out.
+        assert made.folders == [str(api.resolve())]
+        assert workspace.project(made.id).folders == [str(api.resolve())]
+
+        workspace.update_project(made.id, folders=[str(docs)])
+        assert workspace.project(made.id).folders == [str(docs.resolve())]
+        # The main folder moved to one it had besides: it is not twice.
+        workspace.update_project(made.id, path=str(docs))
+        found = workspace.project(made.id)
+        assert found.path == str(docs.resolve()) and found.folders == []
+
+    def test_more_folders_have_to_exist_and_are_capped(self, tmp_path):
+        with pytest.raises(WorkspaceError, match="not a folder"):
+            workspace.create_project(
+                "x", str(tmp_path), folders=[str(tmp_path / "missing")],
+            )
+        many = []
+        for n in range(workspace.MAX_FOLDERS + 1):
+            (tmp_path / f"f{n}").mkdir()
+            many.append(str(tmp_path / f"f{n}"))
+        with pytest.raises(WorkspaceError, match="at most"):
+            workspace.create_project("x", str(tmp_path), folders=many)
+
+    def test_a_project_from_before_folders_reads_as_none(self, tmp_path):
+        made = workspace.create_project("Old", str(tmp_path))
+        workspace._write("projects.json", [{
+            "id": made.id, "name": "Old", "path": made.path,
+        }])
+
+        assert workspace.project(made.id).folders == []
 
     def test_the_folder_has_to_exist(self, tmp_path):
         with pytest.raises(WorkspaceError, match="not a folder"):
@@ -129,10 +270,22 @@ class TestProjects:
                 "x", str(tmp_path), "x" * (workspace.MAX_INSTRUCTIONS + 1)
             )
 
+    def test_make_folder(self, tmp_path):
+        made = workspace.make_folder(f"{tmp_path}/new-app/")
+        assert made == str(tmp_path / "new-app")  # nosec B101
+        assert (tmp_path / "new-app").is_dir()  # nosec B101
+        # Only the last part is made, never a tree of them; one that is
+        # there, or a name no folder can have, is an error.
+        for bad in (f"{tmp_path}/nope/deeper", f"{tmp_path}/new-app",
+                    f"{tmp_path}/a:b", "relative/path", ""):
+            with pytest.raises(ValueError):
+                workspace.make_folder(bad)
+        assert not (tmp_path / "nope").exists()  # nosec B101
+
     def test_folder_suggestions(self, tmp_path):
         for name in ("alpha", "alps", "beta", ".hidden"):
             (tmp_path / name).mkdir()
-        (tmp_path / "also-a-file").write_text("x")
+        (tmp_path / "also-a-file").write_text("x", encoding="utf-8")
 
         assert workspace.folder_suggestions(f"{tmp_path}/al") == [
             str(tmp_path / "alpha"), str(tmp_path / "alps"),
@@ -164,7 +317,7 @@ class TestChats:
     def test_a_broken_file_is_skipped(self):
         folder = workspace.store() / "chats"
         folder.mkdir(parents=True)
-        (folder / "0123abcd.json").write_text("{broken")
+        (folder / "0123abcd.json").write_text("{broken", encoding="utf-8")
 
         assert workspace.load_chats() == []
 
@@ -204,3 +357,40 @@ class TestThisComputer:
 
         assert workspace.remove_host("10.0.0.5")
         assert [h["name"] for h in workspace.hosts()] == ["This computer"]
+
+
+class TestFavoriteModels:
+    def test_none_until_one_is_pinned(self):
+        assert workspace.favorite_models("http://localhost:11434") == []
+
+    def test_pinned_in_order_and_unpinned(self):
+        host = "http://localhost:11434"
+        workspace.pin_model(host, "beta:8b")
+        workspace.pin_model(host, "alpha:8b")
+
+        assert workspace.favorite_models(host) == ["beta:8b", "alpha:8b"]
+        assert workspace.pin_model(host, "beta:8b", False) == ["alpha:8b"]
+        assert workspace.pin_model(host, "alpha:8b", False) == []
+
+    def test_each_host_keeps_its_own(self):
+        workspace.pin_model("http://localhost:11434", "alpha:8b")
+        workspace.pin_model("10.0.0.5", "gamma:12b")
+
+        # 127.0.0.1 is this computer too.
+        assert workspace.favorite_models("http://127.0.0.1:11434") == [
+            "alpha:8b",
+        ]
+        assert workspace.favorite_models("http://10.0.0.5:11434") == [
+            "gamma:12b",
+        ]
+
+    def test_pinning_again_does_not_repeat_it(self):
+        host = "http://localhost:11434"
+        workspace.pin_model(host, "alpha")
+        workspace.pin_model(host, "alpha:latest")
+
+        assert workspace.favorite_models(host) == ["alpha:latest"]
+
+    def test_a_name_is_needed(self):
+        with pytest.raises(WorkspaceError):
+            workspace.pin_model("http://localhost:11434", "  ")

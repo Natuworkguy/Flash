@@ -1,0 +1,609 @@
+"""Sparks always on: a keeper the operating system starts at login.
+
+Left to themselves, sparks work while a Flash is open. Always on, a
+Flash of their own, `flash --sparks`, runs from login onward with no
+window, and keeps them working with the terminal and the browser both
+closed. It is registered the way each system expects a program the user
+wants running in the background:
+
+- Linux: a systemd user service, or, without systemd, an autostart
+  entry for the desktop session, started once by hand right away.
+- macOS: a launchd agent in ~/Library/LaunchAgents.
+- Windows: a scheduled task that starts at logon, with pythonw so no
+  console window opens.
+
+Nothing here needs administrator rights, and turning it off removes
+what turning it on wrote. The keeper and an open Flash share the work
+through the lock in flash/sparks.py, so running both is fine.
+
+The same goes for "Hey Flash" with Flash closed: LISTENER is a second
+service like it, `flash --listen`, listening on the microphone from
+login onward (flash/heyflash.py). Every function here takes the service
+it is about, SPARKS when it is not said.
+"""
+
+import json
+import os
+import shutil
+import subprocess  # nosec B404
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from . import sparks
+
+NAME = "flash-sparks"
+LABEL = "io.github.natuworkguy.flash.sparks"
+TASK = "Flash Sparks"
+
+
+@dataclass(frozen=True)
+class Service:
+    """One Flash the system keeps running: what it is called in each
+    system's list, and what Flash is run with."""
+
+    name: str
+    label: str
+    task: str
+    flag: str
+    title: str
+    about: str
+    log: str
+
+
+SPARKS = Service(
+    NAME, LABEL, TASK, "--sparks", "Flash Sparks",
+    "Flash sparks, working while Flash is closed", "keeper.log",
+)
+LISTENER = Service(
+    "flash-listen", "io.github.natuworkguy.flash.listen", "Flash Listen",
+    "--listen", "Flash Listen",
+    "Flash, listening for Hey Flash while Flash is closed", "listener.log",
+)
+
+
+class KeepAliveError(RuntimeError):
+    """Sparks could not be set to run always on this machine."""
+
+
+def _host() -> str:
+    if os.name == "nt":
+        return "windows"
+    return "macos" if sys.platform == "darwin" else "linux"
+
+
+def _checkout_script() -> Optional[Path]:
+    """run.py, when this Flash runs from a clone of its repository."""
+
+    script = Path(__file__).resolve().parent.parent / "run.py"
+    return script if script.is_file() else None
+
+
+def command(service: Service = SPARKS) -> list[str]:
+    """What the system runs: this Python, this Flash, keeper only.
+
+    This interpreter rather than whatever `flash` is on PATH at login: a
+    pipx install's is the one with Flash's packages in it. And this
+    Flash: run from a clone, its run.py, since `-m flash` from the home
+    folder would load whatever other Flash that Python has installed,
+    and every shift would run on that one's code instead.
+    """
+
+    python = Path(sys.executable)
+    if _host() == "windows":
+        quiet = python.with_name("pythonw.exe")
+        if quiet.is_file():
+            python = quiet
+    script = _checkout_script()
+    if script is not None:
+        return [str(python), str(script), service.flag]
+    return [str(python), "-m", "flash", service.flag]
+
+
+def _log(service: Service = SPARKS) -> Path:
+    if service == SPARKS:
+        return sparks.sparks_dir() / service.log
+    return sparks.sparks_dir().parent / service.log
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(  # nosec B603 -- fixed argument lists
+        args, check=False, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30,
+    )
+
+
+def _ok(args: list[str]) -> bool:
+    if not shutil.which(args[0]):
+        return False
+    try:
+        return _run(args).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+# --- Linux ---------------------------------------------------------------
+
+
+def _unit_path(service: Service = SPARKS) -> Path:
+    return (Path.home() / ".config" / "systemd" / "user"
+            / f"{service.name}.service")
+
+
+def _autostart_path(service: Service = SPARKS) -> Path:
+    return Path.home() / ".config" / "autostart" / f"{service.name}.desktop"
+
+
+def _unit(service: Service = SPARKS) -> str:
+    # systemd reads % as the start of a specifier, so each is doubled.
+    run = " ".join(
+        f'"{part}"' for part in command(service)
+    ).replace("%", "%%")
+    # The login session's PATH, not systemd's short default, so a spark
+    # finds the same programs a shell would.
+    path = os.environ.get("PATH", "").replace("%", "%%")
+    return (
+        "[Unit]\n"
+        f"Description={service.about}\n"
+        "After=network-online.target\n\n"
+        "[Service]\n"
+        f"ExecStart={run}\n"
+        "WorkingDirectory=%h\n"
+        f'Environment="PATH={path}"\n'
+        "Restart=on-failure\n"
+        "RestartSec=30\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+
+def _systemd() -> bool:
+    return _ok(["systemctl", "--user", "show-environment"])
+
+
+def _arg(part) -> str:
+    # A path in a command line is written with forward slashes.
+    return part.as_posix() if isinstance(part, Path) else str(part)
+
+
+def _exec_line(service: Service = SPARKS) -> str:
+    # The desktop entry spec quotes an argument with a space in it.
+    return " ".join(
+        f'"{arg}"' if " " in arg else arg
+        for arg in map(_arg, command(service))
+    )
+
+
+def _on_linux(service: Service = SPARKS) -> str:
+    name = service.name
+    if _systemd():
+        path = _unit_path(service)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_unit(service), encoding="utf-8")
+        _ok(["systemctl", "--user", "daemon-reload"])
+        if not _ok(["systemctl", "--user", "enable", "--now", name]):
+            raise KeepAliveError(
+                f"systemd would not start {name}. "
+                f"`systemctl --user status {name}` says why."
+            )
+        return (
+            "a systemd user service. It runs while you are logged in; "
+            "`loginctl enable-linger` keeps it running after you log out"
+        )
+
+    # No systemd: the desktop starts it at the next login, and it is
+    # started by hand for this one.
+    path = _autostart_path(service)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={service.title}\n"
+        f"Comment={service.about}\n"
+        f"Exec={_exec_line(service)}\n"
+        "Terminal=false\n"
+        "NoDisplay=true\n"
+        "X-GNOME-Autostart-enabled=true\n",
+        encoding="utf-8",
+    )
+    _spawn(service)
+    return "an autostart entry, started at each login to your desktop"
+
+
+def _off_linux(service: Service = SPARKS) -> bool:
+    removed = False
+    if _unit_path(service).exists():
+        _ok(["systemctl", "--user", "disable", "--now", service.name])
+        _unit_path(service).unlink()
+        _ok(["systemctl", "--user", "daemon-reload"])
+        removed = True
+    if _autostart_path(service).exists():
+        _autostart_path(service).unlink()
+        removed = True
+    return removed
+
+
+# --- macOS ---------------------------------------------------------------
+
+
+def _plist_path(service: Service = SPARKS) -> Path:
+    return (Path.home() / "Library" / "LaunchAgents"
+            / f"{service.label}.plist")
+
+
+def _plist(service: Service = SPARKS) -> str:
+    def esc(text: str) -> str:
+        return (
+            text.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    args = "".join(
+        f"\n        <string>{esc(_arg(part))}</string>"
+        for part in command(service)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{service.label}</string>
+    <key>ProgramArguments</key>
+    <array>{args}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>{esc(str(Path.home()))}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{esc(os.environ.get("PATH", ""))}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{esc(str(_log(service)))}</string>
+    <key>StandardErrorPath</key>
+    <string>{esc(str(_log(service)))}</string>
+</dict>
+</plist>
+"""
+
+
+def _on_macos(service: Service = SPARKS) -> str:
+    path = _plist_path(service)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _log(service).parent.mkdir(parents=True, exist_ok=True)
+    domain = f"gui/{os.getuid()}"
+    # Loaded already, from an older Flash: out first, so the new one
+    # is what runs.
+    _ok(["launchctl", "bootout", f"{domain}/{service.label}"])
+    path.write_text(_plist(service), encoding="utf-8")
+    if not (
+        _ok(["launchctl", "bootstrap", domain, str(path)])
+        or _ok(["launchctl", "load", "-w", str(path)])
+    ):
+        raise KeepAliveError(
+            f"launchd would not load the {service.title} agent.")
+    return "a launchd agent, started at each login"
+
+
+def _off_macos(service: Service = SPARKS) -> bool:
+    path = _plist_path(service)
+    if not path.exists():
+        return False
+    if not _ok(["launchctl", "bootout",
+                f"gui/{os.getuid()}/{service.label}"]):
+        _ok(["launchctl", "unload", "-w", str(path)])
+    path.unlink()
+    return True
+
+
+# --- Windows -------------------------------------------------------------
+
+
+def _task_line(service: Service = SPARKS) -> str:
+    return " ".join(f'"{_arg(part)}"' for part in command(service))
+
+
+def _on_windows(service: Service = SPARKS) -> str:
+    task = service.task
+    made = _ok([
+        "schtasks", "/Create", "/F", "/TN", task, "/SC", "ONLOGON",
+        "/RL", "LIMITED", "/TR", _task_line(service),
+    ])
+    if not made:
+        raise KeepAliveError(
+            f"Task Scheduler would not take the {service.title} task."
+        )
+    # A logon trigger waits for the next logon; this is the one now.
+    if not _ok(["schtasks", "/Run", "/TN", task]):
+        _spawn(service)
+    return "a scheduled task, started at each logon"
+
+
+def _off_windows(service: Service = SPARKS) -> bool:
+    task = service.task
+    if not _ok(["schtasks", "/Query", "/TN", task]):
+        return False
+    _ok(["schtasks", "/End", "/TN", task])
+    return _ok(["schtasks", "/Delete", "/F", "/TN", task])
+
+
+# --- Either way ----------------------------------------------------------
+
+
+def _spawn(service: Service = SPARKS) -> None:
+    """Start the keeper now, detached from this Flash."""
+
+    log = _log(service)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    options: dict = {}
+    if os.name == "nt":
+        options["creationflags"] = getattr(
+            subprocess, "DETACHED_PROCESS", 0
+        ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        options["start_new_session"] = True
+    with open(log, "ab") as out:
+        subprocess.Popen(  # nosec B603 -- this Python, fixed arguments
+            command(service), cwd=str(Path.home()), stdin=subprocess.DEVNULL,
+            stdout=out, stderr=out, **options,
+        )
+
+
+def installed(service: Service = SPARKS) -> bool:
+    """Whether SERVICE is set to run always, on this machine."""
+
+    host = _host()
+    if host == "macos":
+        return _plist_path(service).exists()
+    if host == "windows":
+        return _ok(["schtasks", "/Query", "/TN", service.task])
+    return _unit_path(service).exists() or _autostart_path(service).exists()
+
+
+def turn_on(service: Service = SPARKS) -> str:
+    """Register SERVICE to start at login, and start it. Says how."""
+
+    try:
+        how = {
+            "linux": _on_linux, "macos": _on_macos, "windows": _on_windows,
+        }[_host()](service)
+    except OSError as exc:
+        raise KeepAliveError(str(exc)) from None
+    return how
+
+
+def turn_off(service: Service = SPARKS) -> bool:
+    """Undo turn_on. False if it was not on."""
+
+    try:
+        return {
+            "linux": _off_linux, "macos": _off_macos,
+            "windows": _off_windows,
+        }[_host()](service)
+    except OSError as exc:
+        raise KeepAliveError(str(exc)) from None
+
+
+def status() -> dict:
+    """For /sparks and the page: set up, and whether it is running now."""
+
+    beat = sparks.keeper()
+    running: Optional[dict] = beat if beat and beat.get("always") else None
+    return {
+        "installed": installed(),
+        "running": running is not None,
+        "since": running.get("since") if running else None,
+        # An open Flash doing the work meanwhile: the always-on keeper
+        # waits for its turn while one is.
+        "here": bool(beat) and not (beat or {}).get("always"),
+        # The keeper doing the work is another Flash than this one, in
+        # words ("another Flash, at ..."), or "" when it is this one or
+        # none is running.
+        "other": _other(beat),
+        # Whether that other Flash is one open on someone's screen, which
+        # a takeover only stops when told to (take_over(force=True)).
+        "other_open": _open_elsewhere(beat),
+    }
+
+
+def _open_elsewhere(beat: Optional[dict]) -> bool:
+    if not _other(beat):
+        return False
+    pid = int((beat or {}).get("pid") or 0)
+    return not (beat or {}).get("always") and not _headless_keeper(pid)
+
+
+def _other(beat: Optional[dict]) -> str:
+    if not beat or beat.get("pid") == os.getpid():
+        return ""
+    if not beat.get("code"):
+        # From before keepers said which Flash they are: older, then.
+        return "an older Flash"
+    if beat["code"] != sparks.code_identity()["code"]:
+        return f"another Flash, at {beat['code']}"
+    # This Flash's code, but is it as it is now? Measured against the
+    # disk, not this process, which may be the one behind.
+    if beat.get("stamp") != sparks.disk_stamp():
+        return "this Flash as it was before its last update"
+    return ""
+
+
+# Taking over by itself, when Flash starts and another Flash's keeper is
+# running the sparks: off unless the user turned it on.
+AUTO_TAKEOVER = "SPARKS_AUTO_TAKEOVER"
+
+
+def auto_takeover() -> bool:
+    return (os.environ.get(AUTO_TAKEOVER) or "").strip().lower() in (
+        "1", "on", "true", "yes")
+
+
+def set_auto_takeover(on: bool) -> None:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    os.environ[AUTO_TAKEOVER] = "1" if on else "0"
+    set_env_var(ENV_PATH, AUTO_TAKEOVER, "1" if on else "0")
+
+
+def take_over_if_wanted(say=None) -> str:
+    """With auto takeover on, run the sparks here in place of another
+    Flash's keeper. What happened, in words ("" for nothing), told to
+    SAY too."""
+
+    if not auto_takeover():
+        return ""
+    beat = sparks.keeper()
+    other = _other(beat)
+    if not other:
+        return ""
+    try:
+        take_over()
+        said = f"Took over your sparks from {other}."
+    except KeepAliveError as exc:
+        said = f"Could not take over your sparks: {exc}"
+    if say is not None:
+        say(said)
+    return said
+
+
+# How long a takeover waits for the keeper it replaced to go, and for
+# this Flash to take its place.
+TAKEOVER_SECONDS = 15.0
+TAKEOVER_STEP = 0.25
+
+
+def _command_line(pid: int) -> str:
+    """How process PID was started, or "" if that cannot be read."""
+
+    if os.name == "nt":
+        found = _run([
+            "powershell", "-NoProfile", "-Command",
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+            ".CommandLine",
+        ])
+    else:
+        found = _run(["ps", "-o", "command=", "-p", str(pid)])
+    return found.stdout.strip() if found.returncode == 0 else ""
+
+
+def _headless_keeper(pid: int) -> bool:
+    """Whether PID is a `flash --sparks` keeper: nothing open on screen,
+    so stopping it loses nobody's work but a shift's."""
+
+    line = _command_line(pid)
+    return "--sparks" in line and ("flash" in line or "run.py" in line)
+
+
+def _stop_process(pid: int, hard: bool = False) -> None:
+    """Ask PID to quit; HARD makes it."""
+
+    if os.name == "nt":
+        _run(["taskkill", "/PID", str(pid), "/F"])
+    else:
+        import signal
+
+        try:
+            os.kill(pid, signal.SIGKILL if hard else signal.SIGTERM)
+        except OSError:
+            pass
+
+
+# How long an open Flash told to quit has, before it is made to.
+QUIT_SECONDS = 5.0
+
+
+def _stop_open_flash(pid: int) -> None:
+    """Quit the Flash in process PID: asked first, so it can tidy up and
+    its keeper lets go, then made to if it will not."""
+
+    if pid == os.getpid() or pid <= 0:
+        raise KeepAliveError("That is this Flash.")
+    _stop_process(pid)
+    if not _wait_for(lambda: not sparks.alive(pid), QUIT_SECONDS):
+        _stop_process(pid, hard=True)
+        _wait_for(lambda: not sparks.alive(pid), QUIT_SECONDS)
+    if os.name != "nt" and sparks.alive(pid):
+        raise KeepAliveError(f"Process {pid} would not stop.")
+    # It is gone: its heartbeat goes with it.
+    try:
+        beat = sparks.sparks_dir() / sparks.HEARTBEAT
+        held = json.loads(beat.read_text(encoding="utf-8"))
+        if int(held.get("pid") or 0) == pid:
+            beat.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _wait_for(done, seconds: float) -> bool:
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        if done():
+            return True
+        time.sleep(TAKEOVER_STEP)
+    return done()
+
+
+def take_over(force: bool = False) -> dict:
+    """Have this Flash run the sparks, in place of another that does.
+
+    Always on is set up again from this Flash, which replaces the keeper
+    the system started. A keeper the system did not start, a stray
+    `flash --sparks`, is stopped. A Flash open on someone's screen is
+    only stopped with FORCE, the user having said so: anything unsaved
+    in it is lost. Without, a KeepAliveError says so. Waits for the
+    change, and returns status() once it shows.
+    """
+
+    beat = sparks.keeper()
+    if not _other(beat):
+        return status()
+    pid = int(beat.get("pid") or 0)
+    headless = beat.get("always") or _headless_keeper(pid)
+    if not headless and not force:
+        raise KeepAliveError(
+            f"Your sparks are being run by a Flash that is open, in "
+            f"process {pid}: {_other(beat)}. Close it, or stop it from "
+            "here (/sparks takeover stop), and this one takes over."
+        )
+    if not headless:
+        _stop_open_flash(pid)
+        # Always on stays as the user had it: set up again from this
+        # Flash if it was, else this open Flash picks the sparks up.
+        if installed():
+            turn_off()
+            turn_on()
+    else:
+        if installed():
+            turn_off()
+        turn_on()
+    replaced = _wait_for(lambda: sparks.keeper() is None or int(
+        (sparks.keeper() or {}).get("pid") or 0
+    ) != pid, TAKEOVER_SECONDS / 2)
+    if not replaced and sparks.alive(pid) and _headless_keeper(pid):
+        # Not the system's to stop: started by hand, or left over from
+        # an older Flash's always on.
+        _stop_process(pid)
+
+    def ours() -> bool:
+        holder = sparks.keeper()
+        return holder is not None and not _other(holder)
+
+    if not _wait_for(ours, TAKEOVER_SECONDS) and _other(sparks.keeper()):
+        still = _other(sparks.keeper())
+        raise KeepAliveError(
+            f"{still[:1].upper()}{still[1:]} is still running your sparks. "
+            "Quitting it, or restarting this computer, lets this one take "
+            "over."
+        )
+    return status()

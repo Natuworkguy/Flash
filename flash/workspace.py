@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from . import paths
 from .paths import FLASH_DIR
 
 LOCAL_HOST = "http://localhost:11434"
@@ -41,6 +42,9 @@ MAX_DIR_SUGGESTIONS = 12
 CHAT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 _lock = threading.Lock()
+# One chat saved at a time: two threads replacing one file at once is what
+# Windows refuses.
+_chat_lock = threading.Lock()
 
 
 class WorkspaceError(ValueError):
@@ -64,7 +68,7 @@ def _write(name: str, value: Any) -> None:
     path = folder / name
     partial = path.with_suffix(path.suffix + ".partial")
     partial.write_text(json.dumps(value, indent=1), encoding="utf-8")
-    os.replace(partial, path)
+    paths.replace(partial, path)
 
 
 # --- Hosts ---------------------------------------------------------------
@@ -124,7 +128,15 @@ def hosts(current: str = "") -> list[dict]:
         h for h in _read("hosts.json", [])
         if isinstance(h, dict) and h.get("url")
     ]
-    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False}]
+    local_key = any(
+        host_key(str(h.get("url") or "")) == host_key(LOCAL_HOST)
+        and str(h.get("key") or "").strip()
+        for h in saved
+    )
+    listed = [{
+        "name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False,
+        "locked": local_key,
+    }]
     seen = {host_key(LOCAL_HOST)}
 
     for entry in saved:
@@ -137,6 +149,8 @@ def hosts(current: str = "") -> list[dict]:
         seen.add(host_key(url))
         listed.append({
             "name": str(entry.get("name") or url), "url": url, "saved": True,
+            # Whether it has a key, never the key: this goes to the page.
+            "locked": bool(str(entry.get("key") or "").strip()),
         })
 
     if current:
@@ -161,9 +175,18 @@ def listed_url(current: str) -> str:
     )
 
 
-def add_host(name: str, url: str) -> dict:
+def add_host(name: str, url: str, key: str = "") -> dict:
+    """Save a host, with the API key its server asks for if it asks.
+
+    A key goes in hosts.json beside the host, readable only by its
+    owner, and never back out to the page.
+    """
+
     url = normalize_host(url)
     name = " ".join((name or "").split())[:MAX_NAME] or urlparse(url).hostname
+    key = (key or "").strip()
+    if any(c.isspace() for c in key):
+        raise WorkspaceError("an API key has no spaces in it")
 
     with _lock:
         saved = [
@@ -171,11 +194,62 @@ def add_host(name: str, url: str) -> dict:
             if isinstance(h, dict)
             and host_key(str(h.get("url") or "")) != host_key(url)
         ]
-        if host_key(url) != host_key(LOCAL_HOST):
-            saved.append({"name": name, "url": url})
+        # This computer is always listed, so a key for it is saved as a
+        # host of its own: the key is the point of adding it.
+        if host_key(url) != host_key(LOCAL_HOST) or key:
+            entry = {"name": name, "url": url}
+            if key:
+                entry["key"] = key
+            saved.append(entry)
         _write("hosts.json", saved)
+        if any(h.get("key") for h in saved if isinstance(h, dict)):
+            _private(store() / "hosts.json")
 
-    return {"name": name, "url": url}
+    return {"name": name, "url": url, "locked": bool(key)}
+
+
+def _private(path: Path) -> None:
+    """Make PATH readable by its owner only, where the system has that."""
+
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def api_key(url: str) -> str:
+    """The API key Flash sends to the Ollama at URL: the one saved with
+    the host, else OLLAMA_API_KEY from the environment, else none."""
+
+    wanted = host_key(url)
+    for entry in _read("hosts.json", []):
+        if not isinstance(entry, dict):
+            continue
+        if host_key(str(entry.get("url") or "")) == wanted:
+            key = str(entry.get("key") or "").strip()
+            if key:
+                return key
+    return (os.environ.get("OLLAMA_API_KEY") or "").strip()
+
+
+def auth_headers(url: str) -> dict:
+    """The header that carries URL's API key, or none without one.
+
+    Lower case, as Ollama's client looks for it: given its own, the
+    client leaves it be rather than adding the environment's.
+    """
+
+    key = api_key(url)
+    return {"authorization": f"Bearer {key}"} if key else {}
+
+
+def client_options(host: str) -> dict:
+    """What an ollama.Client for HOST is made with besides the host: the
+    header with HOST's key, when it has one. Nothing otherwise, so a
+    client made without a key is made exactly as before."""
+
+    headers = auth_headers(host)
+    return {"headers": headers} if headers else {}
 
 
 def remove_host(url: str) -> bool:
@@ -197,16 +271,74 @@ def remove_host(url: str) -> bool:
     return True
 
 
+# --- Favorite models -----------------------------------------------------
+
+
+def _model_key(name: str) -> str:
+    """A model's name as Ollama means it: one with no tag is :latest."""
+
+    name = name.strip()
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
+def favorite_models(host: str) -> list[str]:
+    """The models pinned to the top of HOST's list, the first pinned
+    first. Each host keeps its own, as each has its own models."""
+
+    pinned = _read("favorites.json", {})
+    found = pinned.get(host_key(host), []) if isinstance(pinned, dict) else []
+    return [m for m in found if isinstance(m, str) and m.strip()]
+
+
+def pin_model(host: str, model: str, on: bool = True) -> list[str]:
+    """Pin MODEL to the top of HOST's list, or unpin it with ON false.
+    Returns HOST's favorites as they are now."""
+
+    model = model.strip()
+    if not model:
+        raise WorkspaceError("name a model to pin")
+    key = host_key(host)
+    with _lock:
+        pinned = _read("favorites.json", {})
+        if not isinstance(pinned, dict):
+            pinned = {}
+        kept = [
+            m for m in pinned.get(key, [])
+            if isinstance(m, str) and _model_key(m) != _model_key(model)
+        ]
+        if on:
+            kept.append(model)
+        if kept:
+            pinned[key] = kept
+        else:
+            pinned.pop(key, None)
+        _write("favorites.json", pinned)
+    return kept
+
+
+def host_state(url: str, timeout: float = HOST_CHECK_SECONDS) -> str:
+    """How the Ollama at URL answers, quickly: "up", "down", or
+    "refused" when something in front of it wants a key it was not
+    given, or turned down the one it was."""
+
+    try:
+        request = urllib.request.Request(
+            normalize_host(url) + "/api/version", headers=auth_headers(url),
+        )
+        with urllib.request.urlopen(  # nosec B310 -- scheme checked above
+            request, timeout=timeout
+        ) as response:
+            return "up" if response.status == 200 else "down"
+    except urllib.error.HTTPError as exc:
+        return "refused" if exc.code in (401, 403) else "down"
+    except (OSError, ValueError, urllib.error.URLError):
+        return "down"
+
+
 def host_up(url: str, timeout: float = HOST_CHECK_SECONDS) -> bool:
     """Whether an Ollama server answers at URL, quickly."""
 
-    try:
-        with urllib.request.urlopen(  # nosec B310 -- scheme checked above
-            normalize_host(url) + "/api/version", timeout=timeout
-        ) as response:
-            return response.status == 200
-    except (OSError, ValueError, urllib.error.URLError):
-        return False
+    return host_state(url, timeout) == "up"
 
 
 def hosts_with_health(current: str = "") -> list[dict]:
@@ -214,10 +346,10 @@ def hosts_with_health(current: str = "") -> list[dict]:
     the wait rather than their sum."""
 
     listed = hosts(current)
-    results: dict[str, bool] = {}
+    results: dict[str, str] = {}
 
     def check(url: str) -> None:
-        results[url] = host_up(url)
+        results[url] = host_state(url)
 
     threads = [
         threading.Thread(target=check, args=(h["url"],), daemon=True)
@@ -228,7 +360,11 @@ def hosts_with_health(current: str = "") -> list[dict]:
     for thread in threads:
         thread.join(HOST_CHECK_SECONDS + 0.5)
 
-    return [{**h, "up": results.get(h["url"], False)} for h in listed]
+    return [
+        {**h, "up": results.get(h["url"]) == "up",
+         "refused": results.get(h["url"]) == "refused"}
+        for h in listed
+    ]
 
 
 # --- Projects ------------------------------------------------------------
@@ -238,9 +374,17 @@ def hosts_with_health(current: str = "") -> list[dict]:
 class Project:
     id: str
     name: str
+    # Its main folder: where its chats start, and relative paths with them.
     path: str
     instructions: str = ""
     created: float = field(default_factory=time.time)
+    # More folders it takes in, besides PATH: a backend beside its
+    # frontend, a docs repo. Worked on by their full paths.
+    folders: list[str] = field(default_factory=list)
+
+
+# How many folders a project can take in besides its main one.
+MAX_FOLDERS = 8
 
 
 def _folder(path: str) -> str:
@@ -248,6 +392,26 @@ def _folder(path: str) -> str:
     if not str(path or "").strip() or not folder.is_dir():
         raise WorkspaceError(f"{path!r} is not a folder on this computer")
     return str(folder)
+
+
+def _folders(paths: Any, main: str) -> list[str]:
+    """PATHS, each a folder on this computer, in full: blanks, repeats,
+    and MAIN itself left out."""
+
+    if isinstance(paths, str):
+        paths = [paths]
+    out: list[str] = []
+    for path in paths or []:
+        if not str(path or "").strip():
+            continue
+        folder = _folder(str(path))
+        if folder != main and folder not in out:
+            out.append(folder)
+    if len(out) > MAX_FOLDERS:
+        raise WorkspaceError(
+            f"a project can take in at most {MAX_FOLDERS} more folders"
+        )
+    return out
 
 
 def _name(name: str, folder: str) -> str:
@@ -268,9 +432,12 @@ def projects() -> list[Project]:
     found = []
     for entry in _read("projects.json", []):
         try:
-            found.append(Project(**entry))
+            made = Project(**entry)
         except TypeError:
             continue
+        if not isinstance(made.folders, list):
+            made.folders = []
+        found.append(made)
     return sorted(found, key=lambda p: p.created)
 
 
@@ -282,13 +449,16 @@ def _save_projects(listed: list[Project]) -> None:
     _write("projects.json", [asdict(p) for p in listed])
 
 
-def create_project(name: str, path: str, instructions: str = "") -> Project:
+def create_project(
+    name: str, path: str, instructions: str = "", folders: Any = (),
+) -> Project:
     folder = _folder(path)
     made = Project(
         id=uuid.uuid4().hex[:8],
         name=_name(name, folder),
         path=folder,
         instructions=_instructions(instructions),
+        folders=_folders(folders, folder),
     )
     with _lock:
         _save_projects([*projects(), made])
@@ -304,6 +474,11 @@ def update_project(project_id: str, **changes: Any) -> Project:
 
         if "path" in changes:
             found.path = _folder(changes["path"])
+        if "folders" in changes:
+            found.folders = _folders(changes["folders"], found.path)
+        elif found.path in found.folders:
+            # Its main folder moved to one it had besides: not twice.
+            found.folders.remove(found.path)
         if "name" in changes:
             found.name = _name(changes["name"], found.path)
         if "instructions" in changes:
@@ -365,6 +540,30 @@ def folder_suggestions(typed: str) -> list[str]:
     ]
 
 
+def make_folder(typed: str) -> str:
+    """Makes the folder TYPED in the new project form, inside one that is
+    there already, and gives it back as the form shows paths.
+
+    Only the last part is new: a typo higher up the path is an error, not
+    a tree of folders nobody meant to make.
+    """
+
+    path = Path(os.path.expanduser((typed or "").strip().rstrip("/\\")))
+    name = path.name
+    if not name or name in (".", "..") or any(c in name for c in '<>:"|?*\0'):
+        raise ValueError("That isn't a name a folder can have.")
+    if not path.is_absolute():
+        raise ValueError("Start the path from ~ or /.")
+    if not path.parent.is_dir():
+        raise ValueError(f"There is no folder {path.parent}.")
+    if path.exists():
+        raise ValueError(f"{name} is there already.")
+    path.mkdir()
+    home = str(Path.home())
+    shown = str(path)
+    return "~" + shown[len(home):] if shown.startswith(home + os.sep) else shown
+
+
 # --- Files the agent showed ---------------------------------------------
 
 # What can be shown, and as what. A page is the one type that can run a
@@ -391,9 +590,32 @@ SHOWN_TYPES = {
     ".glb": "model/gltf-binary",
     ".stl": "model/stl",
     ".obj": "model/obj",
+    # Printed circuit boards Flash designed, drawn by the page from what
+    # the file says. Nothing in one runs.
+    ".fpcb": "application/json",
+    # Music as notes, played by the page's own synth and drawn as a
+    # piano roll. Nothing in one runs.
+    ".mid": "audio/midi",
+    ".midi": "audio/midi",
+    # Screen recordings the user made in the page, played back there.
+    ".webm": "video/webm",
+    ".mp4": "video/mp4",
+    # Sound: played in the chat by the page's own player. Nothing in one
+    # runs.
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
 }
 DOCUMENT_TYPES = (".md", ".markdown", ".txt")
 MODEL_TYPES = (".glb", ".stl", ".obj")
+MIDI_TYPES = (".mid", ".midi")
+AUDIO_TYPES = (".mp3", ".wav", ".ogg", ".oga", ".opus", ".m4a", ".aac",
+               ".flac")
 MAX_SHOWN_BYTES = 50 * 1024 * 1024
 # A document is edited in the page as text, so it stays a size a browser
 # edits comfortably.
@@ -414,7 +636,7 @@ def keep_file(source: str) -> dict:
     if suffix not in SHOWN_TYPES:
         raise WorkspaceError(
             f"{path.name} is not an image, a PDF, a web page, a document, "
-            "or a 3D model"
+            "a 3D model, a MIDI file, or a sound file"
         )
 
     size = path.stat().st_size
@@ -427,7 +649,8 @@ def keep_file(source: str) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     kept = folder / f"{file_id}{suffix}"
     kept.write_bytes(path.read_bytes())
-    if document:
+    page = SHOWN_TYPES[suffix] == "text/html"
+    if document or page:
         # Where it came from, so an edit made in the page lands in the
         # real file too, not only in this copy.
         _write(f"files/{file_id}.source.json", {"source": str(path.resolve())})
@@ -442,12 +665,24 @@ def keep_file(source: str) -> dict:
             else "html" if SHOWN_TYPES[suffix] == "text/html"
             else "doc" if document
             else "model" if suffix in MODEL_TYPES
+            else "pcb" if suffix == ".fpcb"
+            else "midi" if suffix in MIDI_TYPES
+            else "audio" if suffix in AUDIO_TYPES
+            else "video" if SHOWN_TYPES[suffix].startswith("video/")
             else "image"
         ),
     }
-    if document:
+    if document or page or suffix == ".fpcb":
+        # A board's own path: what Fix asks Flash to make again.
         info["path"] = str(path.resolve())
     return info
+
+
+def file_source(file_id: str) -> str:
+    """The file a shown document or page was copied from, or ""."""
+
+    record = _read(f"files/{file_id}.source.json", {})
+    return str(record.get("source") or "") if isinstance(record, dict) else ""
 
 
 def save_document(file_id: str, text: str) -> dict:
@@ -481,6 +716,41 @@ def save_document(file_id: str, text: str) -> dict:
     return {"size": len(data), "path": written}
 
 
+def documents_from(source: str) -> list[str]:
+    """The ids of the documents shown from the file at SOURCE (a
+    resolved path): one file can be shown in several chats."""
+
+    found = []
+    for record in sorted((store() / "files").glob("*.source.json")):
+        try:
+            said = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        file_id = record.name.split(".", 1)[0]
+        if isinstance(said, dict) and said.get("source") == source and (
+            FILE_ID_RE.match(file_id)
+        ):
+            found.append(file_id)
+    return found
+
+
+def refresh_document(file_id: str, text: str) -> Optional[int]:
+    """Bring a shown document's copy up to TEXT, which its file now
+    holds. Its size, or None when it is not one, or too large now."""
+
+    kept = kept_file(file_id)
+    data = (text or "").encode("utf-8")
+    if kept is None or kept[0].suffix.lower() not in DOCUMENT_TYPES or (
+        len(data) > MAX_DOCUMENT_BYTES
+    ):
+        return None
+    try:
+        kept[0].write_bytes(data)
+    except OSError:
+        return None
+    return len(data)
+
+
 def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
     """The stored copy of a shown file, and its type, or None. That is
     a file the agent showed, or one the user attached that a browser
@@ -506,6 +776,12 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _UNSAFE_NAME = re.compile(r"[^\w.\- ]+")
+# A screen recording's stills: how many, and how big each.
+MAX_STILLS = 16
+MAX_STILL_BYTES = 1024 * 1024
+STILLS = "stills"
+# Beside a meeting's transcript: how long it was, and when.
+MEETING = "meeting.json"
 
 
 def upload_path(file_id: str) -> Optional[Path]:
@@ -515,7 +791,7 @@ def upload_path(file_id: str) -> Optional[Path]:
         return None
     try:
         kept = [p for p in (store() / "uploads" / file_id).iterdir()
-                if p.is_file()]
+                if p.is_file() and p.name != MEETING]
     except OSError:
         return None
     return kept[0] if len(kept) == 1 else None
@@ -536,20 +812,68 @@ def upload_info(file_id: str) -> Optional[dict]:
         "mime": mime,
         "kind": (
             "image" if mime.startswith("image/")
+            else "video" if mime.startswith("video/")
             else "pdf" if suffix == ".pdf"
             else "model" if suffix in MODEL_TYPES
+            else "pcb" if suffix == ".fpcb"
+            else "midi" if suffix in MIDI_TYPES
+            else "audio" if mime.startswith("audio/")
             else "file"
         ),
         "path": str(path),
+        **({"stills": len(recording_stills(file_id))}
+           if mime.startswith("video/") else {}),
+        **_meeting_of(path),
     }
 
 
-def keep_upload(name: str, data: bytes) -> dict:
+def _meeting_of(path: Path) -> dict:
+    """{"meeting": {...}} for a meeting's transcript, else {}."""
+
+    try:
+        found = json.loads((path.parent / MEETING).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {"meeting": found} if isinstance(found, dict) else {}
+
+
+def recording_stills(file_id: str) -> list[dict]:
+    """A screen recording's stills, in order: each {path, at, said}, AT
+    its time in seconds and SAID what the user said from there to the
+    next one, if they narrated."""
+
+    path = upload_path(file_id)
+    if path is None:
+        return []
+    folder = path.parent / STILLS
+    try:
+        index = json.loads((folder / "index.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return []
+    stills = []
+    for item in index if isinstance(index, list) else []:
+        still = folder / str(item.get("file", ""))
+        if still.parent == folder and still.is_file():
+            stills.append({
+                "path": str(still), "at": float(item.get("at") or 0),
+                "said": str(item.get("said") or ""),
+            })
+    return stills
+
+
+def keep_upload(
+    name: str, data: bytes, stills: Optional[list] = None,
+    meeting: Optional[dict] = None,
+) -> dict:
     """Keep a file the user attached in the page, and describe it.
 
     Under its own name, in a folder of its own, so the model's tools
     can open it by a real path and the name still says what it is.
-    Nothing is run or unpacked: it is only written down.
+    Nothing is run or unpacked: it is only written down. A screen
+    recording comes with STILLS, the moments the page caught as the
+    screen changed: each {"jpeg": bytes, "at": seconds, "said": text},
+    kept beside it for the model to see. A meeting's transcript comes
+    with MEETING, how long it was and when, which marks it as one.
     """
 
     if not data:
@@ -564,9 +888,45 @@ def keep_upload(name: str, data: bytes) -> dict:
     folder = store() / "uploads" / file_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / clean).write_bytes(data)
+    if meeting:
+        (folder / MEETING).write_text(json.dumps(meeting), "utf-8")
+    if stills:
+        kept = folder / STILLS
+        kept.mkdir()
+        index = []
+        for number, still in enumerate(stills[:MAX_STILLS], start=1):
+            jpeg = still.get("jpeg") or b""
+            if not jpeg or len(jpeg) > MAX_STILL_BYTES:
+                continue
+            file = f"{number:02d}.jpg"
+            (kept / file).write_bytes(jpeg)
+            index.append({
+                "file": file, "at": round(float(still.get("at") or 0), 1),
+                "said": " ".join(str(still.get("said") or "").split()),
+            })
+        (kept / "index.json").write_text(json.dumps(index), "utf-8")
     info = upload_info(file_id) or {}
     info.pop("path", None)
     return info
+
+
+def reuse_file(file_id: str, name: str = "") -> dict:
+    """A file already kept, one the user attached or one the agent
+    showed in any chat, attached again as a new upload: a copy, under
+    NAME (its name in that chat) where that still says what it is."""
+
+    path = upload_path(file_id)
+    if path is None and FILE_ID_RE.match(file_id or ""):
+        path = next((
+            store() / "files" / f"{file_id}{suffix}" for suffix in SHOWN_TYPES
+            if (store() / "files" / f"{file_id}{suffix}").is_file()
+        ), None)
+    if path is None:
+        raise WorkspaceError("that file is no longer kept")
+    given = Path(name or "").name
+    if not given or Path(given).suffix.lower() != path.suffix.lower():
+        given = path.name
+    return keep_upload(given, path.read_bytes())
 
 
 # --- Chats ---------------------------------------------------------------
@@ -579,14 +939,31 @@ def _chat_file(chat_id: str) -> Optional[Path]:
     return store() / "chats" / f"{chat_id}.json"
 
 
+def chat_saved(chat_id: str) -> bool:
+    """Whether a chat has a file, open in this process or not."""
+
+    path = _chat_file(chat_id)
+    return path is not None and path.exists()
+
+
 def save_chat(saved: dict) -> None:
+    with _chat_lock:
+        _save_chat(saved)
+
+
+def _save_chat(saved: dict) -> None:
     path = _chat_file(saved.get("id", ""))
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".partial")
-    partial.write_text(json.dumps(saved), encoding="utf-8")
-    os.replace(partial, path)
+    # A name of its own: two threads saving one chat at once must not
+    # move each other's half-written file.
+    partial = path.with_name(f".{path.stem}.{uuid.uuid4().hex[:8]}.partial")
+    try:
+        partial.write_text(json.dumps(saved), encoding="utf-8")
+        paths.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def load_chats() -> list[dict]:
@@ -604,6 +981,19 @@ def load_chats() -> list[dict]:
         if isinstance(data, dict) and _chat_file(data.get("id", "")):
             found.append(data)
     return found
+
+
+# What deleted chats added to the usage dashboard, kept after them.
+KEPT_USAGE = "usage-kept.json"
+
+
+def kept_usage() -> dict:
+    found = _read(KEPT_USAGE, {})
+    return found if isinstance(found, dict) else {}
+
+
+def keep_usage(kept: dict) -> None:
+    _write(KEPT_USAGE, kept)
 
 
 def delete_chat(chat_id: str) -> None:

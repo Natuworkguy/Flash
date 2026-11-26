@@ -3,7 +3,11 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
+
+import ollama
+
+from . import providers
 
 SHOW_TIMEOUT_SECONDS = 5
 
@@ -24,6 +28,14 @@ def get_system_prompt():
         return f.read().strip()
 
 
+def _auth(host: str) -> dict:
+    """The header with HOST's API key, if it has one."""
+
+    from . import workspace  # deferred: workspace is only needed here
+
+    return workspace.auth_headers(host)
+
+
 def _show_url(host: str) -> str:
     """Build the /api/show URL, tolerating a scheme-less OLLAMA_HOST.
 
@@ -39,6 +51,27 @@ def _show_url(host: str) -> str:
     return f"{host}/api/show"
 
 
+def think_level(host: str, model: str) -> Any:
+    """What to ask MODEL for, to reason longer: the most it offers, or
+    None for one that cannot reason apart from its answer."""
+
+    try:
+        shown = _show(host, model)
+    except Exception:  # noqa: BLE001
+        return None
+    return level_from(shown if isinstance(shown, dict) else {}, model)
+
+
+def level_from(shown: dict, model: str) -> Any:
+    """think_level, from what Ollama said of MODEL."""
+
+    capabilities = shown.get("capabilities")
+    if not isinstance(capabilities, list) or "thinking" not in capabilities:
+        return None
+    # Some take a level rather than a yes.
+    return "high" if "gpt-oss" in model.lower() else True
+
+
 def _show(host: str, model: str) -> dict:
     """Ask Ollama for everything it knows about MODEL.
 
@@ -49,10 +82,17 @@ def _show(host: str, model: str) -> dict:
     if not model:
         return {}
 
+    # An extension's provider says what its own models are.
+    if providers.routed(model):
+        try:
+            return providers.show_payload(model)
+        except ollama.ResponseError:
+            return {}
+
     request = urllib.request.Request(
         _show_url(host),
         data=json.dumps({"model": model}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_auth(host)},
         method="POST",
     )
 

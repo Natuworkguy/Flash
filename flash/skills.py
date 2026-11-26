@@ -22,10 +22,19 @@ theirs, and a pass nobody is watching does not get to rewrite it.
 `by:` says who wrote it, for the web UI's label: `flash` for one the
 model made with skill_manage, `you` for one made in the page. A skill
 from before the field existed has none, unless the review wrote it.
+
+The knowledge base is guides that come with Flash, in flash/knowledge,
+and with extensions (a "knowledge" folder in their manifest): how to do
+each kind of thing well with Flash's tools. They are read the same way
+and listed the same way, and cannot be changed: a skill the user saves
+under a guide's name is used instead of it.
 """
 
+import base64
+import json
 import re
 import shutil
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -37,7 +46,6 @@ SKILL_FILE = "SKILL.md"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 
 MAX_DESCRIPTION_CHARS = 120
-MAX_SKILL_CHARS = 8000
 
 # The list in the system prompt stops here. Past it, the names alone
 # would cost a local model a noticeable slice of its window.
@@ -62,10 +70,60 @@ class Skill:
     managed: bool
     path: Path
     by: str = ""
+    # Where a guide in the knowledge base comes from: "flash", or the
+    # extension's name. "" for the user's own skills.
+    builtin: str = ""
 
 
 def skills_dir() -> Path:
     return FLASH_DIR / "skills"
+
+
+KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+
+
+def _guides(folder: Path, source: str, prefix: str = "") -> list[Skill]:
+    """The guides in FOLDER, each a <name>.md with a description."""
+
+    found = []
+    try:
+        files = sorted(folder.glob("*.md"))
+    except OSError:
+        return []
+    for file in files:
+        try:
+            fields, body = _parse(file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        name = (fields.get("name") or file.stem).strip().lower()
+        if prefix and not name.startswith(prefix + "-"):
+            name = f"{prefix}-{name}"
+        if not NAME_RE.match(name) or not body:
+            continue
+        found.append(Skill(name=name, description=fields.get(
+            "description", ""), body=body, managed=False,
+            path=file, builtin=source))
+    return found
+
+
+def knowledge() -> list[Skill]:
+    """The knowledge base: Flash's own guides, then each extension's,
+    by name, the first to take a name keeping it."""
+
+    from . import extensions  # deferred: extensions imports a lot
+
+    found = _guides(KNOWLEDGE_DIR, "flash")
+    for extension in extensions.installed():
+        if extension.knowledge is not None:
+            found += _guides(extension.knowledge, extension.name,
+                             extension.name)
+    taken: set[str] = set()
+    kept = []
+    for guide in found:
+        if guide.name not in taken:
+            taken.add(guide.name)
+            kept.append(guide)
+    return kept
 
 
 def _check_name(name: str) -> str:
@@ -154,25 +212,57 @@ def all_skills() -> list[Skill]:
     return found
 
 
-def find(name: str) -> Optional[Skill]:
+def find(name: str, guides: bool = True) -> Optional[Skill]:
+    """The user's skill called NAME, else (with GUIDES) the knowledge
+    base's guide."""
+
     try:
         name = _check_name(name)
     except SkillError:
         return None
 
     folder = skills_dir() / name
-    if not (folder / SKILL_FILE).is_file():
-        return None
+    if (folder / SKILL_FILE).is_file():
+        try:
+            return load(folder)
+        except SkillError:
+            pass
 
-    try:
-        return load(folder)
-    except SkillError:
-        return None
+    if guides:
+        return next((g for g in knowledge() if g.name == name), None)
+    return None
+
+
+def knowledge_listing() -> str:
+    """The knowledge base's block for the system prompt: its guides'
+    names and what each is for, the user's skills of the same name
+    standing in for theirs."""
+
+    own = {s.name for s in all_skills()}
+    guides = [g for g in knowledge() if g.name not in own]
+    if not guides:
+        return ""
+    lines = [f"- {g.name}: {g.description}"
+             + (f" (from {g.builtin})" if g.builtin != "flash" else "")
+             for g in guides]
+    return (
+        "=== Knowledge base ===\n"
+        "Guides to doing things well with your tools. Before a task one "
+        "covers, call skill_view with its name and follow it; read "
+        "several when a task spans them.\n" + "\n".join(lines)
+    )
 
 
 def listing() -> str:
-    """The skills block for the system prompt, or "" with none saved."""
+    """The skills block for the system prompt, with the knowledge base
+    before it; "" with neither."""
 
+    guides = knowledge_listing()
+    own = _own_listing()
+    return "\n\n".join(part for part in (guides, own) if part)
+
+
+def _own_listing() -> str:
     skills = all_skills()
 
     if not skills:
@@ -207,8 +297,17 @@ def view(name: str, path: str = "") -> str:
     skill = find(name)
 
     if skill is None:
-        known = ", ".join(s.name for s in all_skills()) or "none saved yet"
+        known = ", ".join(s.name for s in all_skills() + knowledge()) \
+            or "none saved yet"
         raise SkillError(f"No skill called {name!r}. Skills: {known}.")
+
+    if skill.builtin:
+        if path:
+            raise SkillError(f"{skill.name} is a guide, with no other files")
+        source = "Flash" if skill.builtin == "flash" else \
+            f"the {skill.builtin} extension"
+        return (f"Guide: {skill.name} (from {source})\n"
+                f"{skill.description}\n\n{skill.body}")
 
     if not path:
         head = f"Skill: {skill.name}\n{skill.description}\n\n"
@@ -237,13 +336,6 @@ def view(name: str, path: str = "") -> str:
 
 
 def _write(skill: Skill) -> None:
-    if len(skill.body) > MAX_SKILL_CHARS:
-        raise SkillError(
-            f"the skill is {len(skill.body)} characters; keep it under "
-            f"{MAX_SKILL_CHARS} by cutting narrative and keeping the steps "
-            "and pitfalls"
-        )
-
     skill.path.mkdir(parents=True, exist_ok=True)
     (skill.path / SKILL_FILE).write_text(_render(skill), encoding="utf-8")
 
@@ -284,7 +376,11 @@ def manage(
         )
 
     name = _check_name(name)
-    existing = find(name)
+    existing = find(name, guides=False)
+    if existing is None and action != "create" and find(name) is not None:
+        raise SkillError(
+            f"{name} is a guide in the knowledge base, which cannot be "
+            "changed: create a skill of the same name to use instead of it")
 
     if action == "create":
         if existing is not None:
@@ -342,10 +438,64 @@ def manage(
     return f"Patched skill {name}."
 
 
+# ----- skill codes: a skill passed to someone else as one line of text -----
+# The skill itself, compressed: no server holds it, so a code works
+# offline and forever, and says nothing more than the skill does.
+CODE_PREFIX = "flashskill1-"
+
+
+def share_code(name: str) -> str:
+    """A code for the skill NAME (one of the user's, or a guide) that
+    add_from_code turns back into the same skill on any Flash."""
+
+    found = find(_check_name(name))
+    if found is None:
+        raise SkillError(f"No skill called {name!r}.")
+    packed = json.dumps({"n": found.name, "d": found.description, "b": found.body},
+                        ensure_ascii=False, separators=(",", ":")).encode()
+    return CODE_PREFIX + base64.urlsafe_b64encode(zlib.compress(packed, 9)).decode().rstrip("=")
+
+
+def read_code(code: str) -> dict:
+    """The skill in CODE: its name, description and procedure. Spaces and
+    line breaks a chat or an email put in it are ignored."""
+
+    text = "".join(str(code or "").split())
+    at = text.find(CODE_PREFIX)
+    if at < 0:
+        raise SkillError(f"that is not a skill code: one starts {CODE_PREFIX}")
+    data = text[at + len(CODE_PREFIX):]
+    try:
+        raw = zlib.decompress(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)),
+                              bufsize=64 * 1024)
+        got = json.loads(raw.decode())
+        name, description, body = got["n"], got["d"], got["b"]
+    except (ValueError, KeyError, TypeError, zlib.error):
+        raise SkillError("that skill code is damaged or cut short; copy all of it") from None
+    if not all(isinstance(x, str) for x in (name, description, body)):
+        raise SkillError("that skill code is damaged; copy all of it")
+    return {"name": _check_name(name), "description": _description(description), "content": body}
+
+
+def add_from_code(code: str, name: str = "", replace: bool = False) -> str:
+    """Save the skill in CODE as one of the user's, under NAME if given
+    (to keep one of the same name); say what happened. One already
+    saved under its name is kept unless REPLACE."""
+
+    got = read_code(code)
+    name = _check_name(name) if name else got["name"]
+    existing = find(name, guides=False)
+    if existing is not None and not replace:
+        raise SkillError(f"you already have a skill called {name}: add it under another name, or replace yours")
+    _write(Skill(name=name, description=got["description"], body=got["content"], managed=False,
+                 path=skills_dir() / name, by="you"))
+    return f"{'Replaced' if existing else 'Added'} skill {name}: {got['description']}"
+
+
 def remove(name: str) -> bool:
     """Delete a skill for /skills remove. False if there was none."""
 
-    skill = find(name)
+    skill = find(name, guides=False)
     if skill is None:
         return False
     shutil.rmtree(skill.path)

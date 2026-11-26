@@ -1,0 +1,1785 @@
+# pylint: disable=C0114,C0115,C0116
+
+import json
+import time
+
+import pytest
+
+from flash import sparks, teamchat, tools, web
+from tests.test_sparks import FakeClient, _reply
+
+
+@pytest.fixture
+def model(monkeypatch):
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    monkeypatch.setattr(tools, "MODEL_NAME", "test-model")
+    monkeypatch.setattr(tools, "OLLAMA_HOST", "http://localhost:11434")
+
+
+@pytest.fixture
+def team(model):
+    """Desk: Lead, with Scout and Writer reporting to it."""
+
+    made = sparks.create_team("Desk")
+    for name in ("Lead", "Scout", "Writer"):
+        sparks.create(name, f"{name}'s job.")
+        sparks.set_team(name.lower(), "desk")
+    sparks.set_lead("scout", "lead")
+    sparks.set_lead("writer", "lead")
+    return made
+
+
+def _said(team_id, kind=None):
+    return [
+        e for e in teamchat.history(team_id)["entries"]
+        if kind is None or e["kind"] == kind
+    ]
+
+
+def test_joining_a_team_is_news_in_its_chat(team):
+    joined = _said(team.id, teamchat.EVENT)
+
+    assert [(e["name"], e["what"]) for e in joined] == [  # nosec B101
+        ("Lead", "joined"), ("Scout", "joined"), ("Writer", "joined"),
+    ]
+
+
+def test_the_lead_answers_a_message_to_no_one(team):
+    message = teamchat.say("desk", "Morning, team. Anything new?")
+    client = FakeClient([_reply("All quiet here.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [(e["name"], e["text"]) for e in posted] == [  # nosec B101
+        ("Lead", "All quiet here."),
+    ]
+    talk = [e["text"] for e in _said(team.id) if e["kind"] != "event"]
+    assert talk == [  # nosec B101
+        "Morning, team. Anything new?", "All quiet here.",
+    ]
+    # It saw the message it was answering.
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "The user: Morning, team. Anything new?" in seen  # nosec B101
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Desk's group chat" in system  # nosec B101
+
+
+def test_every_lead_answers_a_message_to_no_one(team):
+    # Writer leads too now, beside Lead: two at the top, as equals.
+    sparks.set_lead("writer", "")
+    message = teamchat.say("desk", "Where are we?")
+    client = FakeClient([_reply("Planning is done."), _reply("Drafting.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Lead", "Writer"]  # nosec B101
+    # Each is told the other is a lead, not the lead.
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Writer (@writer-spark), a lead" in system  # nosec B101
+    assert ", the lead" not in system  # nosec B101
+
+
+def test_one_lead_is_still_the_lead(team):
+    message = teamchat.say("desk", "@scout status?")
+    client = FakeClient([_reply("Fine.")])
+
+    teamchat.answer("desk", message, client)
+
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Lead (@lead-spark), the lead" in system  # nosec B101
+
+
+def test_a_mentioned_spark_answers_instead(team):
+    message = teamchat.say("desk", "@scout what did you find?")
+    client = FakeClient([_reply("Two bugs.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
+
+
+def test_a_spark_brings_a_teammate_in(team):
+    message = teamchat.say("desk", "Who is writing the summary?")
+    client = FakeClient([
+        _reply("@writer can you take this?"),
+        _reply("On it."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Lead", "Writer"]  # nosec B101
+
+
+def test_sparks_cannot_talk_forever(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "REPLY_LIMIT", 2)
+    message = teamchat.say("desk", "@scout @writer @lead all of you")
+    client = FakeClient([_reply("Here.") for _ in range(5)])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert len(posted) == 2  # nosec B101
+
+
+def test_a_spark_that_cannot_answer_says_so(team, monkeypatch):
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    message = teamchat.say("desk", "Hello?")
+
+    posted = teamchat.answer("desk", message, FakeClient([]))
+
+    assert posted[0]["failed"] is True  # nosec B101
+    assert "could not answer" in posted[0]["text"]  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+
+
+def test_an_empty_message_or_team_is_refused(model):
+    sparks.create_team("Empty")
+    with pytest.raises(teamchat.TeamChatError, match="no sparks"):
+        teamchat.say("empty", "hello")
+    with pytest.raises(teamchat.TeamChatError, match="Say something"):
+        teamchat.say("empty", "  ")
+    with pytest.raises(teamchat.TeamChatError, match="no team"):
+        teamchat.say("nowhere", "hello")
+
+
+def test_a_report_lands_in_the_chat(team):
+    sparks.shift(
+        sparks.find("scout").id,
+        client=FakeClient([_reply("Issue 12 is new.")]),
+    )
+
+    news = _said(team.id, teamchat.EVENT)[-1]
+
+    assert (news["name"], news["what"]) == ("Scout", "report")  # nosec B101
+    assert news["text"] == "Issue 12 is new."  # nosec B101
+
+
+def test_a_quiet_shift_stays_out_of_the_chat(team):
+    before = len(_said(team.id))
+    sparks.shift(
+        sparks.find("scout").id, client=FakeClient([_reply("NOTHING NEW")]),
+    )
+
+    assert len(_said(team.id)) == before  # nosec B101
+
+
+def test_every_member_reads_the_latest_of_the_chat(team):
+    teamchat.say("desk", "From now on, keep reports to three lines.")
+
+    block = sparks.team_block(sparks.find("writer"))
+
+    assert "The latest in your team's group chat" in block  # nosec B101
+    assert "keep reports to three lines" in block  # nosec B101
+    loner = sparks.create("Loner", "Alone.")
+    assert teamchat.prompt_block(loner) == ""  # nosec B101
+
+
+def test_unread_counts_what_the_sparks_said(team):
+    assert teamchat.unread(team.id) == 3  # nosec B101 (three joined)
+
+    teamchat.mark_read("desk")
+
+    assert teamchat.unread(team.id) == 0  # nosec B101
+    teamchat.event(team.id, sparks.find("scout"), "report", "News.")
+    assert teamchat.unread(team.id) == 1  # nosec B101
+
+
+def test_history_hands_over_only_what_is_new(team):
+    seq = teamchat.history("desk")["seq"]
+    teamchat.say("desk", "One more thing.")
+
+    later = teamchat.history("desk", since=seq)
+
+    said = [e["text"] for e in later["entries"]]
+    assert said == ["One more thing."]  # nosec B101
+
+
+def test_a_message_sent_meanwhile_is_answered_next(team, monkeypatch):
+    first = teamchat.say("desk", "First?")
+    second = teamchat.say("desk", "Second?")
+    client = FakeClient([_reply("To the first."), _reply("To the second.")])
+    real_round = teamchat._round
+    calls = []
+
+    def round_(team_, message, client_=None):
+        calls.append(message["text"])
+        if len(calls) == 1:
+            # The second comes in while the first is being answered.
+            assert teamchat.answer("desk", second, client_) == []  # nosec B101
+        return real_round(team_, message, client_)
+
+    monkeypatch.setattr(teamchat, "_round", round_)
+    posted = teamchat.answer("desk", first, client)
+
+    assert calls == ["First?", "Second?"]  # nosec B101
+    assert [e["text"] for e in posted] == [  # nosec B101
+        "To the first.", "To the second.",
+    ]
+
+
+def test_the_page_sends_attachments_and_sparks_get_their_paths(
+    team, monkeypatch,
+):
+    monkeypatch.setattr(
+        teamchat, "answer", lambda key, message, client=None: None,
+    )
+    shot = web.workspace.keep_upload("shot.png", b"\x89PNG fake")
+    doc = web.workspace.keep_upload("notes.txt", b"hello")
+    session = web.Session()
+
+    posted = web.command(session, {
+        "name": "team-chat-say", "arg": team.id, "text": "",
+        "files": [shot["id"], doc["id"], "no-such-file"],
+    })["entry"]
+
+    # Only the files that are there, as the page shows them: no paths.
+    assert [f["name"] for f in posted["attachments"]] == [  # nosec B101
+        "shot.png", "notes.txt",
+    ]
+    assert all("path" not in f for f in posted["attachments"])  # nosec B101
+    # A spark is told where each one is, for its tools to open.
+    line = teamchat._said_line(posted, {})
+    assert str(web.workspace.upload_path(shot["id"])) in line  # nosec B101
+    assert str(web.workspace.upload_path(doc["id"])) in line  # nosec B101
+
+
+def test_nothing_said_and_nothing_attached_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("desk", "  ", files=[])
+
+
+def test_the_page_reads_and_sends(team, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        teamchat, "answer", lambda key, message, client=None: sent.append(
+            message["text"]
+        ),
+    )
+    session = web.Session()
+
+    posted = web.command(session, {
+        "name": "team-chat-say", "arg": team.id, "text": "Hi all",
+    })
+    deadline = time.monotonic() + 2
+    while not sent and time.monotonic() < deadline:
+        time.sleep(0.01)
+    read = web.command(session, {
+        "name": "team-chat", "arg": team.id, "read": True,
+    })
+
+    assert posted["entry"]["text"] == "Hi all"  # nosec B101
+    assert sent == ["Hi all"]  # nosec B101
+    assert read["entries"][-1]["text"] == "Hi all"  # nosec B101
+    assert read["unread"] == 0  # nosec B101
+    info = web.team_info(sparks.find_team("desk"))
+    assert info["chat_unread"] == 0  # nosec B101
+    with pytest.raises(ValueError, match="Say something"):
+        web.command(session, {
+            "name": "team-chat-say", "arg": team.id, "text": "",
+        })
+
+
+def test_the_terminal_shows_and_sends(team, monkeypatch, capsys):
+    from flash import ai
+
+    monkeypatch.setattr(
+        ai, "_client", lambda: FakeClient([_reply("Here and working.")]),
+    )
+
+    ai._sparks_command("teamchat desk Is everyone around?")
+    ai._sparks_command("teamchat desk")
+    out = capsys.readouterr().out
+
+    assert "Here and working." in out  # nosec B101
+    assert "Is everyone around?" in out  # nosec B101
+    assert "joined the team" in out  # nosec B101
+    assert teamchat.unread(team.id) == 0  # nosec B101
+
+
+def test_the_terminal_names_a_team_with_spaces(model, monkeypatch, capsys):
+    from flash import ai
+
+    sparks.create_team("Dev Team")
+    sparks.create("Lead", "Lead.")
+    sparks.set_team("lead", "dev team")
+    monkeypatch.setattr(ai, "_client", lambda: FakeClient([_reply("Yes?")]))
+
+    ai._sparks_command("teamchat Dev Team hello there")
+
+    said = [e["text"] for e in teamchat.history("dev team")["entries"]]
+    assert "hello there" in said and "Yes?" in said  # nosec B101
+
+
+def test_marking_it_read_twice_writes_once(team):
+    changes = []
+    teamchat.on_change(changes.append)
+    try:
+        assert teamchat.mark_read("desk") is True  # nosec B101
+        assert teamchat.mark_read("desk") is False  # nosec B101
+    finally:
+        teamchat._listeners.remove(changes.append)
+
+    assert changes == [team.id]  # nosec B101
+
+
+def test_a_reply_calls_on_the_spark_it_answers(team):
+    said = teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": "The summary is half done.",
+    }))
+    message = teamchat.say("desk", "When will it be ready?", said["id"])
+    client = FakeClient([_reply("By noon.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Writer answers, not the lead, and reads which message is meant.
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+    quoted = message["reply"]["text"]
+    assert quoted == "The summary is half done."  # nosec B101
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "replying to Writer's message" in seen  # nosec B101
+    assert '"The summary is half done."' in seen  # nosec B101
+
+
+def test_a_reply_and_a_mention_both_answer(team):
+    said = teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": "Draft is up.",
+    }))
+    message = teamchat.say("desk", "@scout can you check it?", said["id"])
+    client = FakeClient([_reply("Thanks."), _reply("Checking.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer", "Scout"]  # nosec B101
+
+
+def test_a_reply_to_news_calls_on_its_spark(team):
+    news = teamchat.event(team.id, sparks.find("scout"), "report", "Found 2.")
+    message = teamchat.say("desk", "Which two?", news["id"])
+    client = FakeClient([_reply("12, 14.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
+    assert message["reply"]["what"] == "report"  # nosec B101
+
+
+def test_a_reply_to_your_own_message_goes_to_the_lead(team):
+    first = teamchat.say("desk", "Plan for today?")
+    message = teamchat.say("desk", "Also, the release.", first["id"])
+
+    posted = teamchat.answer("desk", message, FakeClient([_reply("Noted.")]))
+
+    assert [e["name"] for e in posted] == ["Lead"]  # nosec B101
+    assert "replying to their own message" in teamchat._line(  # nosec B101
+        message, {},
+    )
+
+
+def test_a_reply_to_a_message_that_is_gone_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.say("desk", "Hm?", 9999)
+
+
+def test_the_page_sends_a_reply(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "answer", lambda *a, **k: None)
+    news = teamchat.event(team.id, sparks.find("scout"), "report", "Found 2.")
+
+    posted = web.command(web.Session(), {
+        "name": "team-chat-say", "arg": team.id, "text": "Which?",
+        "reply_to": news["id"],
+    })
+
+    assert posted["entry"]["reply"]["id"] == news["id"]  # nosec B101
+
+
+def test_everyone_calls_on_the_whole_team(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "REPLY_LIMIT", 2)
+    message = teamchat.say("desk", "@everyone stand-up: what are you on?")
+    client = FakeClient([_reply("Leading."), _reply("Looking."),
+                         _reply("Writing.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # All three, past the usual limit, the lead first.
+    assert [e["name"] for e in posted][0] == "Lead"  # nosec B101
+    assert sorted(e["name"] for e in posted) == [  # nosec B101
+        "Lead", "Scout", "Writer",
+    ]
+
+
+def test_a_sparks_own_everyone_calls_no_one(team):
+    message = teamchat.say("desk", "@writer what's new?")
+    client = FakeClient([_reply("Asking @everyone, hold on.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+
+
+def test_everyone_in_a_chat_calls_every_spark(model):
+    sparks.create("Loner", "Alone.")
+    sparks.create("Other", "Other.")
+
+    named = sparks.mentioned("@other and @everyone, hi", everyone=True)
+
+    assert [s.name for s in named] == ["Other", "Loner"]  # nosec B101
+    assert sparks.mentioned("@everyone hi") == []  # nosec B101
+
+
+def test_everyone_answers_at_most_a_dozen(model, monkeypatch):
+    monkeypatch.setattr(sparks, "EVERYONE_MOST", 2)
+    for name in ("A1", "B2", "C3"):
+        sparks.create(name, "Job.")
+
+    named = sparks.mentioned("@c3 @everyone", everyone=True)
+
+    assert [s.name for s in named] == ["C3", "A1"]  # nosec B101
+
+
+def test_no_spark_can_be_called_everyone(model):
+    for name in ("Everyone", "everyone"):
+        with pytest.raises(sparks.SparkError, match="kept for @everyone"):
+            sparks.create(name, "Job.")
+    made = sparks.create("Scout", "Job.")
+    with pytest.raises(sparks.SparkError, match="kept for @everyone"):
+        sparks.update(made.id, name="Everyone")
+
+
+def test_a_team_chat_reply_carries_its_documents(team):
+    message = teamchat.say("desk", "@writer write up the plan?")
+    client = FakeClient([
+        _reply("", ("make_document", {"title": "Plan", "content": "Do."})),
+        _reply("Done, here it is."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [f["title"] for f in posted[0]["files"]] == ["Plan"]  # nosec B101
+
+
+def test_report_news_carries_its_documents(team):
+    sparks.shift(sparks.find("scout").id, client=FakeClient([
+        _reply("", ("make_document", {"title": "Bugs", "content": "Two."})),
+        _reply("Wrote up the bugs."),
+    ]))
+
+    news = _said(team.id, teamchat.EVENT)[-1]
+
+    assert [f["title"] for f in news["files"]] == ["Bugs"]  # nosec B101
+
+
+def test_the_page_opens_a_sparks_document(team, tmp_path):
+    writer = sparks.find("writer")
+    path = sparks.write_document(writer.id, "Plan", "Do.")
+    session = web.Session()
+
+    opened = web.command(session, {
+        "name": "spark-document", "arg": writer.id, "path": str(path),
+    })
+    listed = web.command(session, {
+        "name": "spark-documents", "arg": writer.id,
+    })
+
+    assert opened["file"]["kind"] == "doc"  # nosec B101
+    assert [d["title"] for d in listed["documents"]] == ["Plan"]  # nosec B101
+    with pytest.raises(ValueError, match="No such document"):
+        web.command(session, {
+            "name": "spark-document", "arg": writer.id,
+            "path": str(tmp_path / "x.md"),
+        })
+
+
+@pytest.mark.parametrize("said", ["NO_REPLY", "no reply.", "**NO_REPLY**", ""])
+def test_a_spark_can_stay_quiet_in_the_team_chat(team, said):
+    before = len(_said(team.id))
+    message = teamchat.say("desk", "Morning all.")
+
+    posted = teamchat.answer("desk", message, FakeClient([_reply(said)]))
+
+    assert posted == []  # nosec B101
+    # Only the user's message is new, and nobody is left typing.
+    assert len(_said(team.id)) == before + 1  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+
+
+def test_a_quiet_spark_brings_no_one_in(team):
+    message = teamchat.say("desk", "@scout @writer anything?")
+    client = FakeClient([_reply("NO_REPLY"), _reply("Draft is up.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+
+
+def test_a_quiet_spark_that_wrote_a_document_still_posts_it(team):
+    message = teamchat.say("desk", "@writer the plan?")
+    client = FakeClient([
+        _reply("", ("make_document", {"title": "Plan", "content": "Do."})),
+        _reply("NO_REPLY"),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert posted[0]["text"] == "I wrote this up."  # nosec B101
+    assert posted[0]["files"][0]["title"] == "Plan"  # nosec B101
+
+
+def test_staying_quiet_is_only_for_the_team_chat(model):
+    made = sparks.create("Scout", "Watch.")
+
+    reply = sparks.say(made.id, "Hi?", FakeClient([_reply("NO_REPLY")]))
+
+    # In a chat of its own it is posted as it said it: no silence there.
+    assert reply.text == "NO_REPLY"  # nosec B101
+    prompt = sparks.chat_prompt(made, "h", "m", "")
+    assert "NO_REPLY" not in prompt  # nosec B101
+
+
+def _send(text):
+    return _reply("", ("send_message", {"text": text}))
+
+
+def test_a_message_sent_as_it_works_has_no_dashes(team):
+    message = teamchat.say("desk", "@scout delete it")
+    client = FakeClient([
+        _send("Done \u2014 `a\u2014b` is deleted"),
+        _reply("Checked it \u2014 gone."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Its answer had them taken out already; what it sent on the way
+    # now does too, code kept as written.
+    assert [e["text"] for e in posted] == [  # nosec B101
+        "Done, `a\u2014b` is deleted", "Checked it, gone.",
+    ]
+
+
+def test_a_spark_can_send_messages_in_a_row(team):
+    message = teamchat.say("desk", "@scout any new bugs?")
+    client = FakeClient([_send("On it, checking."), _reply("Found 2.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [(e["name"], e["text"]) for e in posted] == [  # nosec B101
+        ("Scout", "On it, checking."), ("Scout", "Found 2."),
+    ]
+    talk = [e["text"] for e in _said(team.id, teamchat.SPARK)]
+    assert talk == ["On it, checking.", "Found 2."]  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+    # It could, since it was told how.
+    names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+    assert "send_message" in names  # nosec B101
+
+
+def test_what_it_sent_can_be_all_it_says(team):
+    message = teamchat.say("desk", "@scout ping")
+    client = FakeClient([_send("Pong."), _reply("NO_REPLY")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["text"] for e in posted] == ["Pong."]  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+
+
+def test_an_answer_that_repeats_what_it_sent_is_posted_once(team):
+    message = teamchat.say("desk", "@scout ping")
+    client = FakeClient([_send("Pong."), _reply("Pong.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["text"] for e in posted] == ["Pong."]  # nosec B101
+
+
+def test_a_spark_cannot_flood_the_chat(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_SENT", 2)
+    message = teamchat.say("desk", "@scout talk")
+    client = FakeClient([
+        _send("One."), _send("Two."), _send("Three."), _reply("Done."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    texts = [e["text"] for e in posted]
+    assert texts == ["One.", "Two.", "Done."]  # nosec B101
+    refused = client.calls[3]["messages"][-1]["content"]
+    assert "2 messages this turn already" in refused  # nosec B101
+
+
+def test_a_sent_message_brings_a_teammate_in(team):
+    message = teamchat.say("desk", "@scout who writes it up?")
+    client = FakeClient([
+        _send("@writer can you take this?"), _reply("NO_REPLY"),
+        _reply("On it."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout", "Writer"]  # nosec B101
+
+
+def test_several_messages_are_one_turn_of_the_limit(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "REPLY_LIMIT", 1)
+    message = teamchat.say("desk", "@scout @writer both of you")
+    client = FakeClient([_send("Looking."), _reply("Found it."),
+                         _reply("Here.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout", "Scout"]  # nosec B101
+
+
+THUMBS = "\U0001f44d"
+PARTY = "\U0001f389"
+
+
+def test_the_user_reacts_and_takes_it_back(team):
+    message = teamchat.say("desk", "Shipped it.")
+
+    on = teamchat.react("desk", message["id"], THUMBS)
+    off = teamchat.react("desk", message["id"], THUMBS)
+
+    assert on["reactions"] == {THUMBS: ["user"]}  # nosec B101
+    assert "reactions" not in off  # nosec B101
+
+
+@pytest.mark.parametrize("emoji", [
+    "❤️", "\U0001f44d\U0001f3fd", "\U0001f468‍\U0001f4bb",
+])
+def test_any_one_emoji_will_do(team, emoji):
+    message = teamchat.say("desk", "Hi.")
+
+    reacted = teamchat.react("desk", message["id"], emoji)
+
+    assert list(reacted["reactions"]) == [emoji]  # nosec B101
+
+
+@pytest.mark.parametrize("emoji", ["", "ok", "a\U0001f44d", ":)", " "])
+def test_a_reaction_must_be_an_emoji(team, emoji):
+    message = teamchat.say("desk", "Hi.")
+
+    with pytest.raises(teamchat.TeamChatError, match="emoji"):
+        teamchat.react("desk", message["id"], emoji)
+
+
+def test_a_reaction_to_a_message_that_is_gone_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.react("desk", 999, THUMBS)
+
+
+def test_a_message_carries_only_so_many_reactions(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_REACTIONS", 1)
+    message = teamchat.say("desk", "Hi.")
+    teamchat.react("desk", message["id"], THUMBS)
+
+    with pytest.raises(teamchat.TeamChatError, match="1 reactions"):
+        teamchat.react("desk", message["id"], PARTY)
+    # One already on it can still be added to.
+    teamchat.react("desk", message["id"], THUMBS, by="lead-id")
+
+
+def test_the_page_hears_of_a_reaction_to_what_it_has(team):
+    message = teamchat.say("desk", "Shipped it.")
+    seq = teamchat.history("desk")["seq"]
+
+    teamchat.react("desk", message["id"], PARTY)
+    later = teamchat.history("desk", since=seq)
+    nothing = teamchat.history("desk", since=later["seq"])
+    teamchat.say("desk", "Next.")
+
+    assert later["entries"] == []  # nosec B101
+    assert [e["id"] for e in later["changed"]] == [message["id"]]  # nosec B101
+    assert later["changed"][0]["reactions"] == {PARTY: ["user"]}  # nosec B101
+    assert nothing["changed"] == []  # nosec B101
+    # No message takes the number the reaction moved the chat on to.
+    ids = [e["id"] for e in _said(team.id)]
+    assert len(ids) == len(set(ids))  # nosec B101
+
+
+def test_the_page_reacts(team):
+    message = teamchat.say("desk", "Shipped it.")
+    session = web.Session()
+
+    reacted = web.command(session, {
+        "name": "team-chat-react", "arg": team.id, "id": message["id"],
+        "emoji": THUMBS,
+    })
+
+    assert reacted["entry"]["reactions"] == {THUMBS: ["user"]}  # nosec B101
+    with pytest.raises(ValueError, match="emoji"):
+        web.command(session, {
+            "name": "team-chat-react", "arg": team.id,
+            "id": message["id"], "emoji": "yes",
+        })
+
+
+def test_a_spark_reacts_instead_of_answering(team):
+    message = teamchat.say("desk", "@scout thanks for the fix!")
+    client = FakeClient([
+        _reply("", ("react", {"message": message["id"], "emoji": THUMBS})),
+        _reply("NO_REPLY"),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    scout = sparks.find("scout")
+    assert posted == []  # nosec B101
+    reacted = [e for e in _said(team.id) if e["id"] == message["id"]][0]
+    assert reacted["reactions"] == {THUMBS: [scout.id]}  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+    # It saw the message's number, to react to it by.
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert f"#{message['id']} The user: @scout thanks" in seen  # nosec B101
+
+
+def test_a_spark_reacting_twice_keeps_its_reaction(team):
+    message = teamchat.say("desk", "@scout well done")
+    react = ("react", {"message": message["id"], "emoji": THUMBS})
+    client = FakeClient([_reply("", react), _reply("", react),
+                         _reply("NO_REPLY")])
+
+    teamchat.answer("desk", message, client)
+
+    reacted = [e for e in _said(team.id) if e["id"] == message["id"]][0]
+    assert reacted["reactions"] == {  # nosec B101
+        THUMBS: [sparks.find("scout").id],
+    }
+
+
+def test_a_spark_is_told_when_it_cannot_react(team):
+    message = teamchat.say("desk", "@scout hi")
+    client = FakeClient([
+        _reply("", ("react", {"message": 999, "emoji": THUMBS})),
+        _reply("", ("react", {"message": message["id"], "emoji": "yes"})),
+        _reply("Hi."),
+    ])
+
+    teamchat.answer("desk", message, client)
+
+    told = [c["messages"][-1]["content"] for c in client.calls[1:]]
+    assert "no longer in the chat" in told[0]  # nosec B101
+    assert "emoji" in told[1]  # nosec B101
+
+
+def test_sparks_read_who_reacted(team):
+    message = teamchat.say("desk", "Release is out.")
+    teamchat.react("desk", message["id"], PARTY)
+    teamchat.react("desk", message["id"], PARTY, by=sparks.find("lead").id)
+
+    block = teamchat.prompt_block(sparks.find("scout"))
+
+    assert f"[reactions: {PARTY} the user, Lead]" in block  # nosec B101
+
+
+def test_the_terminal_shows_reactions(team, capsys):
+    from flash import ai
+
+    message = teamchat.say("desk", "Release is out.")
+    teamchat.react("desk", message["id"], PARTY)
+    teamchat.react("desk", message["id"], PARTY, by=sparks.find("scout").id)
+
+    ai._sparks_command("teamchat desk")
+
+    assert f"{PARTY} You and Scout" in capsys.readouterr().out  # nosec B101
+
+
+def test_another_flash_writing_a_chat_is_heard(team):
+    heard = []
+    teamchat.on_change(heard.append)
+    try:
+        seen = teamchat._stamps()
+        # This one's own write it knew of already.
+        teamchat.say("desk", "From here.")
+        heard.clear()
+        assert teamchat._look(seen) and heard == []
+        seen = teamchat._stamps()
+        # Another Flash's: the file changes under it.
+        path = teamchat._path(team.id)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["entries"].append({"id": 99, "kind": "user", "text": "Hi",
+                                "at": time.time()})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        teamchat._look(seen)
+    finally:
+        teamchat.off_change(heard.append)
+
+    assert heard == [team.id]
+
+
+def test_the_page_watches_for_other_flashes(monkeypatch):
+    started = []
+    monkeypatch.setattr(teamchat, "watch", lambda: started.append(True))
+    monkeypatch.setattr(sparks, "start", lambda: None)
+    # Set before _attach takes it, so the server it never ran is not
+    # left behind as the one /web serves, for another test to stop.
+    monkeypatch.setattr(web, "_background", None)
+    server = web._listen(0, False)
+    try:
+        web._attach(server, standalone=False)
+    finally:
+        server.server_close()
+
+    assert started == [True]
+
+
+def test_the_terminal_shows_who_is_typing_and_each_message(team, monkeypatch,
+                                                           capsys):
+    from flash import ai
+
+    said = []
+
+    class Live:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, words):
+            said.append(words)
+
+    monkeypatch.setattr(ai.console, "status", lambda *a, **k: Live())
+    monkeypatch.setattr(ai, "_client", lambda: FakeClient([
+        _send("On it, checking."), _reply("Found 2."),
+    ]))
+
+    ai._sparks_command("teamchat desk @scout any bugs?")
+    out = capsys.readouterr().out
+
+    assert "Scout is typing · Thinking" in said  # nosec B101
+    assert out.count("Scout") >= 2  # nosec B101
+    assert out.index("On it, checking.") < out.index("Found 2.")  # nosec B101
+    # Each once, though answer() hands them back as well.
+    assert out.count("Found 2.") == 1  # nosec B101
+
+
+def test_the_terminal_names_replies_and_sparks_that_left(team, capsys):
+    from flash import ai
+
+    first = teamchat.say("desk", "Ping.")
+    teamchat.say("desk", "Pong?", reply_to=first["id"])
+    teamchat._post(team.id, sparks.find("writer"), {"text": "Bye all."})
+    sparks.remove(sparks.find("writer").id)
+
+    ai._sparks_command("teamchat desk")
+    out = capsys.readouterr().out
+
+    assert "replying to yourself: Ping." in out  # nosec B101
+    assert "Writer" in out and "Bye all." in out  # nosec B101
+
+
+def test_a_spark_hears_of_a_reaction_to_its_message(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+
+    teamchat.react("desk", said["id"], THUMBS)
+    teamchat.react("desk", said["id"], PARTY, by=sparks.find("lead").id)
+
+    notes = sparks.find("scout").inbox
+    assert [(n["from"], n["emoji"]) for n in notes] == [  # nosec B101
+        ("The user", THUMBS), ("Lead", PARTY),
+    ]
+    assert "Found the leak." in notes[0]["text"]  # nosec B101
+    # Told, not called: a reaction starts no shift.
+    assert not sparks.find("scout").asked  # nosec B101
+    opening = sparks._opening("", notes)
+    assert f"The user reacted {THUMBS} in Desk's chat" in opening  # nosec B101
+    assert "Handed to you" not in opening  # nosec B101
+    status = sparks.status_block(sparks.find("scout"))
+    assert "Reactions to what you said" in status  # nosec B101
+    assert "Handed to you by other sparks" not in status  # nosec B101
+
+
+def test_a_reaction_taken_back_takes_its_note(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+
+    teamchat.react("desk", said["id"], THUMBS)
+    teamchat.react("desk", said["id"], THUMBS)
+
+    assert sparks.find("scout").inbox == []  # nosec B101
+
+
+def test_a_reaction_to_a_report_tells_who_filed_it(team):
+    scout = sparks.find("scout")
+    filed = teamchat.event(team.id, scout, "report", "All green.")
+
+    teamchat.react("desk", filed["id"], THUMBS)
+
+    note = sparks.find("scout").inbox[-1]
+    assert note["text"].startswith("your report #")  # nosec B101
+
+
+def test_no_note_for_its_own_reaction_or_on_news_of_joining(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+    joined = next(
+        e for e in _said(team.id, teamchat.EVENT) if e["name"] == "Scout"
+    )
+
+    teamchat.react("desk", said["id"], THUMBS, by=scout.id)
+    teamchat.react("desk", joined["id"], THUMBS)
+    teamchat.react("desk", teamchat.say("desk", "Hi.")["id"], THUMBS)
+
+    assert sparks.find("scout").inbox == []  # nosec B101
+
+
+def test_reactions_never_crowd_out_work(team, monkeypatch):
+    monkeypatch.setattr(sparks, "MAX_REACTION_NOTES", 2)
+    scout = sparks.find("scout")
+    sparks._handing_off(sparks.find("lead"))(
+        {"spark": "scout", "note": "Check the build."},
+    )
+    for number in range(4):
+        said = teamchat._post(team.id, scout, {"text": f"Note {number}."})
+        teamchat.react("desk", said["id"], THUMBS)
+
+    inbox = sparks.find("scout").inbox
+    assert sum(1 for n in inbox if n.get("reaction")) == 2  # nosec B101
+    assert any(n.get("by") for n in inbox)  # nosec B101
+
+
+def _settled(team_id):
+    for _ in range(200):
+        if team_id not in teamchat._busy:
+            return
+        time.sleep(0.02)
+    raise AssertionError("still answering")
+
+
+def test_retry_replaces_a_sparks_message(team):
+    message = teamchat.say("desk", "Morning, team.")
+    first = teamchat.answer("desk", message, FakeClient([_reply("Mornin.")]))
+    client = FakeClient([_reply("Good morning, all quiet here.")])
+
+    old = teamchat.retry("desk", first[0]["id"], client)
+    _settled(team.id)
+
+    assert old["retried"] is True  # nosec B101
+    talk = [e["text"] for e in teamchat.history(team.id)["entries"]
+            if e["kind"] != "event"]
+    assert talk == [  # nosec B101
+        "Morning, team.", "Good morning, all quiet here.",
+    ]
+    # It answered without its old message in front of it.
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "Mornin." not in seen  # nosec B101
+    # A page that had the old one is told it changed.
+    changed = teamchat.history(team.id, since=first[0]["id"])["changed"]
+    assert [e["id"] for e in changed if e.get("retried")] == [  # nosec B101
+        first[0]["id"],
+    ]
+
+
+def test_only_a_sparks_message_can_be_retried(team):
+    message = teamchat.say("desk", "Hello.")
+
+    with pytest.raises(teamchat.TeamChatError, match="Only a spark"):
+        teamchat.retry("desk", message["id"])
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.retry("desk", 9999)
+
+
+def test_no_retry_while_the_team_answers(team):
+    message = teamchat.say("desk", "Hi.")
+    said = teamchat.answer("desk", message, FakeClient([_reply("Hey.")]))
+    teamchat._busy.add(team.id)
+    try:
+        with pytest.raises(teamchat.TeamChatError, match="still answering"):
+            teamchat.retry("desk", said[0]["id"])
+    finally:
+        teamchat._busy.discard(team.id)
+
+
+def test_the_page_retries(team, monkeypatch):
+    message = teamchat.say("desk", "Morning.")
+    said = teamchat.answer("desk", message, FakeClient([_reply("Hi.")]))
+    monkeypatch.setattr(teamchat, "_reply", lambda *a, **k: [])
+
+    out = web.command(web.Session(), {
+        "name": "team-chat-retry", "arg": team.id, "id": said[0]["id"],
+    })
+    _settled(team.id)
+
+    assert out["entry"]["retried"] is True  # nosec B101
+
+
+def test_a_message_is_read_by_the_sparks_that_answer_it(team):
+    message = teamchat.say("desk", "Morning, team.")
+    assert teamchat.read_by(message) == []  # nosec B101
+
+    teamchat.answer("desk", message, FakeClient([_reply("Morning.")]))
+
+    mine = _said(team.id, teamchat.USER)[0]
+    lead = sparks.find("lead")
+    assert teamchat.read_by(mine) == [lead.id]  # nosec B101
+    assert mine["seen"][lead.id] >= mine["at"]  # nosec B101
+
+
+def test_a_spark_reads_the_chat_on_its_shift_and_the_page_hears(team):
+    teamchat.say("desk", "Scout, look at the logs.")
+    seq = teamchat.history("desk")["seq"]
+    scout = sparks.find("scout")
+
+    assert "look at the logs" in teamchat.prompt_block(scout)  # nosec B101
+    later = teamchat.history("desk", since=seq)
+
+    assert [teamchat.read_by(e) for e in later["changed"]] == [  # nosec B101
+        [scout.id],
+    ]
+    # Read again, nothing more is written.
+    teamchat.prompt_block(scout)
+    again = teamchat.history("desk", since=later["seq"])
+    assert again["changed"] == []  # nosec B101
+
+
+def test_the_terminal_shows_who_read_a_message(team, capsys):
+    from flash import ai
+
+    teamchat.say("desk", "First.")
+    teamchat.prompt_block(sparks.find("writer"))
+    teamchat.say("desk", "Second.")
+
+    ai._sparks_command("teamchat desk")
+
+    out = capsys.readouterr().out
+    assert "✓✓ Read by Writer" in out and "✓ Sent" in out  # nosec B101
+
+
+def _edit(message, text):
+    return _reply("", ("edit_message", {"message": str(message),
+                                        "text": text}))
+
+
+def test_a_spark_edits_its_message_and_every_version_stays(team):
+    first = teamchat.say("desk", "@scout how many bugs?")
+    posted = teamchat.answer("desk", first, FakeClient([_reply("Found 2.")]))
+    said = posted[0]
+    seen = teamchat.history("desk")["seq"]
+
+    again = teamchat.say("desk", "@scout check again?")
+    client = FakeClient([
+        _edit(said["id"], "Found 3 — one came in."), _reply("NO_REPLY"),
+    ])
+    teamchat.answer("desk", again, client)
+
+    now = teamchat.history("desk", since=seen)
+    edited = [e for e in now["changed"] if e["id"] == said["id"]][0]
+    # What it says now, dashes and all taken care of, and what it said.
+    assert edited["text"] == "Found 3, one came in."  # nosec B101
+    assert [v["text"] for v in edited["versions"]] == ["Found 2."]  # nosec
+    assert edited["versions"][0]["at"] == said["at"]  # nosec B101
+    # Told how, and nothing new was posted for it.
+    names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+    assert "edit_message" in names  # nosec B101
+    assert [e for e in now["entries"] if e["kind"] == teamchat.SPARK] == []
+    # The others read that it was edited.
+    by_id = {s.id: s for s in sparks.all_sparks()}
+    assert "(edited): Found 3" in teamchat._line(edited, by_id)  # nosec
+
+
+def test_a_spark_edits_only_its_own_messages(team):
+    mine = teamchat.say("desk", "hello all")
+    posted = teamchat.answer("desk", teamchat.say("desk", "@scout hi"),
+                             FakeClient([_reply("Hi.")]))
+    scout = posted[0]["spark"]
+    other = [s for s in sparks.all_sparks() if s.id != scout][0]
+
+    for entry_id, by, why in (
+        (mine["id"], scout, "your own"),
+        (posted[0]["id"], other.id, "your own"),
+        (9999, scout, "no longer"),
+    ):
+        with pytest.raises(teamchat.TeamChatError, match=why):
+            teamchat.edit("desk", entry_id, "changed", by)
+    for text, why in (("  ", "to nothing"), ("Hi.", "already")):
+        with pytest.raises(teamchat.TeamChatError, match=why):
+            teamchat.edit("desk", posted[0]["id"], text, scout)
+
+
+def test_versions_pile_up_in_order(team):
+    posted = teamchat.answer("desk", teamchat.say("desk", "@scout eta?"),
+                             FakeClient([_reply("Friday.")]))
+    scout, entry_id = posted[0]["spark"], posted[0]["id"]
+
+    teamchat.edit("desk", entry_id, "Thursday.", scout)
+    entry = teamchat.edit("desk", entry_id, "Today, done.", scout)
+
+    assert [v["text"] for v in entry["versions"]] == [  # nosec B101
+        "Friday.", "Thursday.",
+    ]
+    assert entry["text"] == "Today, done." and entry["edited"]  # nosec
+
+
+def test_a_dm_is_answered_by_its_spark_alone(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    message = teamchat.say(room, "Just between us: how is it going?")
+    client = FakeClient([_reply("Going well.")])
+
+    posted = teamchat.answer(room, message, client)
+
+    assert [e["text"] for e in posted] == ["Going well."]  # nosec B101
+    system = client.calls[0]["messages"][0]["content"]
+    assert "private chat with the user" in system  # nosec B101
+    assert "group chat" not in system.split("=== You are in")[-1]  # nosec B101
+    # The team's chat never sees it; the spark reads it on its shifts.
+    assert not _said(team.id, teamchat.USER)  # nosec B101
+    assert "Just between us" in teamchat.prompt_block(lead)  # nosec B101
+
+
+def test_a_call_is_one_entry_its_messages_kept_apart(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    call = teamchat.start_call(room)
+    message = teamchat.say(room, "Can you hear me?", call=call["call"])
+    client = FakeClient([_reply("Loud and clear.")])
+
+    posted = teamchat.answer(room, {**message, "call": call["call"]}, client)
+
+    assert [e["call"] for e in posted] == [call["call"]]  # nosec B101
+    # Kept for the spark and the log, but nothing waits unread.
+    assert teamchat.unread(room) == 0  # nosec B101
+    ended = teamchat.end_call(room, call["call"])
+    assert ended["ended"] >= call["at"]  # nosec B101
+    assert "Loud and clear" in teamchat.prompt_block(lead)  # nosec B101
+    # A team can be called too: a group call.
+    assert teamchat.start_call("desk")["group"] is True  # nosec B101
+
+
+def test_a_dm_with_a_spark_that_is_gone_is_refused(model):
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("dm-nobody", "Hello?")
+
+
+def _call(room, call_id):
+    return teamchat._call_entry(teamchat._read(room), call_id)
+
+
+def test_a_call_goes_from_calling_to_live_to_ended(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    assert _call(room, call)["state"] == "calling"  # nosec B101
+    teamchat.call_step(room, call, "connected")
+    live = _call(room, call)
+    assert live["state"] == "live" and live["connected"]  # nosec B101
+    assert "going on now" in teamchat._call_line(live)  # nosec B101
+    ended = teamchat.end_call(room, call)
+    assert ended["state"] == "ended"  # nosec B101
+    # A second end keeps the first.
+    again = teamchat.end_call(room, call)
+    assert again["ended"] == ended["ended"]  # nosec B101
+    assert teamchat._call_line(ended).startswith(  # nosec B101
+        "(A voice call with the user,")
+
+
+def test_a_call_never_picked_up_or_never_started_says_so(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    assert teamchat.end_call(room, call)["state"] == "unanswered"  # nosec B101
+    call = teamchat.start_call(room)["call"]
+    gone = teamchat.call_step(room, call, "cancel")
+    assert gone["state"] == "cancelled"  # nosec B101
+
+
+def test_a_call_nobody_is_on_any_more_ends_itself(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, call, "connected")
+    beat = _call(room, call)["beat"]
+    # The page was closed: no beat, nothing said, for longer than allowed.
+    later = beat + teamchat.CALL_STALE + 5
+    monkeypatch.setattr(teamchat.time, "time", lambda: later)
+    assert teamchat.open_call(room) is None  # nosec B101
+    over = _call(room, call)
+    assert over["state"] == "ended" and over["ended"] == beat  # nosec B101
+    # So the spark is not told it is on a call for ever after.
+    assert "going on now" not in teamchat.prompt_block(  # nosec B101
+        sparks.find("lead"))
+
+
+def test_a_new_call_ends_the_one_left_open(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    first = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, first, "connected")
+    second = teamchat.start_call(room)["call"]
+    assert _call(room, first)["state"] == "ended"  # nosec B101
+    assert teamchat.open_call(room)["call"] == second  # nosec B101
+
+
+def test_a_beat_or_a_word_keeps_a_call_going(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    start = _call(room, call)["beat"]
+    monkeypatch.setattr(teamchat.time, "time", lambda: start + 200)
+    teamchat.call_step(room, call, "beat")
+    monkeypatch.setattr(teamchat.time, "time", lambda: start + 400)
+    teamchat.say(room, "Still here", call=call)
+    monkeypatch.setattr(teamchat.time, "time",
+                        lambda: start + 400 + teamchat.CALL_STALE - 10)
+    assert teamchat.open_call(room)["call"] == call  # nosec B101
+
+
+def test_what_is_said_on_calls_never_pushes_the_chat_out(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_ENTRIES", 5)
+    monkeypatch.setattr(teamchat, "MAX_CALL_ENTRIES", 8)
+    room = teamchat.dm_id(sparks.find("lead").id)
+    for n in range(3):
+        teamchat.say(room, f"Before {n}")
+    call = teamchat.start_call(room)["call"]
+    for n in range(20):
+        teamchat.say(room, f"On the call {n}", call=call)
+    entries = teamchat._read(room)["entries"]
+    kept = [e["text"] for e in entries if not teamchat._on_call(e)
+            and e.get("kind") == "user"]
+    assert kept == ["Before 0", "Before 1", "Before 2"]  # nosec B101
+    assert _call(room, call) is not None  # nosec B101
+    said = [e for e in entries if teamchat._on_call(e)]
+    assert len(said) == 8 and said[-1]["text"] == "On the call 19"  # nosec
+
+
+def test_the_call_log_has_everything_said_on_it(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.say(room, "(Voice call) hello", hidden=True, call=call)
+    message = teamchat.say(room, "What is on today?", call=call)
+    teamchat.answer(room, {**message, "call": call},
+                    FakeClient([_reply("Two meetings.")]))
+    lines = teamchat.call_log(room, call)
+    assert [(x["name"], x["text"]) for x in lines] == [  # nosec B101
+        ("You", "What is on today?"), ("Lead", "Two meetings.")]
+
+
+def test_a_failed_answer_on_a_call_is_said_kindly(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    message = teamchat.say(room, "Hi", call=call)
+
+    def broken(*args, **kwargs):
+        raise ConnectionError("no model")
+
+    monkeypatch.setattr(sparks, "_work", broken)
+    posted = teamchat.answer(room, {**message, "call": call})
+    assert posted[0]["failed"]  # nosec B101
+    assert "ConnectionError" in posted[0]["text"]  # nosec B101
+    assert posted[0]["spoken"] == teamchat.CALL_FAILED  # nosec B101
+
+
+def test_a_long_call_is_summed_up_after(team, monkeypatch):
+    summed = []
+    monkeypatch.setattr(teamchat, "_recap",
+                        lambda room, call: summed.append((room, call)))
+    monkeypatch.setattr(teamchat.threading, "Thread",
+                        lambda target, args, daemon: type(
+                            "T", (), {"start": lambda self: target(*args)})())
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, call, "connected")
+    teamchat.say(room, "One", call=call)
+    teamchat.say(room, "Two", call=call)
+    teamchat.end_call(room, call)
+    assert summed == [(room, call)]  # nosec B101
+    # A call that never got talking on is not.
+    short = teamchat.start_call(room)["call"]
+    teamchat.end_call(room, short)
+    assert len(summed) == 1  # nosec B101
+
+
+def test_a_spark_calls_and_the_user_answers_declines_or_misses(
+        team, monkeypatch):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(sparks.find("lead").id)
+    ring = teamchat.ring(lead, "The build broke and I need a decision")
+    assert ring["state"] == "ringing" and ring["from"] == "spark"  # nosec
+    assert "it is ringing" in teamchat._call_line(ring)  # nosec B101
+    # One call at a time.
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.ring(lead, "Again")
+    answered = teamchat.call_step(room, ring["call"], "answer")
+    assert answered["state"] == "live" and answered["connected"]  # nosec
+    teamchat.end_call(room, ring["call"])
+    # Not again for a while, then it may.
+    with pytest.raises(teamchat.TeamChatError, match="Wait"):
+        teamchat.ring(lead, "Something else")
+    now = time.time() + teamchat.CALL_USER_GAP + 1
+    monkeypatch.setattr(teamchat.time, "time", lambda: now)
+    second = teamchat.ring(lead, "Quick question")
+    teamchat.call_step(room, second["call"], "decline")
+    assert _call(room, second["call"])["state"] == "declined"  # nosec B101
+    # Rung out: missed, waiting unread, and too late to answer.
+    third_at = now + teamchat.CALL_USER_GAP + 1
+    monkeypatch.setattr(teamchat.time, "time", lambda: third_at)
+    third = teamchat.ring(lead, "Are you there?")
+    monkeypatch.setattr(teamchat.time,
+                        "time", lambda: third_at + teamchat.RING_SECONDS + 1)
+    assert teamchat.open_call(room) is None  # nosec B101
+    assert _call(room, third["call"])["state"] == "missed"  # nosec B101
+    assert teamchat.unread(room) == 1  # nosec B101
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.call_step(room, third["call"], "answer")
+
+
+def test_a_ring_reaches_the_flashes_listening(team):
+    from flash import sparkcalls
+
+    heard, ended = [], []
+    sparkcalls.listen(lambda room, e: heard.append(e["call"]),
+                      lambda room, e: ended.append(e["state"]))
+    lead = sparks.find("lead")
+    ring = teamchat.ring(lead, "Need you")
+    assert heard == [ring["call"]]  # nosec B101
+    room = teamchat.dm_id(sparks.find("lead").id)
+    teamchat.call_step(room, ring["call"], "decline")
+    assert ended == ["declined"]  # nosec B101
+
+
+def test_with_no_flash_open_the_computer_rings(team, monkeypatch):
+    from flash import sparkcalls
+
+    rung = []
+    monkeypatch.setattr(sparkcalls, "ring_desktop",
+                        lambda room, entry: rung.append(entry["call"]))
+    monkeypatch.setattr(sparkcalls, "ringers_alive", lambda: False)
+    ring = teamchat.ring(sparks.find("lead"), "Urgent")
+    assert rung == [ring["call"]]  # nosec B101
+    # Claimed once: a second Flash does not ring it too.
+    assert not sparkcalls.claim(ring["call"])  # nosec B101
+
+
+def test_a_shift_can_call_the_user(team):
+    said = sparks._calling(sparks.find("lead"))({"reason": "Need a yes"})
+    assert "ringing" in said  # nosec B101
+    empty = sparks._calling(sparks.find("lead"))({"reason": ""})
+    assert "Error" in empty  # nosec B101
+
+
+def test_a_spark_sees_what_the_camera_showed(team, monkeypatch, tmp_path):
+    from flash import workspace
+
+    picture = tmp_path / "camera.jpg"
+    picture.write_bytes(b"\xff\xd8jpeg")
+    monkeypatch.setattr(workspace, "upload_path", lambda fid: picture)
+    monkeypatch.setattr("flash.sysprompt.model_sees_images",
+                        lambda host, model: True)
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    message = teamchat.say(room, "What is this?", call=call,
+                           files=[{"id": "x", "name": "camera.jpg"}])
+    client = FakeClient([_reply("A jar.")])
+    teamchat.answer(room, {**message, "call": call}, client)
+    sent = client.calls[0]["messages"][-1]
+    assert sent.get("images")  # nosec B101
+
+
+def test_the_page_can_run_a_call(team):
+    session = web.Session()
+    room = teamchat.dm_id(sparks.find("lead").id)
+    started = web.command(session, {"name": "team-chat-call", "arg": room})
+    call = started["entry"]["call"]
+    web.command(session, {"name": "team-chat-call", "arg": room,
+                          "step": "beat", "call": call})
+    web.command(session, {"name": "team-chat-call", "arg": room,
+                          "step": "connected", "call": call})
+    assert web.command(session, {"name": "team-chat", "arg": room})[  # nosec
+        "answering"] is False
+    ended = web.command(session, {"name": "team-chat-call", "arg": room,
+                                  "end": call})
+    assert ended["entry"]["state"] == "ended"  # nosec B101
+    assert web.command(session, {"name": "team-chat-call-log", "arg": room,
+                                 "call": call})["lines"] == []  # nosec B101
+    teamchat.ring(sparks.find("lead"), "Hello")
+    rings = web.command(session, {"name": "team-chat-ringing", "arg": ""})
+    assert rings["rings"][0]["reason"] == "Hello"  # nosec B101
+
+
+def test_the_terminal_rings_and_takes_a_call(team, monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "_ring", {})
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "The build broke")
+    ai._terminal_ring(room, ring)
+    assert ai._ring_waiting()  # nosec B101
+    ai._show_ring()
+    assert not ai._ring_waiting()  # nosec B101
+    # No voice set up here: the call is typed.
+    monkeypatch.setattr(ai, "models_present", lambda: False)
+    typed = iter(["Which test?", "/hangup"])
+    monkeypatch.setattr(ai.console, "input", lambda prompt="": next(typed))
+    client = FakeClient([_reply("Hi, the build broke."),
+                         _reply("The payments test.")])
+    monkeypatch.setattr(ai, "_client", lambda: client)
+    ai._answer_ring()
+    log = teamchat.call_log(room, ring["call"])
+    assert [x["text"] for x in log] == [  # nosec B101
+        "Hi, the build broke.", "Which test?", "The payments test."]
+    assert _call(room, ring["call"])["state"] == "ended"  # nosec B101
+    assert not ai._ring  # nosec B101
+
+
+def test_the_terminal_can_decline_a_call(team, monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "_ring", {})
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "Hello?")
+    ai._terminal_ring(room, ring)
+    ai._decline_ring()
+    assert _call(room, ring["call"])["state"] == "declined"  # nosec B101
+
+
+def test_a_spark_in_ultra_auto_can_call_as_often_as_needed(team, monkeypatch):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    monkeypatch.setattr(sparks, "mode_of", lambda spark: "ultra")
+    first = teamchat.ring(lead, "One")
+    teamchat.call_step(room, first["call"], "decline")
+    second = teamchat.ring(lead, "Two, right away")
+    assert second["state"] == "ringing"  # nosec B101
+    # Out of UltraAuto, the wait is back.
+    teamchat.call_step(room, second["call"], "decline")
+    monkeypatch.setattr(sparks, "mode_of", lambda spark: "auto")
+    with pytest.raises(teamchat.TeamChatError, match="Wait"):
+        teamchat.ring(lead, "Three")
+
+
+def test_calls_from_sparks_can_be_switched_off(team, monkeypatch, tmp_path):
+    from flash import web
+
+    monkeypatch.setattr("flash.notify.ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr("flash.ai.ENV_PATH", tmp_path / ".env",
+                        raising=False)
+    lead = sparks.find("lead")
+    assert teamchat.calls_allowed()  # on unless switched off  # nosec B101
+
+    monkeypatch.setenv(teamchat.CALLS_SETTING, "0")
+    assert not teamchat.calls_allowed()  # nosec B101
+    with pytest.raises(teamchat.TeamChatError, match="turned off calls"):
+        teamchat.ring(lead, "The build broke")
+    said = sparks._calling(lead)({"reason": "The build broke"})
+    assert said.startswith("Error: The user turned off calls")  # nosec
+    assert "@user" in said  # nosec B101
+
+    class Hub:
+        def publish(self, event):
+            pass
+
+    class Session:
+        hub = Hub()
+
+    monkeypatch.setattr("flash.ai.set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    assert web.command(Session(), {"name": "incoming-calls-setting",  # nosec
+                                   "arg": "on"}) == {"spark_calls": True}
+    assert teamchat.calls_allowed()  # nosec B101
+    assert teamchat.ring(lead, "Now it rings")["state"] == "ringing"  # nosec
+
+
+def test_a_shift_is_not_offered_the_call_with_calls_off(team, monkeypatch):
+    offered = []
+
+    def work(spark, messages, own, schemas, *a, **k):
+        offered.append({s["function"]["name"] for s in schemas})
+        return sparks.NOTHING_NEW
+
+    monkeypatch.setattr(sparks, "_work", work)
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    monkeypatch.setattr("flash.tools.MODEL_NAME", "test-model")
+    lead = sparks.find("lead")
+    sparks.shift(lead.id, client=object())
+    monkeypatch.setenv(teamchat.CALLS_SETTING, "off")
+    sparks.shift(lead.id, client=object())
+    assert "call_user" in offered[0]  # nosec B101
+    assert "call_user" not in offered[1]  # nosec B101
+
+
+def test_the_terminal_switches_incoming_calls(monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    ai._call_command("incoming off")
+    assert not teamchat.calls_allowed()  # nosec B101
+    ai._call_command("incoming on")
+    assert teamchat.calls_allowed()  # nosec B101
+
+
+def test_a_call_moves_between_flashes(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room, "web:aaa")["call"]
+    assert call_holder(room, call) == "web:aaa"  # nosec B101
+    assert [c["call"] for c in teamchat.live_calls()] == [call]  # nosec
+    assert teamchat.live_calls()[0]["team"] == room  # nosec B101
+
+    taken = teamchat.call_step(room, call, "take", "terminal:42")
+    assert taken["holder"] == "terminal:42" and taken["taken"]  # nosec
+    # The page it left lets go: its beat and its hang-up change nothing.
+    before = taken["beat"]
+    assert teamchat.call_step(room, call, "beat", "web:aaa")[  # nosec B101
+        "beat"] == before
+    teamchat.call_step(room, call, "end", "web:aaa")
+    assert _call(room, call)["state"] in ("calling", "live")  # nosec B101
+    # Where it went, it is hung up for real.
+    teamchat.call_step(room, call, "end", "terminal:42")
+    assert _call(room, call)["state"] not in ("calling", "live")  # nosec
+    assert teamchat.live_calls() == []  # nosec B101
+    # An ended call cannot be taken.
+    teamchat.call_step(room, call, "take", "web:bbb")
+    assert call_holder(room, call) == "terminal:42"  # nosec B101
+
+
+def test_a_spark_call_answered_is_held_where_it_was_answered(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "Quick question")
+    teamchat.call_step(room, ring["call"], "answer", "web:ccc")
+    assert call_holder(room, ring["call"]) == "web:ccc"  # nosec B101
+
+
+def test_the_terminal_takes_a_call_over(team, monkeypatch):
+    from flash import ai
+
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room, "web:aaa")["call"]
+    ran = []
+    monkeypatch.setattr(ai, "_spark_call",
+                        lambda t, c, incoming=None, taken=False:
+                        ran.append((t, c, taken)))
+    ai._call_command("take")
+    assert ran == [(room, call, True)]  # nosec B101
+    assert call_holder(room, call) == ai.CALL_HOLDER  # nosec B101
+    # Its own call is not one to take.
+    ran.clear()
+    ai._call_command("take")
+    assert ran == []  # nosec B101
+
+
+def call_holder(room, call):
+    return _call(room, call).get("holder")
+
+
+# --- Sparks from outside the team ----------------------------------------
+
+
+@pytest.fixture
+def outsider(team):
+    """Critic: a spark on no team at all."""
+
+    return sparks.create("Critic", "Critic's job.")
+
+
+def test_a_spark_off_the_team_is_called_in_as_a_guest(team, outsider):
+    message = teamchat.say("desk", "@critic is this plan any good?")
+    client = FakeClient([_reply("Mostly. Cut step three.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Critic"]  # nosec B101
+    told = client.calls[0]["messages"][0]["content"]
+    assert "You are not on Desk" in told  # nosec B101
+    assert "The sparks on the team:" in told  # nosec B101
+    assert "- Lead (@lead-spark)" in told  # nosec B101
+    # A guest, not a member: the team is as it was.
+    assert teamchat.is_guest(team.id, outsider)  # nosec B101
+    assert outsider.id not in [
+        s.id for s in sparks.members(team.id)]  # nosec B101
+
+
+def test_a_member_is_not_told_it_is_a_guest(team, outsider):
+    message = teamchat.say("desk", "@scout what did you find?")
+    client = FakeClient([_reply("Two bugs.")])
+
+    teamchat.answer("desk", message, client)
+
+    told = client.calls[0]["messages"][0]["content"]
+    assert "You are not on Desk" not in told  # nosec B101
+    assert "The others on the team:" in told  # nosec B101
+
+
+def test_a_teammate_can_bring_a_guest_in(team, outsider):
+    message = teamchat.say("desk", "Is the plan sound?")
+    client = FakeClient([
+        _reply("@critic can you check it?"),
+        _reply("Looks fine."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Lead", "Critic"]  # nosec B101
+
+
+def test_everyone_still_means_the_team(team, outsider):
+    message = teamchat.say("desk", "@everyone check in")
+    client = FakeClient([_reply("Here.") for _ in range(4)])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert sorted(e["name"] for e in posted) == [  # nosec B101
+        "Lead", "Scout", "Writer"]
+
+
+def test_a_reply_to_a_guest_and_a_retry_go_to_the_guest(team, outsider):
+    first = teamchat.answer(
+        "desk", teamchat.say("desk", "@critic thoughts?"),
+        FakeClient([_reply("Cut step three.")]))[0]
+    message = teamchat.say("desk", "Why that one?", first["id"])
+
+    posted = teamchat.answer(
+        "desk", message, FakeClient([_reply("It repeats step two.")]))
+
+    assert [e["name"] for e in posted] == ["Critic"]  # nosec B101
+    # A retry of its message is its to make, too.
+    assert teamchat.retry("desk", posted[0]["id"], FakeClient(
+        [_reply("It repeats two.")]))["name"] == "Critic"  # nosec B101
+
+
+def test_a_dm_never_calls_anyone_else_in(model):
+    scout = sparks.create("Scout", "Scout's job.")
+    sparks.create("Critic", "Critic's job.")
+    room = teamchat.dm_id(scout.id)
+    message = teamchat.say(room, "@critic what do you think?")
+
+    posted = teamchat.answer(room, message, FakeClient([_reply("Hm.")]))
+
+    assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
+
+
+def test_opening_the_chat_says_when_it_was_last_read(team):
+    # The page glows what came after it, though this same look marks it read.
+    session = web.Session()
+    web.command(session, {"name": "team-chat", "arg": team.id, "read": True})
+    before = teamchat.read_at(team.id)
+    time.sleep(0.01)
+    teamchat.event(team.id, sparks.find("lead"), "report", "Found two new bugs.")
+
+    opened = web.command(session, {"name": "team-chat", "arg": team.id, "read": True})
+
+    assert opened["seen_up_to"] == before  # nosec B101
+    news = [e for e in opened["entries"] if e.get("at", 0) > opened["seen_up_to"]]
+    assert news and news[-1]["text"].startswith("Found two new bugs")  # nosec B101
+    assert opened["unread"] == 0  # nosec B101
+    assert teamchat.read_at(team.id) > before  # nosec B101
+
+
+# Threads: a side conversation hanging off one message.
+
+def _writer_said(team, text="The summary is half done."):
+    return teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": text,
+    }))
+
+
+@pytest.fixture
+def heard(monkeypatch):
+    """The pings the user got."""
+
+    from flash import pings
+
+    got = []
+    pings.on_ping(got.append)
+    yield got
+    pings.off_ping(got.append)
+
+
+def test_a_thread_is_answered_by_the_spark_that_said_it(team, heard):
+    said = _writer_said(team)
+    message = teamchat.say("desk", "What is left?", thread=said["id"])
+    client = FakeClient([_reply("The ending.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Writer answers in the thread, not the lead.
+    assert [(e["name"], e["thread"]) for e in posted] == [  # nosec B101
+        ("Writer", said["id"]),
+    ]
+    root = next(e for e in _said(team.id) if e["id"] == said["id"])
+    assert root["thread_count"] == 2  # nosec B101
+    assert root["thread_who"][0] == sparks.find("writer").id  # nosec B101
+    # It read the thread, told it was in one.
+    seen = client.calls[0]["messages"]
+    assert f"=== The thread on #{said['id']} ===" in seen[-1]["content"]  # nosec B101
+    assert "answering in a thread" in seen[0]["content"]  # nosec B101
+    # And the user heard of it, with no @user.
+    assert [(p["where"], p["thread"]) for p in heard] == [  # nosec B101
+        ("thread", said["id"]),
+    ]
+
+
+def test_every_message_in_a_thread_pings_past_the_limit(team, heard,
+                                                        monkeypatch):
+    from flash import notify
+
+    monkeypatch.setattr(notify, "take_notify_turn", lambda: True)
+    said = _writer_said(team)
+    message = teamchat.say("desk", "Go on", thread=said["id"])
+    client = FakeClient([_send("One."), _send("Two."), _reply("Three.")])
+
+    teamchat.answer("desk", message, client)
+
+    assert [p["text"] for p in heard] == ["One.", "Two.", "Three."]  # nosec B101
+
+
+def test_the_main_chat_leaves_threads_out(team):
+    said = _writer_said(team)
+    teamchat.say("desk", "A side question", thread=said["id"])
+    message = teamchat.say("desk", "@scout and the bugs?")
+    client = FakeClient([_reply("None.")])
+
+    teamchat.answer("desk", message, client)
+
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "A side question" not in seen  # nosec B101
+    assert "[thread: 1 reply]" in seen  # nosec B101
+    assert "A side question" not in teamchat.prompt_block(  # nosec B101
+        sparks.find("scout"))
+
+
+def test_a_spark_starts_a_thread_and_its_author_answers(team, heard):
+    said = _writer_said(team)
+    message = teamchat.say("desk", "@scout look at the summary")
+    client = FakeClient([
+        _reply("", ("send_message", {"text": "Which part?",
+                                     "thread": said["id"]})),
+        _reply("Looking."),
+        _reply("The intro."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [(e["name"], e.get("thread", 0)) for e in posted] == [  # nosec B101
+        ("Scout", said["id"]), ("Scout", 0), ("Writer", said["id"]),
+    ]
+
+
+def test_a_thread_on_a_reply_is_the_same_thread(team):
+    said = _writer_said(team)
+    first = teamchat.say("desk", "One", thread=said["id"])
+
+    second = teamchat.say("desk", "Two", thread=first["id"])
+
+    assert second["thread"] == said["id"]  # nosec B101
+
+
+def test_a_call_has_no_thread(team):
+    call = teamchat.start_call("desk")
+
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("desk", "Hi", thread=call["id"])
+
+
+def test_the_page_sends_into_a_thread(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "answer", lambda *a, **k: None)
+    said = _writer_said(team)
+
+    posted = web.command(web.Session(), {
+        "name": "team-chat-say", "arg": team.id, "text": "More?",
+        "thread": said["id"],
+    })
+
+    assert posted["entry"]["thread"] == said["id"]  # nosec B101
+    changed = teamchat.history(team.id, said["id"])["changed"]
+    assert [e["thread_count"] for e in changed] == [1]  # nosec B101

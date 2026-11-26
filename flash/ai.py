@@ -1,5 +1,7 @@
 """Main App"""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -18,31 +20,51 @@ from ollama import ResponseError
 from rich.box import ROUNDED
 from rich.cells import cell_len
 from rich.console import Console, Group
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.spinner import Spinner
+from rich.segment import Segment
+from rich.table import Table
 from rich.text import Text
 
 from . import agent as subagents
 from . import (
     background,
     checkpoint,
+    computer,
+    computeruse,
+    connectors,
     context,
     extensions,
+    frontmatter,
+    greetings,
+    humanvoice,
+    interrupt,
     learning,
+    loop,
+    loaders,
+    memory,
+    pings,
     plan,
+    progress,
+    providers,
+    serif,
+    showcase,
     skills,
+    sparks,
+    systemone,
     terminal,
+    visuals,
+    worknotes,
 )
+from . import models as model_picker
+from .btw import question_of as btw_question
 from .cli import parse_args
-from .dashes import undash
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
 from .latex import render_latex
 from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
-from .notify import notify_reply_ready
+from .notify import desktop, notify_reply_ready, notify_spark
 from .paths import ENV_PATH
 from .repl_input import (
     EXPAND,
@@ -51,17 +73,25 @@ from .repl_input import (
     HEALTH_OK,
     HEALTH_UNKNOWN,
     MAX_MENU_ROWS,
+    MODEL_PICK,
     RESERVED_COMMANDS,
     RESIZE,
+    STEER,
     TOGGLE_AUTO,
     WAKE,
+    Dock,
     all_commands,
+    arm_exit,
+    carry,
+    is_shell_line,
+    print_above,
     read_line,
     screen_redrawn,
     screen_size,
+    shell_prompt,
     status_segments,
 )
-from .stats import Turn, elapsed, window
+from .stats import Turn, bar, bar_text, elapsed, window
 from .stats import summary as stats_summary
 from .sysprompt import (
     get_context_ceiling,
@@ -71,42 +101,54 @@ from .sysprompt import (
     model_sees_images,
 )
 from .theme import (
+    forget_expanded,
     ACCENT,
     ACCENT_ANSI,
+    BRANCH,
     BULLET,
     CHEVRON,
     CURSOR,
     DIM,
     DIM_ANSI,
     ELLIPSIS,
+    ERROR,
     MIDDOT,
     RESET_ANSI,
     SPARKLE,
     WARN,
+    Live,
     ScreenConsole,
+    can_encode,
     clear_collapsed,
     confirm,
     console,
+    current_dock,
     expand_collapsed,
     glimmer,
+    loader_frame,
     tool_line,
     tool_result,
     typed,
     warn,
+    yes_no,
 )
 from .theme import error as show_error
+from .tidy import tidy, tidy_args
 from .tools import (
     FUNCTIONS,
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     build_system_prompt,
     clear_user_runs,
+    end_thinking,
     init,
     reason,
     run_extension_command,
     run_tool,
     shell_tool,
     take_pending_images,
+    think_tools,
+    thinking_harder,
     trim_tool_output,
     turn_tools,
     user_runs,
@@ -117,14 +159,18 @@ from .updater import (
     is_newer,
     perform_update,
 )
-from .urlscheme import SchemeError, parse_flash_url, register, unregister
-from .version import __version__
-from .voice import (
-    INSTALL_HINT as VOICE_INSTALL_HINT,
+from .urlscheme import (
+    SchemeError,
+    is_open_url,
+    parse_flash_url,
+    register,
+    unregister,
 )
+from .version import __version__
 from .voice import (
     ensure_models,
     for_speech,
+    install_hint,
     is_exit_phrase,
     listen,
     missing_packages,
@@ -162,7 +208,15 @@ sentences, no code blocks, tables, lists, or emojis unless they ask for
 one, because only the prose is spoken and the rest is silently dropped.
 What they said reached you through speech recognition, so expect missing
 punctuation and the occasional misheard word; ask when a name, path, or
-command sounds wrong rather than acting on a guess.""".rstrip()
+command sounds wrong rather than acting on a guess.
+
+Sound like a warm, friendly person talking, not a document being read:
+contractions, everyday words, and a little feeling where it fits ("Oh,
+nice!", "Hmm, let me think.", "Ah, I see what happened."). Mix short
+sentences with longer ones. Your punctuation is how your voice sounds: a
+question mark lifts it, an exclamation mark brightens it, and a full stop
+lets it rest, so use them as you would speaking. Do not open with stock
+phrases like "Certainly!" or "Great question"; just answer, kindly.""".rstrip()
 
 
 class FlashError(Exception):
@@ -202,6 +256,11 @@ def _opt_int_env(
         return None
 
 
+# The most a compaction may take at once: the last few exchanges stay
+# word for word whatever this says.
+COMPACT_MOST = 90
+
+
 class Config:
     """App configuration, re-derived from the environment on demand."""
 
@@ -213,11 +272,16 @@ class Config:
     max_history_messages: Optional[int]
     max_history_chars: Optional[int]
     auto_compact: bool
+    compact_amount: int
     max_tool_rounds: int
     max_tool_output_chars: int
     max_output_tokens: int
     num_ctx: str
     no_command_confirmation: bool
+    ultra_allowed: bool
+    ultra_auto: bool
+    careful: bool
+    system_one: bool
     show_stats: bool
     voice: bool
     background: str
@@ -234,17 +298,36 @@ class Config:
             "MAX_HISTORY_CHARS", minimum=1000
         )
         cls.auto_compact = bool(_int_env("AUTO_COMPACT", 0, minimum=0))
-        cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
+        # How much of the history a compaction takes at once, in percent:
+        # 0 for just what no longer fits.
+        cls.compact_amount = min(
+            COMPACT_MOST, _int_env("COMPACT_AMOUNT", 0, minimum=0))
+        cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 50, minimum=1)
         cls.max_tool_output_chars = _int_env(
-            "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
+            "MAX_TOOL_OUTPUT_CHARS", 4000, minimum=500
         )
+        # Room for a whole file in one write call. A tool call is part of
+        # the reply, so one cut off here arrives missing what it had not
+        # reached yet; history_budget keeps this from crowding a small
+        # window.
         cls.max_output_tokens = _int_env(
-            "MAX_OUTPUT_TOKENS", 1024, minimum=128
+            "MAX_OUTPUT_TOKENS", 8192, minimum=128
         )
         cls.num_ctx = (os.getenv("NUM_CTX") or "").strip().lower()
+        # UltraAuto: offered once allowed in Settings, and autonomous
+        # mode and more while on.
+        cls.ultra_allowed = bool(_int_env("ULTRA_AUTO_ALLOWED", 0, minimum=0))
+        cls.ultra_auto = cls.ultra_allowed and bool(
+            _int_env("ULTRA_AUTO", 0, minimum=0))
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
-        )
+        ) or cls.ultra_auto
+        # Careful: autonomous, but high-stakes commands still ask.
+        cls.careful = cls.no_command_confirmation and not cls.ultra_auto \
+            and bool(_int_env("CAREFUL_AUTO", 0, minimum=0))
+        # On only with a model to ask: "none" is how the picker says off.
+        cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0)) and \
+            bool((os.getenv("SYSTEM_ONE_MODEL") or "").strip())
         cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.background = (os.getenv("BACKGROUND") or "").strip()
@@ -265,12 +348,77 @@ class Config:
 Config.refresh()
 
 
+def _client() -> "ollama.Client":
+    """A client for the host in use, sending its API key if it has one."""
+
+    return providers.client(Config.host)
+
+
 def set_config_var(name: str, value: str) -> None:
     """Persist NAME=VALUE to the env file and apply it immediately."""
 
     os.environ[name] = value
     set_env_var(ENV_PATH, name, value)
     Config.refresh()
+
+
+# How much Flash asks: before commands and edits, not about those
+# (autonomous), or about nothing at all (UltraAuto, once allowed).
+MODES = ("ask", "careful", "auto", "ultra")
+MODE_WORDS = {"ask": "Ask first", "careful": "Careful", "auto": "Auto",
+              "ultra": "UltraAuto"}
+
+
+def mode() -> str:
+    """The mode in use: one of MODES."""
+
+    if Config.ultra_auto:
+        return "ultra"
+    if Config.careful:
+        return "careful"
+    return "auto" if Config.no_command_confirmation else "ask"
+
+
+def set_mode(name: str) -> str:
+    """Switch to mode NAME, saved. Raises ValueError for one that is not
+    there, or UltraAuto before it is allowed."""
+
+    name = {"on": "auto", "off": "ask", "autonomous": "auto",
+            "ultraauto": "ultra"}.get(name, name)
+    if name not in MODES:
+        raise ValueError(
+            f"{name!r} is not a mode: ask, careful, auto or ultra.")
+    if name == "ultra" and not Config.ultra_allowed:
+        raise ValueError(
+            "UltraAuto is not allowed yet: turn it on in Settings, or "
+            "with /auto ultra allow."
+        )
+    set_config_var("NO_COMMAND_CONFIRMATION", "0" if name == "ask" else "1")
+    if name == "careful" or (os.getenv("CAREFUL_AUTO") or "0") != "0":
+        set_config_var("CAREFUL_AUTO", "1" if name == "careful" else "0")
+    set_config_var("ULTRA_AUTO", "1" if name == "ultra" else "0")
+    return name
+
+
+def next_mode() -> str:
+    """The mode after this one, as Shift+Tab goes round them: UltraAuto
+    only once allowed."""
+
+    # Careful is picked by name (the mode menu, /auto careful): from it,
+    # Shift+Tab goes on to Auto.
+    offered = [m for m in MODES if m != "careful"
+               and (m != "ultra" or Config.ultra_allowed)]
+    now = "auto" if mode() == "careful" else mode()
+    return offered[(offered.index(now) + 1) % len(offered)] \
+        if now in offered else "ask"
+
+
+def allow_ultra(on: bool) -> None:
+    """Offer UltraAuto as a mode, or stop: off, out of it at once."""
+
+    set_config_var("ULTRA_AUTO_ALLOWED", "1" if on else "0")
+    if not on:
+        set_config_var("ULTRA_AUTO", "0")
 
 
 def unset_config_var(name: str) -> bool:
@@ -330,6 +478,31 @@ FIRST_PROMPT_ROWS = 3
 HELD_ROWS = MAX_MENU_ROWS
 
 
+# The version of an Ollama found too old for System One when Flash
+# started with it switched on, for the welcome box to say so.
+_system_one_too_old = ""
+
+
+def _check_system_one() -> None:
+    """Make sure the server can run System One, if it is switched on.
+
+    Quick, and once a launch: an unreachable server says nothing here,
+    since the host's own health shows that, and a review will say it.
+    """
+
+    global _system_one_too_old
+
+    _system_one_too_old = ""
+    if not systemone.enabled():
+        return
+    try:
+        systemone.check(Config.host)
+    except systemone.TooOld as exc:
+        _system_one_too_old = exc.version
+    except systemone.SystemOneError:
+        pass
+
+
 def _banner_lines(update_version: Optional[str] = None) -> list:
     """What goes inside the welcome box.
 
@@ -341,7 +514,8 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     """
 
     title = Text()
-    title.append(f"Flash CLI v{__version__}", style="bold")
+    title.append(greetings.pick(), style="bold")
+    title.append(f"\nFlash CLI v{__version__}", style=DIM)
 
     fields = Text()
     fields.append("  /help", style=ACCENT)
@@ -358,8 +532,23 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     lines = [title, Text(""), fields]
 
     notices = []
-    if Config.no_command_confirmation:
+    if Config.ultra_auto:
+        notices.append("UltraAuto, nothing asks first: not email, "
+                       "iMessages, hires or Computer Use")
+    elif Config.careful:
+        notices.append("careful, only high-stakes commands ask first")
+    elif Config.no_command_confirmation:
         notices.append("autonomous, commands run without confirmation")
+    if systemone.enabled():
+        if _system_one_too_old:
+            notices.append(
+                f"System One needs Ollama v{systemone.MIN_VERSION_TEXT}+, "
+                f"this server is v{_system_one_too_old}"
+            )
+        elif Config.no_command_confirmation:
+            notices.append(
+                f"System One ({systemone.model()}) reviews each command"
+            )
     if Config.voice:
         notices.append("voice on, Enter on an empty line speaks")
     if update_version:
@@ -372,6 +561,12 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
                 block.append("\n")
             block.append(f"  {BULLET} {notice}", style=f"bold {ACCENT}")
         lines.extend([Text(""), block])
+
+    # Extensions' own banners, under Flash's.
+    from . import ext_ui
+
+    for _name, art in ext_ui.banners():
+        lines.extend([Text(""), Text(art, style=ACCENT)])
 
     return lines
 
@@ -549,6 +744,42 @@ def _settle_size() -> None:
             return
 
         size = now
+
+
+def _leave(messages: list, conversation: bool, started: float) -> None:
+    """Leave the way a finished program does: the opening screen and the
+    prompt's frame go, the conversation is printed again to scroll back
+    through, and one line says what the session came to."""
+
+    if console.is_terminal:
+        shown = console.rendered() if conversation else ""
+        console.file.write(
+            SYNC_BEGIN + "\x1b[H\x1b[2J\x1b[3J" + shown + SYNC_END
+        )
+        console.file.flush()
+        console.forget()
+    elif not conversation:
+        print()
+
+    asked = sum(
+        1 for m in messages
+        if m.get("role") == "user" and str(m.get("content") or "").strip()
+    )
+    took = int(time.monotonic() - started)
+    minutes, seconds = divmod(took, 60)
+    hours, minutes = divmod(minutes, 60)
+    length = (
+        f"{hours}h {minutes}m" if hours
+        else f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+    )
+    said = [f"{asked} message{'' if asked == 1 else 's'}", length]
+    if Config.model:
+        said.append(Config.model)
+    line = Text("● ", style=ACCENT)
+    line.append("Bye.", style="bold")
+    if asked:
+        line.append("  " + " · ".join(said), style=DIM)
+    console.print(line)
 
 
 def redraw_conversation(c: ScreenConsole) -> None:
@@ -941,7 +1172,9 @@ def _compact(
         )
         return False
 
-    messages[:] = context.merge_summary(messages, summary)
+    # Flash's working notes go over word for word, beside the summary.
+    messages[:] = context.merge_summary(
+        messages, worknotes.with_notes(summary))
     tool_result(
         f"Summarized into {context.estimate_tokens(summary)} tokens"
     )
@@ -957,6 +1190,13 @@ def _fit_and_compact(
     dropped = _trim_history(messages)
 
     if dropped and Config.auto_compact:
+        if Config.compact_amount:
+            # Compacting more than will fit now: a bigger summary less
+            # often, and room for the next turns before it fills again.
+            room = context.make_room(messages, int(
+                _history_budget() * (1 - Config.compact_amount / 100)))
+            messages[:] = room.kept
+            dropped = dropped + room.dropped
         _compact(console, client, messages, dropped)
         # The summary takes up room of its own, so make sure the
         # result still fits rather than trusting that it does.
@@ -987,58 +1227,6 @@ def _tool_limit_message() -> dict:
     }
 
 
-# A reply that ends by saying what it will do next, with no tool call
-# to do it: the model saw something to fix (in a render, a test run, a
-# screenshot) and wrote the plan down instead of carrying it out. The
-# turn would end there with nothing done, so Flash asks it to go on.
-_PROMISE = re.compile(
-    r"\b(?:I['’]ll|I will|I['’]m going to|I am going to|let me|"
-    r"let['’]s)\s+"
-    # Waiting on a sub-agent or the user is a right place to stop.
-    r"(?!know\b|be\b|leave\b|keep\b|stop\b|wait\b|report\b|notify\b"
-    r"|let you\b|get back\b|check back\b|update you\b|tell you\b)"
-    r"[a-z]+",
-    re.IGNORECASE,
-)
-# Offers and questions leave the next move to the user, rightly.
-_OFFER = re.compile(
-    r"\b(?:if you(?:['’]d)? (?:like|want|prefer)|would you like|"
-    r"want me to|shall I|should I|let me know|happy to|just say|"
-    r"can also|could also)\b",
-    re.IGNORECASE,
-)
-_SENTENCE_END = re.compile(r"(?<=[.!?:])\s+")
-MAX_PROMISE_NUDGES = 2
-PROMISE_NOTE = (
-    "Your last reply said what you would do next, but it called no "
-    "tool, so nothing was done and your turn would end there. Do it now "
-    "with the tools, and keep going until it is finished and checked. "
-    "If you have decided not to, say why in one line instead."
-)
-
-
-def unkept_promise(text: str) -> bool:
-    """Whether a reply ends promising work it did not start."""
-
-    paragraphs = [p for p in re.split(r"\n\s*\n", text.strip()) if p]
-    if not paragraphs:
-        return False
-    # Only how it ends counts: "I'll" early on is usually a summary of
-    # what was done, while the last words are what happens next.
-    sentences = _SENTENCE_END.split(paragraphs[-1].strip())
-    tail = " ".join(sentences[-2:])
-    if tail.rstrip().endswith("?") or _OFFER.search(tail):
-        return False
-    return bool(_PROMISE.search(tail))
-
-
-def promise_nudge() -> dict:
-    """Flash telling the model to do what it just said it would. A
-    system message, so it is not kept in the history after the turn."""
-
-    return {"role": "system", "content": PROMISE_NOTE}
-
-
 def _response_parts(response) -> tuple[str, str, list]:
     message = getattr(response, "message", None)
 
@@ -1046,7 +1234,7 @@ def _response_parts(response) -> tuple[str, str, list]:
         return "", "", []
 
     # The prompt asks for no dashes; this makes sure of it.
-    text = undash(getattr(message, "content", "") or "")
+    text = tidy(getattr(message, "content", "") or "")
     thinking = getattr(message, "thinking", "") or ""
     tool_calls = list(getattr(message, "tool_calls", None) or [])
 
@@ -1074,7 +1262,8 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
     name = getattr(function, "name", "") or ""
     args = getattr(function, "arguments", None) or {}
 
-    return name, dict(args)
+    # What Flash asked for, as the user's settings ask for it.
+    return name, tidy_args(dict(args))
 
 
 def _clear_scratch_dir() -> None:
@@ -1096,6 +1285,21 @@ def _chat_options() -> dict:
     return options
 
 
+_think_levels: dict[tuple[str, str], Any] = {}
+
+
+def _think_level() -> Any:
+    """What the model takes to think longer, or None when it cannot: asked
+    of Ollama once for each model."""
+
+    from .sysprompt import think_level
+
+    key = (Config.host, Config.model or "")
+    if key not in _think_levels:
+        _think_levels[key] = think_level(*key) if key[1] else None
+    return _think_levels[key]
+
+
 def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     if Config.model is None:
         raise FlashError(
@@ -1103,12 +1307,21 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
             f"in {ENV_PATH} file."
         )
 
-    return client.chat(
+    # The reply turned its thinking on (think_harder): every step after.
+    level = _think_level() if thinking_harder() else None
+    answer = client.chat(
         model=Config.model,  # pyright: ignore[reportArgumentType]
         messages=messages,
         tools=tools_arg,
         options=_chat_options(),
+        **({"think": level} if level is not None else {}),
     )
+    # Auto's pick, or the fallback that answered: said, dimly.
+    from . import modelchain
+
+    for said in modelchain.notes(client):
+        console.print(Text("  " + said.replace("**", ""), style=DIM))
+    return answer
 
 
 # Sub-agents send the same options: Ollama reloads a model whenever the
@@ -1141,7 +1354,9 @@ def _session_system_prompt(heard: bool = False) -> str:
 
     prompt = build_system_prompt(_model_system_prompts[model])
 
-    return prompt + VOICE_PROMPT if heard else prompt
+    # How to sound like a person: built now, with thinking aloud as set.
+    return prompt + VOICE_PROMPT + "\n" + humanvoice.spoken() if heard \
+        else prompt
 
 
 def _state_pair(entry: Any) -> dict:
@@ -1251,7 +1466,19 @@ def _try_chat(
     states = _load_image_thinking_states() if is_image \
         else _load_thinking_states()
     state = _next_thinking_state(states)
-    word = f"{state['now']}{ELLIPSIS}"
+    # The wait's loaders: the chosen one, or with morph, one after
+    # another, picked as the wait goes on and kept for it. Right after
+    # a step of a task with a loader of its own (a write, a search),
+    # that one, saying what it does.
+    kind = loaders.activity(messages)
+    doing = loaders.for_activity(kind)
+    # Now and then, Flash would rather not.
+    lazy = None if doing else loaders.egg()
+    look = loaders.Run(doing or lazy, morph=False) if doing or lazy \
+        else loaders.Run()
+    said = loaders.word_for(kind) if doing else \
+        loaders.EGG_WORD if lazy else state["now"]
+    word = f"{said}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
     start = time.monotonic()
@@ -1268,25 +1495,32 @@ def _try_chat(
         )
 
     def _frame(elapsed: float):
-        spinner = Spinner(
-            "point",
-            text=Text.from_markup(_label(elapsed)),
-            style=ACCENT,
-            speed=5,
-        )
+        # Built fresh each frame, with the glyph for the time: a Spinner
+        # made anew every frame starts over every frame, and stood still.
+        spinner = Text(f"{look.frame(elapsed, can_encode)} ", style=ACCENT)
+        spinner.append_text(Text.from_markup(_label(elapsed)))
 
         # Rebuilt each frame rather than captured once: sub-agents
         # finish while the model is writing, which is exactly when a
         # count frozen at the start of the turn would be wrong.
         line = bar() if bar is not None else None
-
-        if line is None or not line.plain.strip():
-            return spinner
+        rows = [spinner]
 
         # A top-level line rather than more text beside the spinner, so
         # it sits at column zero and reads as the same bar the prompt
         # carries rather than a continuation of the label.
-        return Group(spinner, line)
+        if line is not None and line.plain.strip():
+            rows.append(line)
+
+        tip = showcase.tip_now()
+        if tip:
+            what, how = tip
+            note = Text("  Tip: ", style=f"bold {DIM}")
+            note.append(what + " ", style=DIM)
+            note.append(how, style=ACCENT)
+            rows.append(note)
+
+        return rows[0] if len(rows) == 1 else Group(*rows)
 
     def _rotate():
         while True:
@@ -1325,13 +1559,22 @@ def _chat_with_status(
     bar: Optional[Callable[[], str]] = None,
     turn: Optional[Turn] = None,
 ) -> tuple[Optional[object], Optional[str]]:
+    dock = current_dock()
+    if dock is not None:
+        # Under the dock the loader is drawn in it, above the status line
+        # it already carries, rather than by a Live of its own.
+        try:
+            return _try_chat(
+                client, messages, _DockLoader(dock), tools_arg,
+                is_image=is_image, bar=None, turn=turn,
+            )
+        finally:
+            dock.show("")
+
+    first = Text(f"{loader_frame(0)} ", style=ACCENT)
+    first.append(f"Thinking{ELLIPSIS}", style="bold")
     with Live(
-        Spinner(
-            "point",
-            text=Text.from_markup(f"[bold]Thinking{ELLIPSIS}[/bold]"),
-            style=ACCENT,
-            speed=5,
-        ),
+        first,
         console=console,
         refresh_per_second=GLIMMER_REFRESH_PER_SECOND,
         transient=True,
@@ -1340,6 +1583,28 @@ def _chat_with_status(
             client, messages, live, tools_arg,
             is_image=is_image, bar=bar, turn=turn,
         )
+
+
+class _DockLoader:
+    """What _try_chat draws its loader on under the dock: each frame as
+    ANSI rows, for the dock to show above its status line."""
+
+    def __init__(self, dock) -> None:
+        self.dock = dock
+
+    def update(self, renderable) -> None:
+        self.dock.show(_as_ansi(renderable))
+
+
+def _as_ansi(renderable) -> str:
+    """RENDERABLE as the terminal would show it, escape codes and all."""
+
+    out = Console(
+        file=io.StringIO(), force_terminal=True,
+        color_system=console.color_system, width=console.size.width,
+    )
+    out.print(renderable)
+    return out.file.getvalue()
 
 
 def _chat_retry_until_response(
@@ -1384,40 +1649,6 @@ def _chat_retry_until_response(
         }]
 
     return final, thinking, tool_calls, None
-
-
-def _chat_until_acted(
-    console: Console,
-    client: "ollama.Client",
-    convo: list,
-    tools_arg,
-    nudged: list,
-    *,
-    is_image: bool = False,
-    turn: Optional[Turn] = None,
-    bar: Optional[Callable[[], str]] = None,
-) -> tuple[str, str, list, Optional[str]]:
-    """`_chat_retry_until_response`, except that a reply promising work
-    it made no tool call for is shown, and the model is told to do it,
-    up to MAX_PROMISE_NUDGES times a turn. CONVO grows by that reply
-    and the nudge; NUDGED, a one-item list, counts the turn's nudges."""
-
-    while True:
-        final, thinking, tool_calls, err = _chat_retry_until_response(
-            console, client, convo, tools_arg,
-            is_image=is_image, turn=turn, bar=bar,
-        )
-        if (err or tool_calls or not tools_arg
-                or nudged[0] >= MAX_PROMISE_NUDGES
-                or not unkept_promise(final)):
-            return final, thinking, tool_calls, err
-        nudged[0] += 1
-        _render_thinking(thinking)
-        _render_markdown(console, final)
-        convo.append(_message("assistant", final))
-        convo.append(promise_nudge())
-        # Any picture went with the call just made.
-        is_image = False
 
 
 def _context_ceiling() -> Optional[int]:
@@ -1584,6 +1815,25 @@ def _bar_text(messages: list[dict]) -> Text:
     return line
 
 
+# How a steering message reaches the model, as in the web UI: marked, so
+# it reads as the user cutting in rather than a new request from scratch.
+STEER_NOTE = (
+    "[Sent while you were working. Take it into account from here.]"
+)
+
+
+def _dock_wanted(heard: bool) -> bool:
+    """Whether a turn keeps the input box up while it runs: in a real
+    terminal, for a typed turn (voice mode has the floor otherwise), and
+    unless FLASH_NO_DOCK turns it off."""
+
+    return (
+        not heard
+        and sys.stdin.isatty() and sys.stdout.isatty()
+        and os.environ.get("FLASH_NO_DOCK", "") not in ("1", "true")
+    )
+
+
 def _status_text(messages: list[dict]) -> str:
     """The dim line under the prompt: what Flash is currently pointed at.
 
@@ -1606,7 +1856,7 @@ def _status_text(messages: list[dict]) -> str:
         # one, so a reading above the budget is real but says "full"
         # rather than anything the reader can act on.
         share = min(100, round(100 * used / budget))
-        parts.append(f"context {share}%")
+        parts.append(f"context {bar(share)} {share}%")
 
     agents = subagents.running_count()
 
@@ -1614,7 +1864,10 @@ def _status_text(messages: list[dict]) -> str:
         parts.append(f"{agents} agent{'' if agents == 1 else 's'}")
 
     if Config.no_command_confirmation:
-        parts.append("auto")
+        # "auto + S1": autonomous, with System One reviewing each call.
+        word = "ultra" if Config.ultra_auto else \
+            "careful" if Config.careful else "auto"
+        parts.append(f"{word} + S1" if Config.system_one else word)
 
     if Config.voice:
         parts.append("voice")
@@ -1622,7 +1875,27 @@ def _status_text(messages: list[dict]) -> str:
     if learning.running():
         parts.append("learning")
 
+    # Extensions' status lines, as last read: never waited on here.
+    from . import ext_ui
+
+    parts += [line for _name, line in
+              ext_ui.status_lines(model=str(Config.model or ""))]
+
     return "   ".join(parts)
+
+
+# Past these shares of the history budget, the context bar turns amber,
+# then red: the conversation is close to being summarized.
+CONTEXT_WARN_PERCENT = 75
+CONTEXT_FULL_PERCENT = 90
+
+
+def _context_style(share: int) -> str:
+    if share >= CONTEXT_FULL_PERCENT:
+        return ERROR
+    if share >= CONTEXT_WARN_PERCENT:
+        return WARN
+    return ACCENT
 
 
 def _render_context(messages: list[dict]) -> None:
@@ -1635,7 +1908,9 @@ def _render_context(messages: list[dict]) -> None:
 
     body = Text()
     body.append("history   ", style=DIM)
-    body.append(f"{used} of {budget} tokens ({share}%)\n")
+    body.append_text(bar_text(share, _context_style(share), 20))
+    body.append(" ")
+    body.append(f"{used:,} of {budget:,} tokens ({share}%)\n")
     body.append("messages  ", style=DIM)
     body.append(f"{len(messages)}\n")
     body.append("window    ", style=DIM)
@@ -1680,6 +1955,131 @@ def _render_done(turn: Turn) -> None:
     ))
 
 
+def _note_showcase(turn: Turn, tools: int) -> None:
+    """Count the reply toward /stats."""
+
+    showcase.record(Config.host, Config.model or "", turn.tokens, tools)
+
+
+def _activity_command(arg: str) -> None:
+    """/activity: each model's calls this week, from the activity log:
+    how many, how many failed, the time to the first word and words a
+    second, with the models resting after failures marked.
+    /activity clear empties the log."""
+
+    from . import routing
+
+    if arg == "clear":
+        routing.clear_activity()
+        console.print(Text("  Activity log cleared.", style=DIM))
+        return
+    rows = routing.summary(7)
+    if not rows:
+        console.print(Text("  No model calls logged yet.", style=DIM))
+        return
+    health = routing.health()
+    now = time.time()
+    body = Text()
+    body.append(f"  {'model':<30}{'calls':>7}{'failed':>8}"
+                f"{'first word':>12}{'speed':>13}\n", style=DIM)
+    for row in rows[:15]:
+        ttft = row["ttft_ms"]
+        first = "-" if ttft is None else (
+            f"{ttft} ms" if ttft < 1000 else f"{ttft / 1000:.1f} s")
+        speed = f"{row['tok_s']:.1f} tok/s" if row["tok_s"] else "-"
+        resting = float((health.get(row["model"]) or {}).get(
+            "rest_until") or 0) > now
+        body.append(f"  {row['model'][:29]:<30}",
+                    style=DIM if resting else "")
+        body.append(f"{row['calls']:>7}{row['failed'] or '-':>8}"
+                    f"{first:>12}{speed:>13}")
+        if resting:
+            body.append("  resting", style=WARN)
+        body.append("\n")
+    fast = routing.fastest()
+    if fast:
+        body.append(f"\n  @fast is {fast} right now.", style=DIM)
+    console.print(body)
+
+
+def _preset_command(arg: str) -> None:
+    """/preset: the presets; /preset NAME MODEL [system prompt] saves
+    one; /preset remove NAME takes it off."""
+
+    from . import modelchain, routing
+
+    words = arg.split(maxsplit=2)
+    if not words:
+        held = routing.presets()
+        if not held:
+            console.print(Text(
+                "  No presets yet. /preset NAME MODEL [system prompt], "
+                "then use @NAME as the model.", style=DIM))
+            return
+        for name, preset in held.items():
+            line = Text(f"  @{name}", style=f"bold {ACCENT}")
+            line.append(f"  {preset['model']}", style=DIM)
+            if preset.get("fallbacks"):
+                line.append(f", then {', '.join(preset['fallbacks'])}",
+                            style=DIM)
+            if preset.get("system"):
+                line.append("  (own system prompt)", style=DIM)
+            console.print(line)
+        return
+    if words[0] == "remove" and len(words) > 1:
+        said = "Removed" if routing.remove_preset(words[1]) else "No preset"
+        console.print(Text(f"  {said} @{words[1].lstrip('@')}.", style=DIM))
+        return
+    if len(words) < 2:
+        warn("Usage: /preset NAME MODEL [system prompt]")
+        return
+    try:
+        model, fallbacks = modelchain.parse_chain(words[1])
+        routing.save_preset(words[0], {
+            "model": model, "fallbacks": fallbacks,
+            "system": words[2] if len(words) > 2 else ""})
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(f"  Saved @{words[0].lstrip('@').lower()}.",
+                       style=f"bold {ACCENT}"))
+
+
+def _stats_command() -> None:
+    """/stats: what Flash has done so far, across the terminal and the
+    web UI."""
+
+    found = showcase.totals()
+    if not found["turns"]:
+        console.print(Text(
+            "  No replies counted yet. Ask Flash something, and this is "
+            "where it adds up.", style=DIM,
+        ))
+        return
+    when = time.localtime(found["since"])
+    since = (
+        f"{time.strftime('%B', when)} {when.tm_mday}, {when.tm_year}"
+        if found["since"] else "the start"
+    )
+    body = Text()
+    for label, value in (
+        ("replies", f"{found['turns']:,}"),
+        ("tokens", f"{found['tokens']:,}"),
+        ("tools run", f"{found['tools']:,}"),
+        ("on a local model", f"{found['private_share']}%"),
+    ):
+        body.append(f"  {label + ':':<21}", style=DIM)
+        body.append(f"{value}\n")
+    if found["saved"] >= 0.01:
+        body.append(f"  {'at hosted prices:':<21}", style=DIM)
+        body.append(f"about ${found['saved']:,.2f}")
+        body.append(
+            f" at ${found['price']:g} per million tokens\n", style=DIM,
+        )
+    body.append(f"  since {since}", style=DIM)
+    console.print(body)
+
+
 def _render_stats(turn: Turn) -> None:
     """Print what the finished turn cost, unless SHOW_STATS turns it off."""
 
@@ -1703,7 +2103,8 @@ MAX_WAKES_IN_A_ROW = 3
 
 WAKE_NOTE = (
     "(The user has not written anything new. You were woken because a "
-    "sub-agent finished; tell them what it found.)"
+    "sub-agent or a background task you started finished; tell them what "
+    "came of it, and carry on with what it was for.)"
 )
 
 
@@ -1713,6 +2114,11 @@ def _announce_wake() -> None:
     for entry in subagents.unseen():
         verb = "finished" if entry.status == subagents.DONE else "failed"
         tool_line(f"Sub-agent {entry.id} {verb}")
+    from . import bgtasks
+
+    for task in bgtasks.unseen(""):
+        verb = {"done": "finished", "failed": f"failed (exit {task.code})"}.get(task.status, task.status)
+        tool_line(f"Background task {task.id} {verb}: {task.label()}")
 
 
 def _note_running_agents() -> None:
@@ -1766,8 +2172,29 @@ def _skills_command(arg: str) -> None:
             warn(f"No skill called {name!r}.")
         return
 
+    if action in ("improve", "history", "restore") and name:
+        _skill_trial_command(action, name)
+        return
+
+    if action in ("code", "share") and name:
+        try:
+            console.print(Text(f"Give this code whole; /skills add <code> adds it:", style=DIM))
+            console.print(skills.share_code(name), soft_wrap=True)
+        except skills.SkillError as exc:
+            warn(str(exc))
+        return
+
+    if action == "add" and name:
+        try:
+            console.print(Text(skills.add_from_code(name), style=DIM))
+            learning.refresh()
+        except skills.SkillError as exc:
+            warn(str(exc))
+        return
+
     if action:
-        warn("Usage: /skills [show <name> | remove <name>]")
+        warn("Usage: /skills [show | remove | improve | history | code <name> | "
+             "add <code> | restore <name> <version>]")
         return
 
     saved = skills.all_skills()
@@ -1797,6 +2224,2672 @@ def _skills_command(arg: str) -> None:
         style=DIM,
     )
     console.print(body)
+
+
+def _skill_trial_command(action: str, arg: str) -> None:
+    """/skills improve, history and restore: a skill's runs, rewritten
+    from them, or an earlier version put back."""
+
+    from . import skilltrials
+
+    name, _, version = arg.partition(" ")
+    try:
+        if action == "improve":
+            with console.status(f"Rewriting {name} from its runs"):
+                said = skilltrials.improve(name, skilltrials._ask_model(
+                    Config.host, Config.model or ""), asked=True)
+            console.print(Text(said, style=DIM))
+            return
+        if action == "restore":
+            console.print(Text(skilltrials.restore(name, version.strip()),
+                               style=DIM))
+            return
+    except (skilltrials.TrialError, skills.SkillError) as exc:
+        warn(str(exc))
+        return
+    if skills.find(name, guides=False) is None:
+        warn(f"No skill of yours called {name!r}.")
+        return
+    shown = skilltrials.report(name)
+    body = Text()
+    body.append(f"\n{name}", style="bold")
+    score = shown["score"]
+    body.append(f"  version {shown['version']}, "
+                f"{shown['version_runs']} runs"
+                + (f", scoring {score:.0%}" if score is not None else "")
+                + "\n", style=DIM)
+    if shown["trial"]:
+        body.append(f"  On trial: {shown['trial']['done']} of "
+                    f"{shown['trial']['of']} runs in\n", style=ACCENT)
+    for run in reversed(shown["recent"]):
+        body.append(f"  {run['score']:.0%}  ", style=ACCENT)
+        body.append(f"{(run.get('task') or '')[:70]}\n", style=DIM)
+    for item in reversed(shown["history"][-8:]):
+        when = time.strftime("%b %d %H:%M", time.localtime(item["at"]))
+        body.append(f"  {when}  {item['event']}", style="bold")
+        detail = " → ".join(str(item[k]) for k in ("from", "to") if k in item)
+        if "new" in item:
+            detail += f" ({item.get('old', 0):.0%} → {item['new']:.0%})"
+        body.append(f"  {detail}\n", style=DIM)
+    if shown["versions"]:
+        body.append("\n  Earlier versions: " + ", ".join(shown["versions"])
+                    + f". /skills restore {name} <version> to go back.\n",
+                    style=DIM)
+    console.print(body)
+
+
+_calls_noted: set[str] = set()
+
+
+def _note_calls() -> None:
+    """Point once at a call going on in another Flash (the watch, a
+    page, another terminal), with how to transfer it here."""
+
+    from . import teamchat
+
+    with contextlib.suppress(Exception):
+        for call in teamchat.live_calls():
+            if call.get("holder") == CALL_HOLDER or \
+                    call.get("call") in _calls_noted:
+                continue
+            _calls_noted.add(str(call.get("call")))
+            who = _call_party(call["team"])
+            place = teamchat.holder_place(str(call.get("holder") or ""))
+            where = {"Watch": "on your watch", "Web": "on the web",
+                     "CLI": "in another terminal"}.get(
+                         place, "in another Flash")
+            note = Text(f"  {_bubble()} ", style=ACCENT)
+            note.append(f"On a call with {who}", style=f"bold {ACCENT}")
+            note.append(f" {where} · /call take to transfer it here",
+                        style=DIM)
+            console.print(note)
+
+
+def _note_sparks() -> None:
+    """Point at a spark's report the first time it is waiting."""
+
+    for spark, report in sparks.news():
+        note = Text(f"  {_bubble()} ", style=spark.colour)
+        note.append(spark.name, style=f"bold {spark.colour}")
+        verb = (
+            "needs your approval" if report.approval
+            else "could not finish a shift" if report.failed else "has news"
+        )
+        note.append(f" {verb} · /sparks {_spark_key(spark)}", style=DIM)
+        console.print(note)
+
+
+def _spark_key(spark: "sparks.Spark") -> str:
+    """What to type after /sparks to mean SPARK: its handle, bare."""
+
+    return spark.handle[1:].removesuffix("-spark")
+
+
+def _bubble() -> str:
+    return "●" if can_encode("●") else "o"
+
+
+def _spark_state(spark: "sparks.Spark") -> str:
+    if spark.waiting:
+        return "waiting for your approval"
+    if spark.status == sparks.WORKING:
+        return f"working{': ' + spark.activity if spark.activity else ''}"
+    if spark.paused:
+        return "paused"
+    if spark.unavailable and not spark.asked:
+        return (
+            f"unavailable: {spark.unavailable_model or 'no model'} failed "
+            f"({spark.unavailable}). /sparks run {spark.handle[1:]} tries "
+            "again; /sparks model changes it"
+        )
+    if spark.asked:
+        state = "starting soon"
+    elif sparks.on_call(spark):
+        state = "on call"
+    else:
+        wait = int((spark.next_run - time.time()) // 60)
+        state = "starting soon" if wait <= 0 else (
+            f"next shift in {wait}m" if wait < 120 else
+            f"next shift in {wait // 60}h"
+        )
+    if spark.status == sparks.FAILED:
+        state = f"last shift failed · {state}"
+    return state
+
+
+def _ask_line(question: str) -> str:
+    """One line of free text, typed at a dim QUESTION."""
+
+    console.print(Text(f"  {question} ", style=DIM), end="")
+    try:
+        answer = input()
+    except EOFError:
+        answer = ""
+    console.keep(answer + "\n")
+    return answer.strip()
+
+
+PROGRESS_EMAIL_USAGE = (
+    "Usage: /email progress [on|off|to <address>|to me|from <account>|"
+    "only start,plan,ask,end|all|test]"
+)
+
+
+def _progress_email_command(arg: str) -> None:
+    """/email progress: what Flash is working on, its milestones, sent to
+    your email as they happen."""
+
+    from . import mail
+    from . import progress_mail as pm
+
+    word, _, rest = arg.partition(" ")
+    word, rest = word.lower(), rest.strip()
+    now = pm.settings()
+
+    if word in ("", "status"):
+        state = "on" if now["on"] else "off"
+        to = pm.recipient(now)
+        line = Text(f"  Progress emails are {state}", style=DIM)
+        if to:
+            line.append(f", to {to}", style=DIM)
+            if not now["to"]:
+                line.append(" (your own)", style=DIM)
+        sender = now["account"] or mail.default_address()
+        if sender:
+            line.append(f", from {sender}", style=DIM)
+        line.append(".", style=DIM)
+        console.print(line)
+        for kind, about in pm.ABOUT.items():
+            mark = Text(
+                "  ✓ " if kind in now["kinds"] else "  · ",
+                style=ACCENT if kind in now["kinds"] else DIM,
+            )
+            mark.append(f"{kind:<6}", style="bold")
+            mark.append(f" {about}", style=DIM)
+            console.print(mark)
+        if not mail.configured():
+            warn(f"  {mail.NOT_SET_UP}")
+        problem = pm.last_problem()
+        if problem:
+            warn(f"  Last one not sent: {problem}")
+        console.print(Text(f"  {PROGRESS_EMAIL_USAGE}", style=DIM))
+        return
+
+    if word in ("on", "off"):
+        set_config_var(pm.SETTING, "1" if word == "on" else "0")
+        if word == "on" and not pm.recipient():
+            warn(f"  On, but there is nowhere to send them: "
+                 f"{mail.NOT_SET_UP}")
+            return
+        console.print(Text(
+            f"  Progress emails on, to {pm.recipient()}. /email progress "
+            "test sends one." if word == "on" else "  Progress emails off.",
+            style=DIM,
+        ))
+        return
+    if word == "to":
+        if rest.lower() in ("me", "default", ""):
+            unset_config_var(pm.TO_SETTING)
+            console.print(Text(
+                f"  They go to your own address, {pm.recipient() or '?'}.",
+                style=DIM,
+            ))
+            return
+        if "@" not in rest or " " in rest:
+            warn("  Give one email address: /email progress to you@x.com")
+            return
+        set_config_var(pm.TO_SETTING, rest)
+        console.print(Text(f"  They go to {rest}.", style=DIM))
+        return
+    if word == "from":
+        if rest.lower() in ("", "default"):
+            unset_config_var(pm.FROM_SETTING)
+            console.print(Text(
+                "  Sent from your default account.", style=DIM,
+            ))
+            return
+        if rest.lower() not in (a.lower() for a in mail.addresses()):
+            warn(f"  {rest} is not a connected account. /email lists them.")
+            return
+        set_config_var(pm.FROM_SETTING, rest)
+        console.print(Text(f"  Sent from {rest}.", style=DIM))
+        return
+    if word in ("all", "only"):
+        picked = list(pm.KINDS) if word == "all" else [
+            k.strip().lower() for k in rest.replace(" ", ",").split(",")
+            if k.strip()
+        ]
+        if not picked or any(k not in pm.KINDS for k in picked):
+            warn("  Pick from " + ", ".join(pm.KINDS)
+                 + ", like /email progress only ask,end")
+            return
+        kinds = [k for k in pm.KINDS if k in picked]
+        set_config_var(pm.KINDS_SETTING, ",".join(kinds))
+        console.print(Text(
+            "  Emailing: " + ", ".join(kinds) + ".", style=DIM,
+        ))
+        return
+    if word == "test":
+        try:
+            sent = pm.test()
+        except (mail.MailError, RuntimeError) as exc:
+            warn(f"  Not sent: {exc}")
+            return
+        console.print(Text(
+            f"  Sent to {sent}. It should arrive in a moment.", style=DIM,
+        ))
+        return
+    warn(f"  {PROGRESS_EMAIL_USAGE}")
+
+
+def _email_command(arg: str) -> None:
+    """/email: connect the user's email accounts, test them, look, or
+    disconnect one."""
+
+    from . import mail
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    which = rest.strip()
+    try:
+        if action in ("", "status", "list"):
+            accounts = mail.settings()["accounts"]
+            if not accounts:
+                console.print(Text(
+                    "  Email is not connected. /email connect sets it up, "
+                    "with an app password: Flash and your sparks can then "
+                    "read your inbox, and send email you approve.",
+                    style=DIM,
+                ))
+                return
+            body = Text()
+            default = mail.default_address()
+            for account in accounts:
+                body.append(f"  {account['address']}", style=ACCENT)
+                if account["address"] == default and len(accounts) > 1:
+                    body.append("  default", style=f"bold {ACCENT}")
+                body.append(
+                    f"  IMAP {account['imap']} · SMTP {account['smtp']}"
+                    + ("" if account["has_password"] else " · no password")
+                    + "\n", style=DIM,
+                )
+            body.append(
+                "  /email connect adds another. /email test, inbox or "
+                "disconnect, with an address for just that one. /email "
+                "default <address> picks the one email goes to and from "
+                "when none is named.", style=DIM,
+            )
+            console.print(body)
+            return
+        if action in ("connect", "add", "setup", "set"):
+            _email_connect()
+            return
+        if action == "progress":
+            _progress_email_command(which)
+            return
+        if action == "test":
+            for address in [which] if which else mail.addresses():
+                try:
+                    console.print(Text(f"  {mail.test(address)}", DIM))
+                except mail.MailError as exc:
+                    warn(f"  {address}: {exc}")
+            if not which and not mail.addresses():
+                warn(f"  {mail.NOT_SET_UP}")
+            return
+        if action == "inbox":
+            problems: list = []
+            found = mail.inbox(limit=10, account=which, problems=problems)
+            for who, why in problems:
+                warn(f"  Could not check {who}: {why}")
+            several = not which and len(mail.addresses()) > 1
+            if not found:
+                console.print(Text("  The inbox is empty.", style=DIM))
+            for item in found:
+                line = Text("  ")
+                line.append(
+                    f"{CURSOR} " if item["unread"] else "  ", style=ACCENT,
+                )
+                line.append(f"{item['date']:<17}", style=DIM)
+                line.append(f"{item['from'][:28]:<30}")
+                line.append(item["subject"] or "(no subject)", style=DIM)
+                if several:
+                    line.append(f"  {item['account']}", style=DIM)
+                console.print(line)
+            return
+        if action == "default":
+            if not which:
+                current = mail.default_address() or "not set"
+                console.print(Text(
+                    f"  Your default email is {current}"
+                    ": email goes to it when nobody else is named, and from "
+                    "it when no account is. /email default <address> "
+                    "changes it.", style=DIM,
+                ))
+                return
+            mail.set_default(which)
+            console.print(Text(
+                f"  {mail.default_address()} is your default email now.",
+                style=DIM,
+            ))
+            return
+        if action in ("disconnect", "off", "forget", "remove"):
+            connected = [a["address"] for a in mail.settings()["accounts"]]
+            if not which and len(connected) > 1:
+                warn(
+                    "  Which one? /email disconnect <address>, one of "
+                    f"{', '.join(connected)}."
+                )
+                return
+            which = which or (connected[0] if connected else "")
+            if not which:
+                warn(f"  {mail.NOT_SET_UP}")
+                return
+            mail.forget(which)
+            console.print(Text(
+                f"  {which} disconnected: its password is gone.", style=DIM,
+            ))
+            return
+    except mail.MailError as exc:
+        warn(f"  {exc}")
+        return
+    warn(
+        "Usage: /email [connect | test [address] | inbox [address] | "
+        "default [address] | disconnect [address]]"
+    )
+
+
+SYSTEM_ONE_USAGE = "Usage: /systemone [on | off | model [name | none]]"
+
+
+def _system_one_said_on(name: str) -> None:
+    Config.refresh()
+    console.print(Text(
+        f"System One on, with {name}.", style=f"bold {ACCENT}",
+    ))
+    if not Config.no_command_confirmation:
+        console.print(Text(
+            "  It starts work when autonomous mode does: Shift+Tab or "
+            "/auto on.", style=DIM,
+        ))
+
+
+def _system_one_pick(name: str) -> None:
+    """Put NAME to work as System One, offering to download it first
+    when the server does not have it."""
+
+    try:
+        # An extension's model is its own program: no Ollama to ask.
+        if not systemone.is_extension(name):
+            systemone.check(Config.host)
+            if systemone.capable(Config.host, name) is None and not \
+                    fetch_if_missing(_client(), name):
+                warn("  System One is as it was.")
+                return
+        name = systemone.choose(Config.host, name)
+    except systemone.SystemOneError as exc:
+        warn(f"  {exc}")
+        warn("  System One is as it was.")
+        return
+    _system_one_said_on(name)
+
+
+def _system_one_status() -> None:
+    on = systemone.enabled()
+    body = Text("  System One ")
+    body.append("on" if on else "off", style=f"bold {ACCENT}" if on else DIM)
+    body.append(
+        f"  model {systemone.model() or 'none picked'}\n", style=DIM,
+    )
+    if on and not Config.no_command_confirmation:
+        body.append(
+            "  It waits for autonomous mode (Shift+Tab or /auto on): "
+            "until then you answer each command yourself.\n", style=DIM,
+        )
+    elif on:
+        tally = systemone.counts()
+        body.append(
+            f"  Reviewing each command and edit before it runs: "
+            f"{tally['reviewed']} reviewed, {tally['stopped']} stopped "
+            "this session. The model can ask it questions too.\n",
+            style=DIM,
+        )
+    else:
+        body.append(
+            "  In autonomous mode, a small model that checks each command "
+            "and edit before it runs, and answers the model's quick "
+            "questions. Needs Ollama v"
+            f"{systemone.MIN_VERSION_TEXT}+, or an extension's System One "
+            "model.\n", style=DIM,
+        )
+    body.append(
+        "  /systemone on|off, /systemone model to see the System One "
+        "models on this machine, /systemone model <name|none> to pick.",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _system_one_models() -> None:
+    """The System One models on this Ollama and from extensions, the
+    one in use marked."""
+
+    try:
+        found = systemone.available(Config.host)
+    except systemone.SystemOneError as exc:
+        warn(f"  {exc}")
+        return
+    if not found:
+        console.print(Text(f"  {systemone.no_models(Config.host)}", DIM))
+        return
+    current = systemone.model() if systemone.enabled() else ""
+    body = Text()
+    for name in found:
+        body.append(f"  {name}", style=ACCENT)
+        if systemone.same_model(name, current):
+            body.append("  in use", style=f"bold {ACCENT}")
+        body.append("\n")
+    body.append(f"  none{'  in use' if not current else ''}\n", style=DIM)
+    body.append(
+        "  /systemone model <name> picks one, /systemone model none "
+        "switches System One off.", style=DIM,
+    )
+    console.print(body)
+
+
+def _system_one_command(arg: str) -> None:
+    """/systemone: switch System One on or off, or pick its model."""
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    rest = rest.strip()
+
+    if action in ("", "status"):
+        _system_one_status()
+        return
+
+    if action == "reviews":
+        found = systemone.reviews()[-10:]
+        if not found:
+            console.print(Text("No reviews yet.", style=DIM))
+            return
+        for n, r in enumerate(reversed(found), 1):
+            line = Text(f"  {n}. ", style=DIM)
+            line.append("allowed " if r["allowed"] else "stopped ",
+                        style=ACCENT if r["allowed"] else WARN)
+            line.append(f"{r['tool']} {r['arguments'][:60]}")
+            if r.get("rating"):
+                line.append(f"  ({r['rating']})", style=DIM)
+            console.print(line)
+        console.print(Text("  /systemone good|bad N [why] rates one; it "
+                           "learns from what you say.", style=DIM))
+        return
+
+    if action in ("good", "bad"):
+        number, _, why = rest.partition(" ")
+        found = systemone.reviews()[-10:]
+        try:
+            pick = list(reversed(found))[int(number or "1") - 1]
+            systemone.rate_review(pick["id"], action, why)
+        except (ValueError, IndexError, systemone.SystemOneError):
+            warn("Usage: /systemone good|bad N [why], N from "
+                 "/systemone reviews (1 is the latest).")
+            return
+        console.print(Text("Thanks. System One reads that from now on.",
+                           style=DIM))
+        return
+
+    if action in ("on", "enable", "true", "1"):
+        if systemone.model():
+            _system_one_pick(systemone.model())
+            return
+        try:
+            name = systemone.turn_on(Config.host)
+        except systemone.SystemOneError as exc:
+            warn(f"  {exc}")
+            warn("  System One stays off.")
+            return
+        _system_one_said_on(name)
+        return
+
+    if action in ("off", "disable", "false", "0"):
+        systemone.set_enabled(False)
+        Config.refresh()
+        console.print(Text("System One off.", style=f"bold {ACCENT}"))
+        return
+
+    if action == "model":
+        if not rest:
+            _system_one_models()
+        elif systemone.is_none(rest):
+            _system_one_command("off")
+        else:
+            _system_one_pick(rest)
+        return
+
+    warn(SYSTEM_ONE_USAGE)
+
+
+def _email_connect() -> None:
+    import getpass
+
+    from . import mail
+
+    connected = mail.addresses()
+    if connected:
+        console.print(Text(
+            f"  Connected already: {', '.join(connected)}. This adds "
+            "another, or changes one by its address.", style=DIM,
+        ))
+    console.print(Text(
+        "  Flash reads your email over IMAP and sends it over SMTP. Use an "
+        "app password, made in your account's security settings, never "
+        "your account's own. It is kept in ~/.flash/email.json, readable "
+        "only by you.", style=DIM,
+    ))
+    address = _ask_line("Email address:")
+    if not address:
+        console.print(Text("  Not connected.", style=DIM))
+        return
+    imap_host, imap_port, smtp_host, smtp_port = mail.servers_for(address)
+    help_link = mail.APP_PASSWORD_HELP.get(imap_host)
+    if help_link:
+        console.print(Text(f"  Make an app password at {help_link}", DIM))
+    try:
+        password = getpass.getpass("  App password (hidden): ")
+    except (EOFError, KeyboardInterrupt):
+        password = ""
+    if not password.strip():
+        console.print(Text("  Not connected.", style=DIM))
+        return
+    imap = _ask_line(f"IMAP server? (Enter for {imap_host}:{imap_port})")
+    smtp = _ask_line(f"SMTP server? (Enter for {smtp_host}:{smtp_port})")
+    mail.save(address, password, imap, smtp)
+    try:
+        said = mail.test(address)
+    except mail.MailError as exc:
+        warn(
+            f"  Saved, but it did not work yet: {exc} /email connect "
+            "tries again."
+        )
+        return
+    console.print(Text(
+        f"  {said} The Inbox spark template (/sparks add Inbox) keeps an "
+        "eye on it for you.", style=DIM,
+    ))
+
+
+def _new_spark() -> None:
+    console.print(Text(
+        "  A spark works on one goal on a schedule, while Flash runs, and "
+        "reports back.", style=DIM,
+    ))
+    name = _ask_line("Name it:")
+    # Said as soon as the name is in, not after every other question:
+    # a handle is one spark's only.
+    while name:
+        taken = next(
+            (s for s in sparks.all_sparks()
+             if s.handle == sparks.handle_of(name)), None,
+        )
+        if taken is None:
+            break
+        warn(
+            f"  {taken.name} already has {taken.handle}. Pick another name."
+        )
+        name = _ask_line("Name it:")
+    goal = _ask_line("What should it keep doing?") if name else ""
+    if not name or not goal:
+        console.print(Text("  No spark made.", style=DIM))
+        return
+    every = _ask_line(
+        "How often? (30m, 2h, daily, set times like 9am weekdays, or on "
+        "call for only when called on; Enter for hourly)"
+    )
+    boundaries = _ask_line("Anything it must never do? (Enter for none)")
+    from . import workspace
+
+    names = [p.name for p in workspace.projects()]
+    project = _ask_line(
+        f"Which project does it work on? ({', '.join(names)}; Enter for "
+        "none)"
+    ) if names else ""
+    model = _ask_spark_model()
+    if not model:
+        console.print(Text("  No spark made: it needs a model.", style=DIM))
+        return
+    paused = _ask_line(
+        "Start it now? (Enter for yes, n to make it paused)"
+    ).strip().lower() in ("n", "no")
+    try:
+        spark = sparks.create(
+            name, goal, boundaries, every, project, model=model,
+            paused=paused,
+        )
+    except sparks.SparkError as exc:
+        warn(str(exc))
+        return
+    line = Text(f"  {_bubble()} ", style=spark.colour)
+    line.append(spark.name, style=f"bold {spark.colour}")
+    line.append(
+        f" {spark.handle} is paused: /sparks resume {_spark_key(spark)} "
+        "starts it." if spark.paused else
+        f" {spark.handle} is on it, {sparks.schedule_words(spark)}.",
+        style=DIM,
+    )
+    console.print(line)
+
+    from . import keepalive
+
+    if not keepalive.installed() and confirm(
+        "Keep sparks working when Flash is closed too?"
+    ):
+        _sparks_always("on")
+
+
+def _ask_spark_model() -> str:
+    """The model a spark runs on, picked the way /model picks: from this
+    machine's list, or typed when there is no list to pick from."""
+
+    console.print(Text("  Which model does it run on?", style=DIM))
+    # The default for new sparks leads the list, if it is still here.
+    first, gone = sparks.model_for_new(Config.model or "")
+    if gone:
+        warn(gone)
+    picked = pick_model(_client(), first)
+    if picked:
+        console.print(Text(f"  {picked}", style=ACCENT))
+        return picked
+    example = f" (Enter for {first})" if first else ""
+    return _ask_line(f"Model name{example}:") or first
+
+
+MCP_USAGE = (
+    "Usage: /mcp [add <name> <command or URL> [--start <command>] | "
+    "edit <name> <command or URL> [--start <command>] | env <name> "
+    "KEY=VALUE | remove <name> | on <name> | off <name> | tools <name> | "
+    "reload]"
+)
+
+
+def _start_part(rest: str) -> tuple[str, str]:
+    """REST without its --start COMMAND, and that command."""
+
+    found = re.search(r"\s--start\s+(.+)$", " " + rest)
+    if not found:
+        return rest, ""
+    return (" " + rest)[:found.start()].strip(), found.group(1).strip()
+
+
+def _show_connectors() -> None:
+    shown = connectors.listing()
+    if not shown:
+        console.print(Text(
+            "No connectors yet. Add an MCP server's tools to Flash's with "
+            "/mcp add <name> <command or URL>, like /mcp add files npx -y "
+            "@modelcontextprotocol/server-filesystem ~/Documents. They are "
+            f"kept in {connectors.config_path()}, which takes the usual "
+            "mcpServers config as it is.",
+            style=DIM,
+        ))
+        return
+    colour = {connectors.READY: ACCENT, connectors.FAILED: ERROR,
+              connectors.STARTING: WARN}
+    for server in shown:
+        line = Text("  ")
+        line.append(CURSOR + " ", style=colour.get(server["state"], DIM))
+        line.append(server["name"], style="bold")
+        count = len(server["tools"])
+        state = {
+            connectors.READY: f"{count} tool{'s' if count != 1 else ''}",
+            connectors.STARTING: "starting",
+            connectors.FAILED: "failed",
+            connectors.OFF: "off",
+        }[server["state"]]
+        line.append(f"  {state}  {server['where']}", style=DIM)
+        console.print(line)
+        if server["why"]:
+            console.print(Text(f"    {server['why']}", style=ERROR))
+    console.print(Text(
+        "  /mcp tools <name> lists one's tools. A tool its server marks "
+        "read-only runs straight away; any other asks first.",
+        style=DIM,
+    ))
+
+
+def _settled_connector(name: str, seconds: float = 15.0) -> None:
+    """Wait for NAME, or every connector, to finish starting, then say
+    how they stand."""
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and any(
+        s["state"] == connectors.STARTING for s in connectors.listing()
+        if not name or s["name"] == name
+    ):
+        time.sleep(0.2)
+    _show_connectors()
+
+
+def _mcp_command(arg: str) -> None:
+    """/mcp: the MCP servers whose tools Flash has, and changes to them."""
+
+    words = arg.split(maxsplit=2)
+    what = words[0].lower() if words else ""
+    try:
+        if not what:
+            connectors.start()
+            _settled_connector("", 2.0)
+        elif what == "add" and len(words) == 3:
+            target, begin = _start_part(words[2])
+            connectors.add(words[1], target, None, begin)
+            _settled_connector(words[1])
+        elif what == "edit" and len(words) == 3:
+            target, begin = _start_part(words[2])
+            spec = connectors.read_config().get(words[1]) or {}
+            keys = {k: "" for k in {**(spec.get("env") or {}),
+                                    **(spec.get("headers") or {})}}
+            connectors.edit(words[1], target, keys, begin)
+            _settled_connector(words[1])
+        elif what == "env" and len(words) == 3 and "=" in words[2]:
+            found = connectors.read_config()
+            if words[1] not in found:
+                raise connectors.ConnectorError(
+                    f"No connector called {words[1]!r}."
+                )
+            key, value = words[2].split("=", 1)
+            spec = found[words[1]]
+            spec.setdefault("headers" if "url" in spec else "env", {})[
+                key.strip()] = value.strip()
+            connectors.write_config(found)
+            connectors.start()
+            _settled_connector(words[1])
+        elif what == "remove" and len(words) == 2:
+            connectors.remove(words[1])
+            console.print(Text(f"Removed {words[1]}.", style=DIM))
+        elif what in ("on", "off") and len(words) == 2:
+            connectors.switch(words[1], what == "on")
+            _settled_connector(words[1])
+        elif what == "reload" and len(words) == 1:
+            connectors.reload()
+            _settled_connector("", 15.0)
+        elif what == "tools" and len(words) == 2:
+            found = next((s for s in connectors.listing()
+                          if s["name"] == words[1]), None)
+            if found is None:
+                raise connectors.ConnectorError(
+                    f"No connector called {words[1]!r}."
+                )
+            for tool in found["tools"]:
+                line = Text(f"  {tool['name']}", style="bold")
+                if tool["read_only"]:
+                    line.append("  read-only", style=ACCENT)
+                line.append(f"  {tool['description'][:120]}", style=DIM)
+                console.print(line)
+            if not found["tools"]:
+                console.print(Text("  No tools, or it is not running.",
+                                   style=DIM))
+        else:
+            warn(MCP_USAGE)
+    except connectors.ConnectorError as exc:
+        warn(str(exc))
+
+
+def _computer_command(arg: str) -> None:
+    """/computer: whether Flash may do simple things on this computer,
+    and which, shown, or switched: `/computer on`, `/computer off`, and
+    `/computer on imessage` or `/computer off music` for one of them."""
+
+    words = arg.lower().split()
+    if words[:1] == ["use"]:
+        _computer_use_command(words[1:])
+        return
+    if not words or words[0] not in ("on", "off") or len(words) > 2:
+        if words:
+            warn("Usage: /computer [on|off] [" + "|".join(computer.kinds())
+                 + "], or /computer use [on|off]")
+            return
+    elif len(words) == 1:
+        set_config_var(computer.SETTING, "1" if words[0] == "on" else "0")
+        if words[0] == "off":
+            # Computer Use goes with it: it needs this on.
+            computeruse.end()
+    else:
+        if words[1] not in computer.kinds():
+            warn(f"{words[1]} is not one of them: "
+                 + ", ".join(computer.kinds()) + ".")
+            return
+        off = computer.off_after(words[1], words[0] == "on")
+        set_config_var(computer.OFF_SETTING, off)
+        # Switching one on means letting Flash act at all.
+        if words[0] == "on" and not computer.enabled():
+            set_config_var(computer.SETTING, "1")
+    if not computer.enabled():
+        console.print(Text(
+            "Flash does not act on this computer. /computer on lets it do "
+            "simple things when you ask: pause the music, turn the volume "
+            "down, open an app.",
+            style=DIM,
+        ))
+        return
+    console.print(Text(
+        "Flash can act on this computer when you ask. It never clicks, "
+        "types or runs commands this way. /computer off stops all of it; "
+        "/computer off <name> one of them.",
+        style=DIM,
+    ))
+    off = computer.switched_off()
+    for kind in computer.kinds():
+        title, what, _ = computer.KINDS[kind]
+        line = Text("  ")
+        line.append("off " if kind in off else "on  ",
+                    style=DIM if kind in off else f"bold {ACCENT}")
+        line.append(f"{kind:<10}", style="bold")
+        line.append(f"{title}: {what}", style=DIM)
+        console.print(line)
+
+
+def _sandbox_command(arg: str) -> None:
+    """/sandbox [on|off], /sandbox auto [on|off]: whether every command
+    Flash runs goes in the OS sandbox, and whether in Ask first a
+    sandboxed one runs without asking."""
+
+    from . import sandbox
+
+    words = arg.lower().split()
+    if words[:1] == ["auto"] and words[1:] in (["on"], ["off"]):
+        sandbox.set_setting(sandbox.AUTO_ALLOW_SETTING, words[1] == "on")
+    elif words in (["on"], ["off"]):
+        sandbox.set_setting(sandbox.SETTING, words[0] == "on")
+    elif words:
+        warn("Usage: /sandbox [on|off], or /sandbox auto [on|off]")
+        return
+    console.print(Text(
+        ("Every command Flash runs is in the sandbox: it writes only in "
+         "the folder it works in and temp folders, and can't see keys."
+         if sandbox.enabled() else
+         "The sandbox is off: commands run with your full access, unless "
+         "Flash puts one in the sandbox itself. /sandbox on puts every "
+         "one in it.")
+        + (" In Ask first, sandboxed commands run without asking."
+           if sandbox.auto_allow() else
+           " Sandboxed commands still ask first in Ask first; /sandbox "
+           "auto on lets them run."), style=DIM))
+    why = sandbox.missing()
+    if why:
+        warn(why)
+
+
+def _computer_use_command(words: list[str]) -> None:
+    """/computer use: whether Flash may see the screen and work the mouse
+    and keyboard (beta), shown, or switched with on or off."""
+
+    if words[:1] == ["mouse"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_mouse_stops(words[1] == "on")
+        console.print(Text(
+            "Moving the mouse takes the computer back and stops the reply."
+            if words[1] == "on" else
+            "Moving the mouse no longer stops it; "
+            f"{computeruse.stop_keys()} still does.", style=DIM))
+        return
+    if words[:1] == ["human"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_human(words[1] == "on")
+        console.print(Text(
+            "The mouse moves along curves at a hand's speed, pausing before "
+            "each click, and keys come in a typist's rhythm."
+            if words[1] == "on" else
+            "The mouse jumps straight to each point and text is typed at once.",
+            style=DIM))
+        return
+    if words[:1] == ["fast"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_fast(words[1] == "on")
+        console.print(Text(
+            "Fast mode: several actions per step, one screenshot after "
+            "them, and buttons and fields clicked by name."
+            if words[1] == "on" else
+            "Fast mode is off: one action and one screenshot per step.",
+            style=DIM))
+        return
+    if words and words not in (["on"], ["off"]):
+        warn("Usage: /computer use [on|off], /computer use mouse "
+             "[on|off], /computer use human [on|off], or /computer use "
+             "fast [on|off]")
+        return
+    if words:
+        try:
+            computeruse.set_enabled(words[0] == "on")
+        except ValueError as exc:
+            warn(f"{exc} /computer on does that.")
+            return
+    if computeruse.switched_on() and not computer.enabled():
+        warn("Computer Use is switched on, but it needs Let Flash act on "
+             "this computer too: /computer on.")
+        return
+    if not computeruse.enabled():
+        console.print(Text(
+            "Computer Use (beta) is off. /computer use on lets Flash see "
+            "your screen and click and type itself, only for what its "
+            "tools cannot do, and only once you say yes.",
+            style=DIM,
+        ))
+        return
+    console.print(Text(
+        "Computer Use (beta) is on: when no tool can do it, Flash asks to "
+        "see your screen and use your mouse and keyboard, every reply, "
+        f"even in autonomous mode. {computeruse.how_to_stop()} to take it "
+        "back. /computer use mouse on|off: whether moving the mouse does. "
+        "/computer use fast on|off: fast mode (now "
+        f"{'on' if computeruse.fast() else 'off'}), several actions per "
+        "step and buttons clicked by name.",
+        style=DIM,
+    ))
+    why = computeruse.missing()
+    if why:
+        warn(why)
+
+
+def _spark_events(key: str, extra: str) -> None:
+    """/sparks events: whether sparks start on what comes in, and which
+    do; `/sparks events on|off`, or `/sparks events <name> <events>`."""
+
+    from . import triggers
+
+    if key.lower() in ("on", "off") and not extra:
+        triggers.set_enabled(key.lower() == "on")
+    elif key:
+        if not extra:
+            warn("Usage: /sparks events <name> <email imessage "
+                 "mcp:<server> | none>")
+            return
+        spark = sparks.update(
+            key, events=() if extra.lower() == "none" else extra,
+        )
+        console.print(Text(
+            f"{spark.name} starts on "
+            + " and ".join(triggers.words(e) for e in spark.events) + "."
+            if spark.events else f"{spark.name} starts on nothing now.",
+            style=DIM,
+        ))
+        if spark.events and not triggers.enabled():
+            warn("  Events are off: /sparks events on turns them on.")
+        return
+    body = Text(
+        "Sparks start when something comes in: "
+        + ("on" if triggers.enabled() else "off") + ".\n", style=DIM,
+    )
+    given = [s for s in sparks.all_sparks() if s.events]
+    for spark in given:
+        body.append(f"  {spark.name:<16}", style=ACCENT)
+        body.append(" and ".join(triggers.words(e) for e in spark.events)
+                    + "\n", style=DIM)
+    if not given:
+        body.append("  No spark starts on anything yet.\n", style=DIM)
+    body.append(
+        "Flash looks for new email, iMessages and changes in MCP servers "
+        "itself, without the model, so nothing is spent until something "
+        "comes in. /sparks events on|off, /sparks events scout email "
+        "mcp:notes.", style=DIM,
+    )
+    console.print(body)
+
+
+def _notify_command(arg: str) -> None:
+    """/notify: how often the agent may send you a notification, shown,
+    or set: `/notify 4 per 15m`, `/notify off`, `/notify on`."""
+
+    from . import notify
+
+    words = arg.lower().replace(" per ", " ").replace(" every ", " ").split()
+    try:
+        if words == ["off"]:
+            notify.set_limits(0, notify.limits()[1] // 60)
+        elif words == ["on"]:
+            count, window = notify.limits()
+            notify.set_limits(
+                count or notify.NOTIFY_LIMIT, window // 60,
+            )
+        elif len(words) == 2:
+            notify.set_limits(words[0], words[1])
+        elif words:
+            warn("Usage: /notify [<count> per <minutes>m | on | off]")
+            return
+    except notify.LimitError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(
+        f"{notify.limit_words()} /notify <count> per <minutes>m changes "
+        "it; /notify off stops them.",
+        style=DIM,
+    ))
+
+
+def _default_spark_model(wanted: str) -> None:
+    """/sparks default: the model new sparks are made on, shown, or set
+    to WANTED ("flash" for Flash's own)."""
+
+    if wanted:
+        chosen = sparks.set_default_model(wanted)
+        here = sparks.is_here(chosen, sparks.models_here()) if chosen else None
+        if here is False:
+            warn(
+                f"{chosen} is not on this computer. New sparks are made on "
+                f"{Config.model or 'Flash'}'s model until it is: /model "
+                f"{chosen} downloads it."
+            )
+            return
+    model, gone = sparks.model_for_new(Config.model or "")
+    if gone:
+        warn(gone)
+        return
+    chosen = sparks.default_model()
+    console.print(Text(
+        (f"New sparks are made on {chosen}. " if chosen else
+         f"New sparks are made on Flash's model, {model or 'none yet'}. ")
+        + "/sparks default <model|flash> changes it; /sparks model <name> "
+        "<model> moves one spark.",
+        style=DIM,
+    ))
+
+
+class _Mentions:
+    """RENDERABLE with each @mention of a spark in that spark's colour,
+    and @everyone in Flash's, as the page draws them as chips. Picked out
+    once it is laid out, so the words wrap just as they would; code
+    keeps its own colours."""
+
+    def __init__(self, renderable) -> None:
+        self.renderable = renderable
+
+    def __rich_console__(self, console, options):
+        colours: dict[str, str] = {}
+        for segment in console.render(self.renderable, options):
+            text, style, control = segment
+            if control or "@" not in text or (style and style.bgcolor):
+                yield segment
+                continue
+            last = 0
+            for start, end, spark in sparks.mention_spans(text):
+                word = text[start:end]
+                if word not in colours:
+                    colours[word] = spark.colour if spark else ACCENT
+                if start > last:
+                    yield Segment(text[last:start], style)
+                picked = console.get_style(f"bold {colours[word]}")
+                yield Segment(word, style + picked if style else picked)
+                last = end
+            if last < len(text):
+                yield Segment(text[last:], style)
+
+
+def _show_spark(spark: "sparks.Spark") -> None:
+    head = Text(f"\n{_bubble()} ", style=spark.colour)
+    head.append(spark.name, style=f"bold {spark.colour}")
+    if spark.title:
+        head.append(f"  {spark.title}", style=spark.colour)
+    found = sparks.project_of(spark)
+    head.append(f"  {spark.handle} · on {sparks.model_of(spark) or 'no model'}"
+                f" · {sparks.schedule_words(spark)}"
+                f"{f' · in {found.name}' if found else ''}"
+                f" · {_spark_state(spark)}"
+                f" · {spark.runs} shift{'' if spark.runs == 1 else 's'}\n",
+                style=DIM)
+    head.append("\nGoal\n", style="bold")
+    head.append(f"  {spark.goal}\n")
+    if spark.boundaries:
+        head.append("\nBoundaries\n", style="bold")
+        head.append(f"  {spark.boundaries}\n")
+    team = sparks.find_team(spark.team) if spark.team else None
+    if team is not None and team.rules:
+        head.append(f"\n{team.name}'s rules\n", style="bold")
+        head.append(f"  {team.rules}\n")
+    if spark.watch:
+        head.append("\nWatching\n", style="bold")
+        head.append(f"  {spark.watch}: a change there starts a shift\n")
+    if spark.waiting:
+        head.append("\nWaiting for your approval\n", style=f"bold {ACCENT}")
+        head.append(f"  {spark.pending.get('label', '')}\n")
+        detail = str(spark.pending.get("detail", "")).strip()
+        if detail:
+            head.append(
+                "".join(f"    {line}\n" for line in detail.splitlines()[:12]),
+                style=DIM,
+            )
+        head.append(
+            f"  /sparks approve {_spark_key(spark)} · /sparks deny "
+            f"{_spark_key(spark)} [why]\n", style=DIM,
+        )
+    if spark.lessons:
+        head.append("\nWhat you have taught it\n", style="bold")
+        for number, lesson in enumerate(spark.lessons, start=1):
+            head.append(f"  {number}. {lesson}\n", style=DIM)
+    console.print(head)
+
+    shown = [r for r in spark.reports if not r.quiet][-3:]
+    quiet = sum(1 for r in spark.reports if r.quiet)
+    if not shown:
+        console.print(Text(
+            "No reports yet." if not spark.runs else
+            f"Nothing to report yet ({quiet} quiet shift"
+            f"{'' if quiet == 1 else 's'}).", style=DIM,
+        ))
+    for report in shown:
+        when = time.strftime("%a %H:%M", time.localtime(report.at))
+        title = Text(f"Report · {when}", style="bold")
+        if not report.read:
+            title.append("  new", style=ACCENT)
+        if report.rating:
+            title.append(
+                "  liked" if report.rating > 0 else "  disliked", style=DIM,
+            )
+        console.print(title)
+        console.print(
+            _Mentions(Markdown(report.text, code_theme="monokai")),
+        )
+        if report.feedback:
+            console.print(Text(f"  You said: {report.feedback}", style=DIM))
+        console.print()
+    console.print(Text(
+        f"/sparks chat {_spark_key(spark)} to talk with it · like · "
+        "dislike [why] · teach · run · pause · resume · every · remove",
+        style=DIM,
+    ))
+    sparks.mark_read(spark.id)
+
+
+def _spark_says(spark: "sparks.Spark", said: "sparks.Message") -> None:
+    head = Text(f"{_bubble()} ", style=spark.colour)
+    head.append(spark.name, style=f"bold {spark.colour}")
+    if said.steps:
+        count = len(said.steps)
+        head.append(f"  {count} step{'' if count == 1 else 's'}", style=DIM)
+    console.print(head)
+    if said.failed:
+        warn(said.text)
+    else:
+        console.print(_Mentions(Markdown(said.text, code_theme="monokai")))
+    console.print()
+
+
+TEAM_CHAT_SHOWN = 15
+
+
+def _team_and_rest(text: str) -> tuple[Optional["sparks.Team"], str]:
+    """The team TEXT starts with, and the words after it. A team's name
+    can have spaces in it, so the longest one that matches."""
+
+    words = text.split()
+    for count in range(len(words), 0, -1):
+        team = sparks.find_team(" ".join(words[:count]))
+        if team is not None:
+            return team, " ".join(words[count:])
+    return None, ""
+
+
+def _say_moved(changed: list, model: str) -> None:
+    on = model or "Flash's model"
+    names = ", ".join(spark.name for spark in changed)
+    console.print(Text(
+        f"{names} {'runs' if len(changed) == 1 else 'run'} on {on} now.",
+        style=DIM,
+    ))
+
+
+def _team_model(rest: str) -> None:
+    """/sparks teams model <team> [model]: everyone on the team onto one
+    model, picked from the list when it is not named."""
+
+    team, model = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    model = model.strip() or _ask_spark_model()
+    if not model:
+        return
+    team, changed = sparks.set_team_model(team.id, model)
+    _say_moved(changed, changed[0].model)
+
+
+def _spark_models_bulk(rest: str) -> None:
+    """/sparks model all [model], or /sparks model ada, grace, ken
+    [model]: many sparks onto one model at once."""
+
+    if rest.split()[0].lower() == "all":
+        keys = [spark.id for spark in sparks.all_sparks()]
+        model = rest.split(maxsplit=1)[1].strip() if " " in rest else ""
+    else:
+        *named, last = [part.strip() for part in rest.split(",")]
+        # The model, when given, is the last word after the last name;
+        # a whole last part that is a spark's name has none after it.
+        model = ""
+        if sparks.find(last) is None and " " in last:
+            last, model = last.rsplit(" ", 1)
+        keys = [key for key in [*named, last] if key]
+    if not keys:
+        warn("No sparks yet.")
+        return
+    model = model or _ask_spark_model()
+    if not model:
+        return
+    changed = sparks.set_models(keys, model)
+    _say_moved(changed, changed[0].model)
+
+
+def _spark_models_list() -> None:
+    """/sparks models: every spark and the model it runs on, by team."""
+
+    every = sparks.all_sparks()
+    if not every:
+        console.print(Text("No sparks yet.", style=DIM))
+        return
+    groups = [(team.name, team.id) for team in sparks.teams()]
+    groups.append(("No team", ""))
+    body = Text()
+    for name, team_id in groups:
+        mates = [s for s in every if (s.team or "") == team_id]
+        if not mates:
+            continue
+        body.append(f"\n{name}\n", style="bold")
+        for spark in mates:
+            body.append(f"  {spark.name:<18}", style=ACCENT)
+            body.append(f"{spark.model or 'Flash' + chr(39) + 's model'}\n",
+                        style="" if spark.model else DIM)
+    body.append(
+        "\n  /sparks model all <model>, /sparks model ada, grace <model>, "
+        "or /sparks teams model <team> <model> moves many at once.",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _team_chat(rest: str) -> None:
+    """/sparks teamchat <team> [message]: a team's group chat, its
+    latest shown; with a message, that one is sent and answered."""
+
+    from . import teamchat
+
+    team, said = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    by_id = {s.id: s for s in sparks.all_sparks()}
+
+    def show(entry: dict) -> None:
+        spark = by_id.get(entry.get("spark", ""))
+        if entry.get("thread"):
+            console.print(Text(f"  ↳ in the thread on #{entry['thread']}",
+                               style=DIM))
+        reply = entry.get("reply")
+        if reply:
+            whose = "yourself" if reply.get("kind") == teamchat.USER else (
+                reply.get("name") or "a spark"
+            )
+            quote = " ".join(str(reply.get("text") or "").split())
+            console.print(Text(
+                f"  ↪ replying to {whose}: {quote[:80]}"
+                + ("…" if len(quote) > 80 else ""), style=DIM,
+            ))
+        if entry["kind"] == teamchat.USER:
+            line = Text("  You  ", style=f"bold {ACCENT}")
+            line.append(entry["text"])
+            console.print(_Mentions(line))
+            readers = [
+                by_id[i].name if i in by_id else "a spark"
+                for i in teamchat.read_by(entry)
+            ]
+            console.print(Text(
+                "       ✓✓ Read by " + " and ".join(readers) if readers
+                else "       ✓ Sent",
+                style=ACCENT if readers else DIM,
+            ))
+        elif entry["kind"] == teamchat.EVENT:
+            console.print(_Mentions(Text(
+                f"  {teamchat._line(entry, by_id).strip('()')}", style=DIM,
+            )))
+        else:
+            # One that has left since is still named, as it signed it.
+            _spark_says(spark or sparks.Spark(
+                id="", name=entry.get("name") or "A spark", goal="",
+            ), sparks.Message(
+                at=entry["at"], who="spark", text=entry["text"],
+                steps=entry.get("steps", []),
+                failed=bool(entry.get("failed")),
+            ))
+        reactions = teamchat._reactions(entry)
+        if reactions:
+            console.print(Text("    " + "  ".join(
+                f"{emoji} " + " and ".join(
+                    "You" if who == teamchat.USER
+                    else by_id[who].name if who in by_id else "a spark"
+                    for who in whose
+                ) for emoji, whose in reactions.items()
+            ), style=DIM))
+
+    if not said:
+        entries = teamchat.history(team.id)["entries"][-TEAM_CHAT_SHOWN:]
+        console.print(Text(f"\n{team.name}'s chat", style="bold"))
+        if not entries:
+            console.print(Text(
+                "  Nothing said yet. /sparks teamchat "
+                f"{team.name} <message> starts it.", style=DIM,
+            ))
+        for entry in entries:
+            show(entry)
+        teamchat.mark_read(team.id)
+        return
+    try:
+        message = teamchat.say(team.id, said)
+    except teamchat.TeamChatError as exc:
+        warn(str(exc))
+        return
+    # The answers as they come: who is typing, and what each says the
+    # moment it is posted, as the page shows them; and what the page's
+    # user says meanwhile, too.
+    seen, shown, drawing = [message["id"]], set(), threading.Lock()
+
+    def typing_words(typing: list) -> str:
+        names = [
+            (by_id[t["spark"]].name, t.get("doing", ""))
+            for t in typing if t["spark"] in by_id
+        ]
+        if not names:
+            return f"{team.name} is answering"
+        if len(names) == 1:
+            name, doing = names[0]
+            return f"{name} is typing" + (f" · {doing}" if doing else "")
+        return (", ".join(n for n, _ in names[:-1])
+                + f" and {names[-1][0]} are typing")
+
+    with console.status(f"{team.name} is answering", spinner="dots") as live:
+
+        def heard(team_id: str) -> None:
+            if team_id != team.id:
+                return
+            with drawing:
+                found = teamchat.history(team.id, since=seen[0])
+                seen[0] = max(seen[0], found["seq"])
+                for entry in found["entries"]:
+                    if entry["id"] not in shown:
+                        shown.add(entry["id"])
+                        show(entry)
+                live.update(typing_words(found["typing"]))
+
+        teamchat.on_change(heard)
+        try:
+            posted = teamchat.answer(team.id, message, _client())
+        finally:
+            teamchat.off_change(heard)
+        heard(team.id)
+    for entry in posted:
+        if entry["id"] not in shown:
+            show(entry)
+    if not posted and not shown and teamchat._waiting.get(team.id) is message:
+        console.print(Text(
+            f"{team.name} is answering another message: yours is next. "
+            f"/sparks teamchat {team.name} shows the chat.", style=DIM,
+        ))
+
+
+def _chat_with_spark(key: str, first: str) -> None:
+    """/sparks chat <name> [message]: talk with a spark between shifts.
+
+    With a message, that one is sent and answered. Without, it is a
+    conversation until an empty line.
+    """
+
+    spark = sparks.find(key)
+    if spark is None:
+        warn(f"No spark called {key!r}.")
+        return
+    if not first:
+        console.print(Text(
+            f"Talking with {spark.name}. It knows its goal, notes and "
+            "reports, and remembers what you teach it. An empty line "
+            "ends the chat.", style=DIM,
+        ))
+    said = first
+    while True:
+        if not said:
+            said = _ask_line("you ›")
+            if not said:
+                return
+        try:
+            with console.status(
+                f"[{spark.colour}]{spark.name} is thinking{ELLIPSIS}",
+                spinner="dots", spinner_style=spark.colour,
+            ):
+                reply = sparks.say(spark.id, said)
+        except sparks.SparkError as exc:
+            warn(str(exc))
+            return
+        spark = sparks.find(spark.id) or spark
+        if reply is not None:
+            _spark_says(spark, reply)
+        if first:
+            return
+        said = ""
+
+
+def _chart_lines(tree: list, out: list, pad: str = "", changed=()) -> list:
+    """A team chart as indented lines, a changed spark marked with *."""
+
+    for k, node in enumerate(tree):
+        last = k == len(tree) - 1
+        mark = " *" if node["id"] in changed else ""
+        out.append(f"{pad}{'└─ ' if last else '├─ '}{node.get('name', '?')}"
+                   f"{mark}")
+        _chart_lines(node.get("reports", []), out,
+                     pad + ("   " if last else "│  "), changed)
+    return out
+
+
+def _hire_words(hire: dict) -> str:
+    if hire.get("kind") == "reorg":
+        return (
+            f"{hire.get('by_name', 'A spark')} proposes reorganizing "
+            f"{hire.get('team_name', 'the team')}"
+        )
+    if hire.get("kind") == "remove":
+        return (
+            f"{hire.get('by_name', 'A spark')} proposes letting "
+            f"{hire.get('target_name', 'a spark')} go"
+        )
+    wanted = hire.get("spark", {})
+    return (
+        f"{hire.get('by_name', 'A spark')} proposes hiring "
+        f"{wanted.get('name', 'a spark')}"
+        + (f", {wanted['title']}" if wanted.get("title") else "")
+    )
+
+
+def _list_hires() -> None:
+    waiting = sparks.hires()
+    if not waiting:
+        console.print(Text("No proposals waiting on you.", style=DIM))
+        return
+    body = Text()
+    for hire in waiting:
+        body.append(f"  {hire['id']}  ", style=ACCENT)
+        body.append(_hire_words(hire) + "\n")
+        if hire.get("kind") == "hire":
+            body.append(f"     {hire['spark']['goal'][:160]}\n", style=DIM)
+            details = sparks.hire_details(hire)
+            if details:
+                body.append(f"     {' · '.join(details)}\n", style=DIM)
+        if hire.get("kind") == "reorg":
+            for line in sparks.hire_details(hire):
+                body.append(f"     {line}\n")
+            moved = {m["spark"] for m in hire.get("changes", [])}
+            now = _chart_lines(hire.get("before", []), [])
+            then = _chart_lines(hire.get("after", []), [], changed=moved)
+            wide = max(len(line) for line in now + ["Now"]) + 4
+            body.append(f"     {'Now'.ljust(wide)}After (* changed)\n",
+                        style=DIM)
+            for k in range(max(len(now), len(then))):
+                left = now[k] if k < len(now) else ""
+                right = then[k] if k < len(then) else ""
+                body.append(f"     {left.ljust(wide)}{right}\n", style=DIM)
+        if hire.get("reason"):
+            body.append(f"     Why: {hire['reason'][:200]}\n", style=DIM)
+    body.append(
+        "  /sparks hire <id> yes, or no with a reason.", style=DIM,
+    )
+    console.print(body)
+
+
+def _teams_command(rest: str) -> None:
+    """/sparks teams: list them, or new, remove, share, add, templates."""
+
+    action, _, extra = rest.partition(" ")
+    action, extra = action.lower(), extra.strip()
+    if action == "new" and extra:
+        team = sparks.create_team(extra)
+        console.print(Text(
+            f"Made the team {team.name}. /sparks team <spark> "
+            f"{team.name} puts a spark on it.", style=DIM,
+        ))
+        return
+    if action == "remove" and extra:
+        team = sparks.remove_team(extra)
+        console.print(Text(
+            f"{team.name} is gone. Its sparks are on no team now.",
+            style=DIM,
+        ))
+        return
+    if action == "share" and extra:
+        console.print(Text(
+            "Anyone with Flash can add a copy of the whole team with "
+            "/sparks teams add <code>:", style=DIM,
+        ))
+        console.print(sparks.share_team_code(extra), soft_wrap=True)
+        return
+    if action == "add" and extra:
+        # Its sparks start paused, unless it says "running".
+        source, _, last = extra.rpartition(" ")
+        word = last.lower() if source.strip() else ""
+        paused = word != "running"
+        model, gone = sparks.model_for_new(Config.model or "")
+        if gone:
+            warn(gone)
+        team = sparks.add_team(
+            source.strip() if word in ("running", "paused") else extra,
+            model, paused,
+        )
+        console.print(Text(
+            f"Added the team {team.name}, with "
+            + ", ".join(s.name for s in sparks.members(team.id))
+            + (". They are paused: /sparks resume <name> starts one, or "
+               "add it with running at the end to start them all."
+               if paused else "."),
+            style=DIM,
+        ))
+        return
+    if action in ("pause", "resume") and extra:
+        if action == "pause":
+            team, held = sparks.pause_team(extra)
+            said = (
+                f"Paused {team.name}: no shift starts on its schedule until "
+                f"/sparks teams resume {team.name}. "
+                + (f"{len(held)} spark{'' if len(held) == 1 else 's'} "
+                   "paused; anything running finishes."
+                   if held else "Its sparks were paused already.")
+            )
+        else:
+            team, woke = sparks.resume_team(extra)
+            said = (
+                f"Resumed {team.name}: "
+                + (", ".join(s.name for s in woke) + " back on schedule."
+                   if woke else "nothing it had paused was waiting.")
+            )
+        console.print(Text(said, style=DIM))
+        return
+    if action == "rules" and extra:
+        _team_rules(extra)
+        return
+    if action == "model" and extra:
+        _team_model(extra)
+        return
+    if action == "project" and extra:
+        _team_project(extra)
+        return
+    if action == "templates":
+        body = Text()
+        for template in sparks.TEAM_TEMPLATES:
+            body.append(f"  {template['name']:<16}", style=ACCENT)
+            body.append(
+                f"{template['blurb']}: {template['lead']}, leading "
+                + " and ".join(template["reports"]) + "\n", style=DIM,
+            )
+        body.append("\n  /sparks teams add <template> makes one.", DIM)
+        console.print(body)
+        return
+    if action:
+        warn("Usage: /sparks teams [new|remove|share|pause|resume <name> "
+             "| rules <name> [rules|none] | model <name> [model] "
+             "| project <name> <project|none> "
+             "| add <code|template> [running] | templates]")
+        return
+    found = sparks.teams()
+    if not found:
+        console.print(Text(
+            "No teams yet. /sparks teams new <name> makes one, or /sparks "
+            "teams templates for a whole team at once.", style=DIM,
+        ))
+        return
+    body = Text()
+
+    def branch(node: dict, depth: int) -> None:
+        spark = sparks.find(node["id"])
+        if spark is None:
+            return
+        body.append("  " + "   " * depth + ("└─ " if depth else ""))
+        body.append(spark.name, style=f"bold {spark.colour}")
+        if spark.title:
+            body.append(f"  {spark.title}", style=DIM)
+        leads = sparks.leads_of(spark)
+        if len(leads) > 1:
+            # Drawn under its first; it reports to them all, as equals.
+            body.append(
+                "  reports to " + " and ".join(lead.name for lead in leads),
+                style=DIM,
+            )
+        body.append("\n")
+        for child in node["reports"]:
+            branch(child, depth + 1)
+
+    for team in found:
+        body.append(team.name, style=f"bold {team.colour}")
+        on = sparks.team_project(team)
+        if on is not None:
+            body.append(f"  in {on.name}", style=DIM)
+        body.append("  paused\n" if team.paused else "\n", style=DIM)
+        if team.rules:
+            body.append(
+                "  Rules: " + " ".join(team.rules.split())[:100] + "\n",
+                style=DIM,
+            )
+        chart = sparks.org_chart(team.id)
+        if not chart:
+            body.append("  (no sparks yet)\n", style=DIM)
+        for node in chart:
+            branch(node, 0)
+    alone = [s.name for s in sparks.all_sparks() if not s.team]
+    if alone:
+        body.append("No team\n", style="bold")
+        body.append("  " + ", ".join(alone) + "\n", style=DIM)
+    console.print(body)
+
+
+def _team_project(rest: str) -> None:
+    """/sparks teams project <team> <project|none>: the whole team into
+    one project, the sparks that join it later too."""
+
+    team, project = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    from . import workspace  # deferred: only this needs the projects
+
+    if not project.strip():
+        names = ", ".join(p.name for p in workspace.projects())
+        warn(
+            f"Usage: /sparks teams project {team.name} <project|none>"
+            + (f". Projects: {names}" if names else
+               ". There are no projects yet: make one in the web UI.")
+        )
+        return
+    team, moved = sparks.set_team_project(team.id, project)
+    on = sparks.team_project(team)
+    console.print(Text(
+        (f"{team.name} works in {on.name} now" if on
+         else f"{team.name} is on no project now")
+        + (": " + ", ".join(s.name for s in moved) + " moved."
+           if moved else ", as its sparks already were."),
+        style=DIM,
+    ))
+
+
+def _team_rules(rest: str) -> None:
+    """/sparks teams rules <team> [rules|none]: a team's rules, shown, or
+    set for every spark on it, or taken away."""
+
+    team, said = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    if not said:
+        if team.rules:
+            console.print(Text(f"{team.name}'s rules, for every spark on it:",
+                               style="bold"))
+            console.print(Text(f"  {team.rules}"))
+        else:
+            console.print(Text(
+                f"{team.name} has no rules. /sparks teams rules {team.name} "
+                "<rules> gives every spark on it lines it must not cross.",
+                style=DIM,
+            ))
+        return
+    clear = said.lower() in ("none", "off", "clear")
+    team = sparks.set_team_rules(team.id, "" if clear else said)
+    console.print(Text(
+        f"{team.name} has no rules now." if clear else
+        f"Every spark on {team.name} keeps to that from now on, on top of "
+        "its own boundaries.", style=DIM,
+    ))
+
+
+def _spark_budget(key: str, extra: str) -> None:
+    """/sparks budget <name> [tokens [hour|day|week|month] | period | off]."""
+
+    if not extra:
+        spark = sparks.find(key)
+        if spark is None:
+            warn(f"No spark called {key!r}.")
+            return
+        used = sparks.used_this_period(spark)
+        when = sparks.this_period(spark)
+        console.print(Text(
+            f"{spark.name} has used {used:,} tokens {when}"
+            + (f", of a budget of {sparks.budget_words(spark)}."
+               if spark.budget_on else
+               ". It has no budget: /sparks budget "
+               f"{_spark_key(spark)} <tokens> [hour|day|week|month] gives "
+               "it one."),
+            style=DIM,
+        ))
+        return
+    off = extra.lower() in ("off", "none", "no")
+    if off:
+        spark = sparks.set_budget(key, False)
+    elif extra.strip().lower().removeprefix("per ") in sparks._PERIOD_WORDS:
+        # Only the period: what it counts by changes, the number stays.
+        spark = sparks.set_budget(key, True, None, extra)
+    else:
+        tokens, period = sparks.parse_budget_with_period(extra)
+        spark = sparks.set_budget(key, True, tokens, period)
+    turns = {"hour": "the hour", "day": "the day", "week": "the week",
+             "month": "the month"}[sparks.period_of(spark)]
+    console.print(Text(
+        f"{spark.name}'s budget is off." if off else
+        f"{spark.name} may use {sparks.budget_words(spark)}; it pauses "
+        f"itself past that, until {turns} turns.", style=DIM,
+    ))
+
+
+def _spark_audit(key: str) -> None:
+    """/sparks audit <name>: the latest of its audit log."""
+
+    log = sparks.audit_log(key, 40)
+    body = Text()
+    for entry in log["entries"]:
+        when = time.strftime("%d %b %H:%M", time.localtime(entry["at"]))
+        body.append(f"  {when}  ", style=DIM)
+        body.append(f"{entry['kind']:<16}", style=ACCENT)
+        detail = next((
+            str(entry[k]) for k in (
+                "tool", "report", "lesson", "label", "team", "name", "lead",
+                "reason", "why",
+            ) if entry.get(k)
+        ), "")
+        if entry["kind"] == "budget":
+            detail = f"{entry.get('tokens', 0):,} tokens" if entry.get(
+                "on"
+            ) else "off"
+        elif entry["kind"] == "changed":
+            detail = ", ".join(entry.get("changes", {}))
+        body.append(" ".join(str(detail).split())[:90] + "\n")
+    body.append(
+        f"  {log['checked']} entries, "
+        + ("intact." if log["intact"] else
+           f"edited by hand at entry {log['checked']}.")
+        + f" The whole log: {log['path']}", style=DIM,
+    )
+    console.print(body)
+
+
+def _spark_mode(key: str, mode: str) -> None:
+    """/sparks mode <name> [follow|ask|auto|ultra]: a spark's own
+    permission mode. Bare, says which it works in."""
+
+    spark = sparks.set_mode(key, mode) if mode else sparks.find(key)
+    if spark is None:
+        warn(f"There is no spark called {key}.")
+        return
+    used = sparks.MODE_WORDS[sparks.mode_of(spark)]
+    console.print(Text(
+        f"{spark.name}: {used}." if spark.mode else
+        f"{spark.name} follows Flash's mode: {used} now.", style=DIM,
+    ))
+
+
+def _sparks_command(arg: str) -> None:
+    """/sparks and its actions: new, run, pause, resume, teach, every,
+    at, remove, or a spark's name to read its reports."""
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    rest = rest.strip()
+    key, _, extra = rest.partition(" ")
+    extra = extra.strip()
+
+    try:
+        if action == "new":
+            _new_spark()
+            return
+        if action == "always":
+            _sparks_always(rest.lower())
+            return
+        if action == "takeover":
+            from . import keepalive
+
+            if rest.lower().startswith("auto"):
+                said = rest.lower().split()[1:] or [""]
+                if said[0] in ("on", "off"):
+                    keepalive.set_auto_takeover(said[0] == "on")
+                console.print(Text(
+                    "Taking over from another Flash when this one starts: "
+                    + ("on." if keepalive.auto_takeover() else "off."),
+                    style=DIM))
+                return
+            try:
+                # "stop" stops another Flash open elsewhere, the user
+                # having said so.
+                state = keepalive.take_over(force=rest.lower() == "stop")
+            except keepalive.KeepAliveError as exc:
+                warn(str(exc))
+                return
+            console.print(Text(_always_words(state), style=DIM))
+            return
+        if action == "rounds":
+            if rest:
+                sparks.set_shift_rounds(rest)
+            rounds = sparks.shift_rounds()
+            console.print(Text(
+                "A shift has no limit on tools: it works until it writes "
+                "its report, or you /sparks stop it. "
+                if rounds is None else
+                f"A shift gets {rounds} round{'' if rounds == 1 else 's'} of "
+                "tools, then writes its report from what it has. ",
+                style=DIM,
+            ).append(
+                f"/sparks rounds <{sparks.SHIFT_ROUNDS_MIN}-"
+                f"{sparks.SHIFT_ROUNDS_MAX}|unlimited> changes it.",
+                style=DIM,
+            ))
+            return
+        if action == "default":
+            _default_spark_model(rest)
+            return
+        if action in ("chat", "talk", "ask") and key:
+            _chat_with_spark(key, extra)
+            return
+        if action == "run" and key:
+            spark = sparks.run_now(key)
+            console.print(Text(f"{spark.name} starts a shift now.", DIM))
+            return
+        if action in ("pause", "resume", "stop") and key.lower() == "all":
+            if action == "pause":
+                held = sparks.pause_all()
+                said = (
+                    f"Paused {len(held)} spark{'' if len(held) == 1 else 's'}"
+                    ": shifts running now finish, and nothing starts until "
+                    "/sparks resume all."
+                )
+            elif action == "stop":
+                done = sparks.stop_all()
+                said = (
+                    f"Stopped {done['stopped']} shift"
+                    f"{'' if done['stopped'] == 1 else 's'} and paused "
+                    f"{done['paused']} spark"
+                    f"{'' if done['paused'] == 1 else 's'}. /sparks resume "
+                    "all starts them again."
+                )
+            else:
+                woke = sparks.resume_all()
+                said = (
+                    f"Resumed {len(woke)} spark{'' if len(woke) == 1 else 's'}"
+                    ". Ones you paused yourself stay paused."
+                )
+            console.print(Text(said, style=DIM))
+            return
+        if action in ("pause", "resume") and key:
+            spark = sparks.set_paused(key, action == "pause")
+            console.print(Text(f"{spark.name} {action}d.", style=DIM))
+            return
+        if action in ("teach", "feedback", "tell") and key and extra:
+            spark = sparks.teach(key, extra)
+            console.print(Text(
+                f"{spark.name} will keep that in mind from its next shift.",
+                style=DIM,
+            ))
+            return
+        if action in ("like", "dislike") and key:
+            # The latest report; a reason with it is kept as a lesson.
+            spark, report = sparks.rate_latest(
+                key, 1 if action == "like" else -1,
+            )
+            if extra:
+                sparks.teach(spark.id, extra, report.at)
+            console.print(Text(
+                f"{spark.name} will do more like that report."
+                if action == "like" else
+                f"{spark.name} will steer away from that report"
+                f"{' and keep what you said' if extra else ''}.",
+                style=DIM,
+            ))
+            return
+        if action == "unteach" and key and extra.isdigit():
+            spark = sparks.forget_lesson(key, int(extra))
+            console.print(Text(f"{spark.name} let that go.", style=DIM))
+            return
+        if action in ("approve", "yes", "allow") and key:
+            spark = sparks.answer_step(key, True)
+            console.print(Text(f"{spark.name} carries on.", style=DIM))
+            return
+        if action in ("deny", "no") and key:
+            spark = sparks.answer_step(key, False, extra)
+            console.print(Text(
+                f"{spark.name} carries on without it.", style=DIM,
+            ))
+            return
+        if action == "stop" and key:
+            spark = sparks.stop(key)
+            console.print(Text(f"{spark.name} stops.", style=DIM))
+            return
+        if action == "share" and key:
+            code = sparks.share_code(key)
+            console.print(Text(
+                "Anyone with Flash can add a copy with /sparks add, or Add "
+                "shared on the web UI's Sparks page. It carries the goal, "
+                "schedule, boundaries and lessons, no reports.", style=DIM,
+            ))
+            console.echo(code + "\n")
+            return
+        if action == "add" and rest:
+            # "/sparks add Repo Watch paused" adds it without starting it.
+            source, _, last = rest.rpartition(" ")
+            paused = last.lower() == "paused" and bool(source.strip())
+            spark = sparks.add_from(
+                source.strip() if paused else rest,
+                model=Config.model or "", paused=paused,
+            )
+            from . import mail
+
+            if sparks.needs_email(spark) and not mail.configured():
+                warn(
+                    f"  {spark.name} works on your email, which is not "
+                    "connected yet: /email connect sets it up."
+                )
+            if sparks.needs_imessage(spark) and not (
+                computer.allowed("imessage_read")
+            ):
+                warn(
+                    f"  {spark.name} works on your iMessages, which Flash "
+                    + ("may not read yet: /computer on imessage_read lets "
+                       "it." if computer.system() == "mac" else
+                       "can only read on a Mac.")
+                )
+            console.print(Text(
+                f"Added {spark.name} ({spark.handle}), "
+                f"{sparks.schedule_words(spark)}, on {spark.model}"
+                f"{', paused' if spark.paused else ''}. "
+                f"/sparks model {_spark_key(spark)} to give it another"
+                f"{', /sparks resume to start it' if spark.paused else ''}.",
+                style=DIM,
+            ))
+            return
+        if action == "templates":
+            body = Text("\nTemplates\n\n", style="bold")
+            for template in sparks.TEMPLATES:
+                body.append(f"  {template['name']:<18}", style=ACCENT)
+                body.append(
+                    f"{template['blurb']}, "
+                    f"{sparks.schedule_words(template)}\n", style=DIM,
+                )
+            body.append(
+                "\n  /sparks add <template> makes one, to change with "
+                "/sparks goal and /sparks every.\n", style=DIM,
+            )
+            console.print(body)
+            return
+        if action == "goal" and key and extra:
+            spark = sparks.update(key, goal=extra)
+            console.print(Text(f"{spark.name} has a new goal.", style=DIM))
+            return
+        if action == "title" and key and extra:
+            spark = sparks.update(
+                key, title="" if extra.lower() == "none" else extra,
+            )
+            console.print(Text(
+                f"{spark.name} is your {spark.title} now."
+                if spark.title else f"{spark.name} has no title now.",
+                style=DIM,
+            ))
+            return
+        if action in ("colour", "color") and key and extra:
+            spark = sparks.update(key, colour=extra)
+            console.print(Text(f"{_bubble()} ", style=spark.colour).append(
+                f"{spark.name} wears {spark.colour} now.", style=DIM,
+            ))
+            return
+        if action == "events":
+            _spark_events(key, extra)
+            return
+        if action == "watch" and key and extra:
+            spark = sparks.update(
+                key, watch="" if extra.lower() == "none" else extra,
+            )
+            console.print(Text(
+                f"{spark.name} starts a shift when {spark.watch} changes."
+                if spark.watch else f"{spark.name} watches nothing now.",
+                style=DIM,
+            ))
+            return
+        if action == "models":
+            _spark_models_list()
+            return
+        if action == "model" and (key.lower() == "all" or "," in rest):
+            _spark_models_bulk(rest)
+            return
+        if action == "model" and key:
+            spark = sparks.find(key)
+            if spark is None:
+                warn(f"No spark called {key!r}.")
+                return
+            model = extra or _ask_spark_model()
+            if not model:
+                return
+            spark = sparks.update(spark.id, model=model)
+            console.print(Text(
+                f"{spark.name} runs on {spark.model} now.", style=DIM,
+            ))
+            return
+        if action == "project" and key and extra:
+            # One project, or several separated by commas: the first is
+            # its main one.
+            spark = sparks.update(key, projects=extra)
+            found = [p.name for p in sparks.projects_of(spark)]
+            console.print(Text(
+                f"{spark.name} works on {' and '.join(found)} now"
+                + (f", {found[0]} its main project." if len(found) > 1
+                   else ".") if found else
+                f"{spark.name} has no project now.", style=DIM,
+            ))
+            return
+        if action == "teams":
+            _teams_command(rest)
+            return
+        if action == "teamchat" and rest:
+            _team_chat(rest)
+            return
+        if action == "team" and key:
+            spark = sparks.set_team(
+                key, "" if extra.lower() in ("", "none") else extra,
+            )
+            console.print(Text(
+                f"{spark.name} is on {spark.to_dict()['team_name']} now."
+                if spark.team else f"{spark.name} is on no team now.",
+                style=DIM,
+            ))
+            return
+        if action == "lead" and key:
+            # Several, by commas, as equals: a name can have spaces in it.
+            spark = sparks.set_leads(key, [
+                part for part in extra.split(",")
+                if part.strip().lower() not in ("", "none")
+            ])
+            leads = sparks.leads_of(spark)
+            console.print(Text(
+                f"{spark.name} reports to "
+                + " and ".join(lead.name for lead in leads) + " now."
+                if leads else f"{spark.name} reports to no one now.",
+                style=DIM,
+            ))
+            return
+        if action == "budget" and key:
+            _spark_budget(key, extra)
+            return
+        if action == "mode" and key:
+            _spark_mode(key, extra)
+            return
+        if action == "audit" and key:
+            _spark_audit(key)
+            return
+        if action == "hires":
+            _list_hires()
+            return
+        if action == "hire" and key:
+            answer, _, why = extra.partition(" ")
+            if answer.lower() not in ("yes", "no", "y", "n"):
+                warn("Usage: /sparks hire <id> yes|no [why]")
+                return
+            hire = sparks.decide_hire(key, answer.lower() in ("yes", "y"), why)
+            yes = hire["status"] == "approved"
+            if hire["kind"] == "hire":
+                leads = hire["spark"].get(
+                    "reports_to_names", [hire["by_name"]],
+                )
+                said = (
+                    f"{hire['spark']['name']} is hired"
+                    + (f", reporting to {' and '.join(leads)}." if leads
+                       else ".") if yes else
+                    f"{hire['by_name']} will not hire "
+                    f"{hire['spark']['name']}."
+                )
+            elif hire["kind"] == "reorg":
+                said = (
+                    f"{hire.get('team_name', 'The team')} is reorganized: "
+                    + "; ".join(sparks.reorg_line(m)
+                                for m in hire.get("changes", []))
+                    + "." if yes else
+                    f"{hire.get('team_name', 'The team')} stays as it is."
+                )
+            else:
+                said = (
+                    f"{hire.get('target_name', 'It')} is let go." if yes else
+                    f"{hire.get('target_name', 'It')} stays."
+                )
+            console.print(Text(said, style=DIM))
+            return
+        if action in ("every", "at") and key and extra:
+            spark = sparks.update(key, every=extra)
+            nxt = time.strftime("%a %H:%M", time.localtime(spark.next_run))
+            console.print(Text(
+                f"{spark.name} now works {sparks.schedule_words(spark)}"
+                + (f": next on {nxt}." if spark.at else "."), style=DIM,
+            ))
+            return
+        if action in ("remove", "rm", "delete") and key:
+            spark = sparks.find(key)
+            if spark and confirm(f"Remove {spark.name} and its reports?"):
+                sparks.remove(spark.id)
+                console.print(
+                    Text(f"{spark.name} is in the trash.", style=DIM),
+                )
+            elif spark is None:
+                warn(f"No spark called {key!r}.")
+            return
+        if action and not rest:
+            spark = sparks.find(action)
+            if spark:
+                _show_spark(spark)
+                return
+    except sparks.SparkError as exc:
+        warn(str(exc))
+        return
+
+    if action:
+        warn(
+            "Usage: /sparks [new | <name> | chat <name> [message] "
+            "| run|pause|resume|remove <name> | teach <name> <lesson> "
+            "| like <name> | dislike <name> [why] "
+            "| every <name> <30m|2h|daily|on call> "
+            "| at <name> <9am weekdays|cron> "
+            "| project <name> <project|none> "
+            "| approve|deny|stop|share <name> | add <code|template> [paused] "
+            "| templates | goal <name> <text> | watch <name> <folder|none> "
+            "| events [on|off | <name> <email imessage mcp:server|none>] "
+            "| model <name> [model] | title <name> <title|none> "
+            "| colour <name> <ember|sky|mint|...|#rrggbb> "
+            "| rounds [number|unlimited] | default [model|flash] "
+            "| pause all | resume all | stop all "
+            "| teams [new|remove|share|rules|add|templates] "
+            "| teamchat <team> "
+            "[message] | team <name> "
+            "<team|none> | lead <name> <lead, lead|none> "
+            "| budget <name> "
+            "<tokens [hour|day|week|month]|off> | audit <name> | hires "
+            "| hire <id> yes|no "
+            "| always on|off]"
+        )
+        return
+
+    found = sparks.all_sparks()
+    if not found:
+        console.print(Text(
+            "No sparks yet. A spark keeps working on one goal on a "
+            "schedule and reports back. /sparks new to make one, or ask "
+            "Flash: \"make a spark that checks my repo for new issues "
+            "every morning\".", style=DIM,
+        ))
+        return
+
+    body = Text()
+    body.append("\nSparks\n\n", style="bold")
+    width = max(len(spark.name) for spark in found) + 2
+    for spark in found:
+        body.append(f"  {_bubble()} ", style=spark.colour)
+        body.append(f"{spark.name:<{width}}", style=f"bold {spark.colour}")
+        body.append(_spark_state(spark), style=DIM)
+        found = sparks.project_of(spark)
+        if found:
+            body.append(f" · in {found.name}", style=DIM)
+        if spark.unread:
+            body.append(f"  {spark.unread} new", style=ACCENT)
+        body.append(
+            f"\n     {spark.title + ': ' if spark.title else ''}"
+            f"{spark.goal.splitlines()[0][:70]}\n", style=DIM,
+        )
+    from . import keepalive
+
+    body.append(f"\n  {_always_words(keepalive.status())}\n", style=DIM)
+    body.append(
+        "  /sparks <name> to read one's reports, /sparks new to make "
+        "another.\n", style=DIM,
+    )
+    console.print(body)
+
+
+def _keep_listening() -> None:
+    """`flash --listen`: "Hey Flash" with Flash closed, until stopped.
+
+    What its background service starts at login, and just as happy run
+    by hand. Settings are read again before each conversation, so a
+    model picked in an open Flash is the one that answers.
+    """
+
+    from . import heyflash, keepalive, voice
+
+    os.chdir(Path.home())
+    console.print(Text(
+        f'Listening for "{voice.wake_title()}". Ctrl+C stops it.', style=DIM,
+    ))
+    # Started by its service, it goes when the service does. Run by hand
+    # with the service off, it runs until stopped.
+    wanted = (
+        (lambda: keepalive.installed(keepalive.LISTENER))
+        if keepalive.installed(keepalive.LISTENER) else None
+    )
+    try:
+        heyflash.serve(
+            prepare=refresh_config, wanted=wanted,
+            say=lambda line: console.print(Text(line, style=DIM)),
+        )
+    except KeyboardInterrupt:
+        console.print(Text("Stopped.", style=DIM))
+
+
+def _doctor_command(fix: bool = False, cli: bool = False) -> int:
+    """/doctor and `flash doctor`: whether everything Flash needs works,
+    and how to fix what does not; with FIX, the commands that fix it are
+    run, and it looks again. How many checks failed."""
+
+    from . import doctor
+
+    styles = {doctor.OK: "green", doctor.WARN: WARN,
+              doctor.FAIL: ERROR, doctor.OFF: DIM, "fix": DIM}
+
+    def say(line: str, state: str) -> None:
+        console.print(Text(line, style=styles.get(state, "")))
+
+    with console.status("Checking", spinner="dots"):
+        checks = doctor.run(Config.host, Config.model or "")
+    failed = doctor.report(checks, say)
+    if fix and doctor.fixable(checks):
+        console.print()
+        doctor.fix_all(checks, say)
+        console.print()
+        with console.status("Checking again", spinner="dots"):
+            checks = doctor.run(Config.host, Config.model or "")
+        failed = doctor.report(checks, say)
+    hint = doctor.hint(checks, "flash doctor --fix" if cli
+                       else "/doctor fix")
+    if hint:
+        console.print(Text(hint, style=f"bold {ACCENT}"))
+    return failed
+
+
+def _terminal_ping(said: dict) -> None:
+    """A spark wrote @user: the terminal's bell, and the desktop's own
+    notification, as nothing is drawn over the prompt."""
+
+    with contextlib.suppress(OSError, ValueError):
+        sys.__stdout__.write("\a")
+        sys.__stdout__.flush()
+    desktop(f"{said['name']} mentioned you", said["text"])
+
+
+# What said on a call in the terminal hangs it up.
+HANG_UP = ("hang up", "end the call", "end call")
+# This terminal, as the Flash a call is on: another can take it over.
+CALL_HOLDER = f"terminal:{os.getpid()}"
+# A spark's call ringing in this terminal: (its chat, its entry), and
+# whether it was answered from the desktop's prompt.
+_ring: dict = {}
+
+
+def _terminal_ring(team: str, entry: dict) -> None:
+    """A spark is calling: the terminal's bell, the computer ringing with
+    a prompt to answer, and the call shown at the prompt's next look."""
+
+    from . import sparkcalls
+
+    _ring.clear()
+    _ring.update(team=team, entry=entry, answer=False, shown=False)
+    with contextlib.suppress(OSError, ValueError):
+        sys.__stdout__.write("\a")
+        sys.__stdout__.flush()
+    if sparkcalls.claim(str(entry.get("call") or "")):
+        sparkcalls.ring_desktop(team, entry,
+                                on_answer=lambda: _ring.update(answer=True))
+
+
+def _terminal_ring_end(team: str, entry: dict) -> None:
+    if _ring.get("entry", {}).get("call") == entry.get("call") and \
+            not _ring.get("taking"):
+        state = entry.get("state")
+        _ring.clear()
+        if state == "missed":
+            console.print(Text(
+                f"  Missed call from {entry.get('name') or 'a spark'}. "
+                f"/call {entry.get('name') or ''} to call back.",
+                style=DIM))
+
+
+def _ring_waiting() -> bool:
+    """Whether a ring is waiting for the prompt: new, or just answered on
+    the desktop."""
+
+    return bool(_ring) and (not _ring.get("shown") or _ring.get("answer"))
+
+
+def _show_ring() -> None:
+    entry = _ring.get("entry") or {}
+    _ring["shown"] = True
+    note = Text("\n  ")
+    note.append(f"{entry.get('name') or 'A spark'} is calling you",
+                style=f"bold {ACCENT}")
+    if entry.get("reason"):
+        note.append(f": {entry['reason']}")
+    note.append("\n  Press Enter or type /answer to pick up, /decline to "
+                "decline.\n", style=DIM)
+    console.print(note)
+
+
+def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
+                taken: bool = False) -> None:
+    """A voice call with a spark (or a team) here in the terminal: it
+    speaks first, then each thing said goes to it and its answers are
+    read out, in its own voice, until either hangs up. With no voice set
+    up it is typed, the same way. TAKEN: a call taken over from another
+    Flash, which carries on where it was, with no hello."""
+
+    from . import teamchat
+    from . import voice as voice_mod
+
+    spoken = models_present()
+    who = (incoming or {}).get("name") or _call_party(team)
+
+    def moved() -> bool:
+        """Whether the call went on elsewhere: taken over by another
+        Flash, or hung up there."""
+
+        entry = teamchat._call_entry(teamchat._read(team), call)
+        if entry is None or teamchat._state(entry) not in (
+                "calling", "live"):
+            return True
+        return str(entry.get("holder") or CALL_HOLDER) != CALL_HOLDER
+    console.print(Text(
+        f"  On a call{' with ' + who if who else ''}. "
+        + ("Speak when it is your turn; say \"hang up\" or press Ctrl+C "
+           "to end it." if spoken else
+           "Voice is not set up, so type; an empty line or /hangup ends "
+           "it."), style=DIM))
+    hello = (
+        f"(Voice call) You called me about: {incoming.get('reason')}. "
+        "I've picked up; say hi and tell me why you called."
+        if incoming else
+        "(Voice call) Hi! You've picked up my call; greet me briefly.")
+    connected = False
+    # Still here, every few seconds, as the page's call beats: a call
+    # that goes quiet while the user thinks is not taken for over.
+    beating = threading.Event()
+
+    def beat() -> None:
+        while not beating.wait(5):
+            with contextlib.suppress(Exception):
+                teamchat.call_step(team, call, "beat", CALL_HOLDER)
+    threading.Thread(target=beat, daemon=True).start()
+
+    def round_(text: str, hidden: bool = False) -> bool:
+        """Say TEXT on the call and hear the answers: False once hung up."""
+
+        nonlocal connected
+        message = teamchat.say(team, text, hidden=hidden, call=call)
+        posted = teamchat.answer(team, {**message, "call": call}, _client())
+        for entry in posted:
+            if entry.get("kind") != teamchat.SPARK:
+                continue
+            if not connected:
+                connected = True
+                teamchat.call_step(team, call, "connected", CALL_HOLDER)
+            said = str(entry.get("spoken") or entry.get("text") or "")
+            name = str(entry.get("name") or "Spark")
+            # Cues ([happy], [laugh]) are said, never shown.
+            console.print(Text(f"  {name}: ", style=f"bold {ACCENT}")
+                          + Text(" ".join(humanvoice.strip(said).split())))
+            if spoken:
+                own = voice_mod.spark_voice(str(entry.get("spark") or ""))
+                voice_mod.speak(said, speaker=own.get("voice", ""),
+                                kind="calls")
+            if entry.get("end_call"):
+                return False
+        return True
+
+    try:
+        if taken:
+            connected = True
+        elif not round_(hello, hidden=True):
+            return
+        while True:
+            if moved():
+                return
+            if spoken:
+                # Stops listening as soon as the call goes on elsewhere.
+                said = _voice_input(stop=moved)
+                if said is None:
+                    continue
+            else:
+                said = console.input("  You: ").strip()
+                if not said or said == "/hangup":
+                    return
+            words = " ".join(said.lower().strip(" .!").split())
+            if is_exit_phrase(said) or words in HANG_UP:
+                return
+            if moved():
+                return
+            if spoken:
+                console.print(Text("  You: ", style="bold") + Text(said))
+            if not round_(said):
+                return
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+    finally:
+        beating.set()
+        gone = moved()
+        # Taken over elsewhere, it goes on there: not hung up from here.
+        with contextlib.suppress(Exception):
+            teamchat.call_step(team, call, "end", CALL_HOLDER)
+        where = ""
+        if gone and _call_open(team, call):
+            entry = teamchat._call_entry(teamchat._read(team), call) or {}
+            where = teamchat.holder_place(str(entry.get("holder") or ""))
+            where = f"  Transferred to {where}." if where else \
+                "  The call moved to another Flash."
+        console.print(Text(where or "  Call ended.", style=DIM))
+
+
+def _answer_ring() -> None:
+    from . import teamchat
+
+    if not _ring:
+        warn("No spark is calling.")
+        return
+    team, entry = _ring["team"], dict(_ring["entry"])
+    _ring["taking"] = True
+    try:
+        teamchat.call_step(team, str(entry.get("call")), "answer",
+                           CALL_HOLDER)
+    except ValueError as exc:
+        _ring.clear()
+        warn(str(exc))
+        return
+    _ring.clear()
+    _spark_call(team, str(entry.get("call")), incoming=entry)
+
+
+def _decline_ring() -> None:
+    from . import teamchat
+
+    if not _ring:
+        warn("No spark is calling.")
+        return
+    team, call = _ring["team"], str(_ring["entry"].get("call"))
+    name = _ring["entry"].get("name") or "the spark"
+    _ring.clear()
+    with contextlib.suppress(ValueError):
+        teamchat.call_step(team, call, "decline")
+    console.print(Text(f"  Declined the call from {name}.", style=DIM))
+
+
+def _call_command(arg: str) -> None:
+    """/call <spark>: a voice call with that spark, here."""
+
+    from . import teamchat
+
+    words = arg.split()
+    if words[:1] == ["take"]:
+        _take_call(" ".join(words[1:]))
+        return
+    if words[:1] == ["incoming"]:
+        # /call incoming on|off: whether sparks may call you.
+        if words[1:] in (["on"], ["off"]):
+            set_config_var(teamchat.CALLS_SETTING,
+                           "1" if words[1] == "on" else "0")
+        console.print(Text(
+            "Sparks can call you." if teamchat.calls_allowed() else
+            "Sparks can't call you; they @mention you instead. "
+            "/call incoming on lets them.", style=DIM))
+        return
+    spark = sparks.find(arg.strip().lstrip("@")) if arg.strip() else None
+    if spark is None:
+        names = ", ".join(s.name for s in sparks.all_sparks()) or "none yet"
+        warn(f"Usage: /call <spark>. Sparks: {names}.")
+        return
+    room = teamchat.dm_id(spark.id)
+    entry = teamchat.start_call(room, CALL_HOLDER)
+    _spark_call(room, entry["call"], incoming=None)
+
+
+def _call_party(team: str) -> str:
+    """Who a call in TEAM's chat is with: the spark's name, or the team's."""
+
+    from . import teamchat
+
+    with contextlib.suppress(Exception):
+        return teamchat._team(team).name
+    return ""
+
+
+def _call_open(team: str, call: str) -> bool:
+    from . import teamchat
+
+    entry = teamchat._call_entry(teamchat._read(team), call)
+    return entry is not None and teamchat._state(entry) in ("calling", "live")
+
+
+def _take_call(arg: str) -> None:
+    """/call take [name]: a call going on in another Flash (a page, or
+    another terminal), taken over here, to carry on where it was."""
+
+    from . import teamchat
+
+    found = [c for c in teamchat.live_calls()
+             if c.get("holder") != CALL_HOLDER]
+    wanted = arg.strip().lstrip("@").casefold()
+    if wanted:
+        found = [c for c in found
+                 if wanted in _call_party(c["team"]).casefold()]
+    if not found:
+        warn("No call is going on in another Flash to take over.")
+        return
+    if len(found) > 1 and not wanted:
+        names = ", ".join(_call_party(c["team"]) for c in found)
+        warn(f"Calls are going on with {names}: /call take <name> picks "
+             "one.")
+        return
+    call = found[0]
+    teamchat.call_step(call["team"], call["call"], "take", CALL_HOLDER)
+    console.print(Text(f"  Took the call with {_call_party(call['team'])} "
+                       "over from the other Flash.", style=DIM))
+    _spark_call(call["team"], call["call"], taken=True)
+
+
+def _keep_sparks() -> None:
+    """`flash --sparks`: the keeper alone, until stopped.
+
+    What the system starts at login when sparks are always on, and just
+    as happy run by hand. It reads the env file before every shift, so a
+    model picked in an open Flash is the one the next shift uses.
+    """
+
+    # Started at login, the working folder is wherever the system chose,
+    # which on Windows is System32. A spark's relative paths mean home.
+    os.chdir(Path.home())
+    found = len(sparks.all_sparks())
+    console.print(Text(
+        f"Keeping {found} spark{'' if found == 1 else 's'} working. "
+        "Ctrl+C stops it.", style=DIM,
+    ))
+
+    def announce(spark: "sparks.Spark", report: "sparks.Report") -> None:
+        notify_spark(
+            spark.name, report.text, failed=report.failed,
+            asking=report.approval,
+        )
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        what = (
+            "asks for your approval" if report.approval
+            else "a shift failed" if report.failed else "filed a report"
+        )
+        console.print(Text(f"{stamp} {spark.name}: {what}", DIM))
+
+    from . import keepalive
+
+    # Started for always on, it goes when always on does. Run by hand
+    # with always on off, it runs until stopped.
+    wanted = keepalive.installed if keepalive.installed() else None
+    # Its sparks have the connected apps' tools from their first shift.
+    connectors.start()
+    try:
+        updated = sparks.serve(
+            prepare=refresh_config, announce=announce, wanted=wanted,
+        )
+    except KeyboardInterrupt:
+        console.print(Text("Stopped.", style=DIM))
+        return
+    if updated:
+        # Flash was updated while it ran: the same keeper, on the new
+        # code, in place of this one.
+        console.print(Text("Flash was updated: starting again.", DIM))
+        again = keepalive.command()
+        os.execv(again[0], again)  # nosec B606 -- this Python, this Flash
+
+
+def _sparks_always(arg: str) -> None:
+    """/sparks always [on|off]: keep them working when Flash is closed."""
+
+    from . import keepalive
+
+    try:
+        if arg in ("on", "yes", "enable"):
+            how = keepalive.turn_on()
+            console.print(Text(
+                f"Sparks are always on, through {how}. They keep working "
+                "with Flash closed and tell you when they have news.",
+                style=DIM,
+            ))
+            return
+        if arg in ("off", "no", "disable"):
+            if keepalive.turn_off():
+                console.print(Text(
+                    "Sparks work only while Flash is open again.", style=DIM,
+                ))
+            else:
+                console.print(Text("Sparks were not always on.", style=DIM))
+            return
+    except keepalive.KeepAliveError as exc:
+        warn(str(exc))
+        return
+
+    if arg:
+        warn("Usage: /sparks always [on|off]")
+        return
+    console.print(Text(_always_words(keepalive.status()), style=DIM))
+
+
+def _always_words(state: dict) -> str:
+    if state.get("other"):
+        return (
+            f"Your sparks are being run by {state['other']}, so their "
+            "shifts use its code and its tools, not this one's. "
+            "/sparks takeover runs them on this one"
+            + (" (/sparks takeover stop quits that Flash first, as it is "
+               "open elsewhere)." if state.get("other_open") else ".")
+        )
+    if not state["installed"]:
+        return (
+            "Sparks work while Flash is open. /sparks always on keeps "
+            "them working when it is closed."
+        )
+    if state["running"]:
+        return "Always on: working in the background, with Flash closed too."
+    if state["here"]:
+        return (
+            "Always on. An open Flash is doing the work right now; the "
+            "background keeper takes over when it closes."
+        )
+    return (
+        "Always on, but the background keeper is not running. It starts "
+        "at your next login, or run /sparks always on to start it now."
+    )
 
 
 def _hook_command(arg: str) -> None:
@@ -1851,8 +4944,9 @@ def _hook_command(arg: str) -> None:
 
 
 EXTENSION_USAGE = (
-    "Usage: /extension [list] | install github@owner/repo | "
-    "remove <name>"
+    "Usage: /extension [list] | install github@owner/repo[#branch] | "
+    "install git@<URL>[#branch] | update [name] | remove <name> | "
+    "settings <name> | set <name> <setting> <value>"
 )
 
 
@@ -1888,6 +4982,56 @@ def _describe_extension(
     return body
 
 
+def _extension_settings(arg: str) -> None:
+    """/extension settings <name>: its settings, and what each is set to."""
+
+    ext = extensions.find(arg)
+    if ext is None:
+        warn(f"No extension called {arg!r}.")
+        return
+    if not ext.settings:
+        console.print(Text(f"{ext.name} has no settings.", style=DIM))
+        return
+    values = extensions.shown_values(ext)
+    body = Text(f"\n{ext.name} settings\n\n", style="bold")
+    for setting in ext.settings:
+        value = values[setting.id]
+        shown = ("on" if value else "off") if setting.type == "switch" \
+            else str(value) or "(empty)"
+        body.append(f"  {setting.id}", style=f"bold {ACCENT}")
+        body.append(f"  {setting.label}: ", style=DIM)
+        body.append(f"{shown}\n")
+        if setting.type == "select":
+            body.append(f"    one of {', '.join(setting.options)}\n",
+                        style=DIM)
+        if setting.help:
+            body.append(f"    {setting.help}\n", style=DIM)
+    body.append(
+        f"\n  /extension set {ext.name} <setting> <value> changes one.\n",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _set_extension_setting(arg: str) -> None:
+    """/extension set <name> <setting> <value>."""
+
+    name, _, rest = arg.partition(" ")
+    setting_id, _, value = rest.strip().partition(" ")
+    ext = extensions.find(name)
+    if ext is None or not setting_id:
+        warn(EXTENSION_USAGE)
+        return
+    try:
+        extensions.set_setting(ext, setting_id, value.strip())
+    except extensions.ExtensionError as exc:
+        warn(str(exc))
+        return
+    now = extensions.shown_values(ext)[setting_id]
+    shown = ("on" if now else "off") if isinstance(now, bool) else now
+    console.print(Text(f"{ext.name}: {setting_id} is {shown}.", style=DIM))
+
+
 def _list_extensions() -> None:
     installed = extensions.installed()
     broken = extensions.problems()
@@ -1915,6 +5059,352 @@ def _list_extensions() -> None:
         style=DIM,
     )
     console.print(body)
+
+
+CALENDAR_USAGE = ("Usage: /calendar [days] | feed add NAME URL | feed rm "
+                  "NAME | google [off]")
+
+
+def _calendar_command(arg: str) -> None:
+    """/calendar: what is on; feeds to read; Google Calendar, signed in."""
+
+    from datetime import datetime, timedelta
+
+    from . import calendars
+
+    words = arg.split()
+    try:
+        if not words or words[0].isdigit():
+            days = int(words[0]) if words else 7
+            problems: list[str] = []
+            now = datetime.now().astimezone()
+            found = calendars.events(
+                now.isoformat(), (now + timedelta(days=days)).isoformat(),
+                problems=problems)
+            for event in found:
+                console.print(Text("  " + calendars.describe(event)))
+            if not found:
+                console.print(Text(f"  Nothing on in the next {days} days.",
+                                   style=DIM))
+            for problem in problems:
+                warn(f"  {problem}")
+            return
+        if words[0] == "feed" and len(words) >= 2:
+            if words[1] == "add" and len(words) == 4:
+                calendars.add_feed(words[2], words[3])
+                console.print(Text(f"Reading {words[2]}.", style=DIM))
+                return
+            if words[1] in ("rm", "remove") and len(words) == 3:
+                gone = calendars.remove_feed(words[2])
+                console.print(Text("Removed." if gone else "No such feed.",
+                                   style=DIM))
+                return
+        if words[0] == "google":
+            if words[1:] == ["off"]:
+                calendars.google_sign_out()
+                console.print(Text("Google Calendar disconnected.",
+                                   style=DIM))
+                return
+            _calendar_google()
+            return
+    except calendars.CalendarError as exc:
+        warn(str(exc))
+        return
+    warn(CALENDAR_USAGE)
+
+
+def _calendar_google() -> None:
+    """Sign in to Google Calendar: Google's page in the browser, back to a
+    one-off page on this computer that takes the code."""
+
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    from . import calendars
+
+    console.print(Text(
+        "  Needs an OAuth client of your own: in Google Cloud console, turn "
+        "on the Google Calendar API, then Credentials > Create credentials "
+        "> OAuth client ID > Desktop app.", style=DIM))
+    client_id = console.input("  Client ID: ").strip()
+    client_secret = console.input("  Client secret: ", password=True).strip()
+    got: dict = {}
+
+    class Back(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            query = parse_qs(urlparse(self.path).query)
+            got["code"] = (query.get("code") or [""])[0]
+            got["state"] = (query.get("state") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"<p style='font:16px system-ui'>Back to "
+                             b"Flash: you can close this tab.</p>")
+
+    server = HTTPServer(("127.0.0.1", 0), Back)
+    server.timeout = 180
+    url, _ = calendars.google_sign_in_url(
+        client_id, client_secret,
+        f"http://127.0.0.1:{server.server_port}/")
+    console.print(Text("  Opening Google's sign-in. If it does not open:",
+                       style=DIM))
+    console.print(Text(f"  {url}", style=ACCENT))
+    webbrowser.open(url)
+    try:
+        server.handle_request()
+    finally:
+        server.server_close()
+    if not got.get("code"):
+        warn("  No sign-in came back.")
+        return
+    calendars.google_finish(got["code"], got["state"])
+    console.print(Text("Google Calendar is connected.",
+                       style=f"bold {ACCENT}"))
+
+
+def _compare_command(arg: str) -> None:
+    """/compare a vs b: prompt, blind; /compare board, the tally."""
+
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    from . import compare
+
+    if arg.strip() in ("board", "tally", "scores"):
+        lines = compare.standings()
+        for line in lines or ["No comparisons yet. " + compare.USAGE]:
+            console.print(Text(f"  {line}", style=DIM))
+        return
+    try:
+        models, prompt = compare.parse(arg)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    with console.status("Both are answering", spinner="dots"):
+        done = compare.run(_client(), models, prompt, _chat_options())
+    for label, said in zip(("A", "B"), done["answers"]):
+        console.print(Panel(Markdown(said or "(nothing)"), title=label,
+                            title_align="left", border_style=DIM))
+    choice = console.input(Text("  Which is better? a, b or tie: ",
+                                style=DIM)).strip().lower()[:3]
+    try:
+        told = compare.pick(done["id"], choice)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    line = Text(f"  A was {told['a']}, B was {told['b']}.",
+                style=f"bold {ACCENT}")
+    console.print(line)
+
+
+def _fleet_view(fleet) -> "Any":
+    """Every chat of a fleet side by side: what each is doing now."""
+
+    from rich.columns import Columns
+    from rich.console import Group
+    from rich.panel import Panel
+
+    from . import fleet as fleets
+    from .theme import CROSS, SPINNER_FRAMES, TICK
+
+    frame = SPINNER_FRAMES[int(time.time() * 10) % len(SPINNER_FRAMES)]
+    width = max(30, (console.width - 2) // min(3, len(fleet.members)) - 1)
+    cards = []
+    for m in fleet.members:
+        mark, style = {
+            fleets.DONE: (TICK, ACCENT), fleets.FAILED: (CROSS, ERROR),
+            fleets.STOPPED: (CROSS, WARN),
+        }.get(m.state, (frame, ACCENT))
+        head = Text(f"{mark} ", style=style)
+        head.append(m.activity if m.state == fleets.RUNNING else m.state.capitalize(),
+                    style="bold")
+        clock = f"{int(m.elapsed) // 60}:{int(m.elapsed) % 60:02d}"
+        head.append(f"  {clock}", style=DIM)
+        if m.rounds:
+            head.append(f" {MIDDOT} {m.rounds} rounds", style=DIM)
+        head.no_wrap, head.overflow = True, "ellipsis"
+        rows = [head]
+        for step in m.steps[-4:]:
+            rows.append(Text(f"  {step}"[:width - 4], style=DIM, no_wrap=True))
+        if m.state != fleets.RUNNING and m.summary:
+            rows.append(Text(m.summary[:width * 2 - 8], style=DIM))
+        cards.append(Panel(Group(*rows), width=width, border_style=DIM,
+                           title=Text(f" {m.n} ", style=f"bold {ACCENT}"),
+                           title_align="left", subtitle=Text(f" {m.model} ", style=DIM),
+                           subtitle_align="right", height=8))
+    hint = Text("  Ctrl+C stops them all", style=DIM)
+    return Group(Columns(cards, padding=(0, 1)), hint)
+
+
+def _fleet_board(fleet) -> None:
+    """What each chat of a finished fleet did, in a table."""
+
+    from rich.table import Table
+
+    from .theme import CROSS, TICK
+
+    fleet.tally()
+    table = Table(box=None, padding=(0, 2), header_style=DIM, show_edge=False)
+    for name in ("", "model", "files", "lines", "check", "what it says"):
+        table.add_column(name, no_wrap=name != "what it says")
+    for m in fleet.members:
+        check = Text("")
+        if m.check is not None:
+            check = Text(TICK if m.check else CROSS, style=ACCENT if m.check else ERROR)
+        lines = Text(f"+{m.added}", style="#3fb950")
+        lines.append(f" -{m.removed}", style=ERROR)
+        table.add_row(Text(str(m.n), style=f"bold {ACCENT}"), m.model, str(len(m.files)),
+                      lines, check, Text(m.summary or m.state, style=DIM))
+    console.print(table)
+
+
+def _fleet_command(arg: str) -> None:
+    """/fleet [N or a, b:] task: several chats at once, each in its own
+    worktree; then compare them and merge the one picked."""
+
+    from rich.markdown import Markdown
+    from rich.syntax import Syntax
+
+    from . import fleet as fleets
+    from . import sandbox, worktrees
+
+    try:
+        models, task = fleets.parse(arg, Config.model or "")
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    walled = False
+    if not Config.no_command_confirmation:
+        walled = sandbox.available()
+        where = " in the sandbox" if walled else ""
+        if not confirm(f"{len(models)} chats will change files and run commands{where} "
+                       "in worktrees of their own without asking you. Start them?"):
+            return
+    try:
+        fleet = fleets.Fleet.start(os.getcwd(), task, models, sandbox=walled)
+    except (worktrees.WorktreeError, OSError) as exc:
+        warn(f"  {exc}")
+        return
+    try:
+        with Live(_fleet_view(fleet), console=console, refresh_per_second=8,
+                  transient=False) as live:
+            while fleet.running():
+                fleet.refresh()
+                live.update(_fleet_view(fleet))
+                time.sleep(0.25)
+            live.update(_fleet_view(fleet))
+    except KeyboardInterrupt:
+        fleet.stop()
+        console.print(Text("  Stopped. What they did so far is kept to compare.", style=DIM))
+
+    _fleet_board(fleet)
+    console.print(Text(
+        "  A number merges that one and deletes the rest. d 2 shows its diff, r 2 what it "
+        "said, c pytest -q runs a check in each, keep leaves them all, drop deletes them all.",
+        style=DIM))
+    while True:
+        try:
+            said = console.input(Text("  Which one? ", style=f"bold {ACCENT}")).strip()
+        except (KeyboardInterrupt, EOFError):
+            said = "keep"
+        word, _, rest = said.partition(" ")
+        word, rest = word.lower(), rest.strip()
+        try:
+            if word.isdigit():
+                console.print(Text(f"  {fleet.merge(int(word))}", style=f"bold {ACCENT}"))
+                return
+            if word in ("d", "diff") and rest.isdigit():
+                patch = fleet.diff(int(rest))
+                console.print(Syntax(patch, "diff", theme="ansi_dark", background_color="default")
+                              if patch.strip() else Text("  No changes.", style=DIM))
+            elif word in ("r", "read") and rest.isdigit():
+                console.print(Markdown(fleet.member(int(rest)).result or "(nothing)"))
+            elif word in ("c", "check") and rest:
+                with console.status(f"Running {rest} in each", spinner="dots"):
+                    fleet.run_check(rest)
+                _fleet_board(fleet)
+            elif word == "keep":
+                for m in fleet.members:
+                    console.print(Text(f"  {m.n}  {m.branch}  {m.path}", style=DIM))
+                console.print(Text("  Kept: each is a worktree on its own branch.", style=DIM))
+                return
+            elif word in ("drop", "none"):
+                fleet.discard()
+                console.print(Text("  Deleted them all.", style=DIM))
+                return
+            else:
+                console.print(Text("  A number, d N, r N, c COMMAND, keep or drop.", style=DIM))
+        except (ValueError, worktrees.WorktreeError) as exc:
+            warn(f"  {exc}")
+
+
+def _model_fit(client) -> None:
+    """/model fit: which models on this machine fit it, and how big a
+    model it could take."""
+
+    from . import hardware
+
+    here = hardware.machine()
+    console.print(Text(f"  This computer: {here.describe()}. It runs "
+                       f"{here.biggest()} quickly.", style=DIM))
+    try:
+        listed = getattr(client.list(), "models", None) or []
+    except Exception as exc:  # noqa: BLE001  (Ollama not answering)
+        warn(f"  Ollama did not answer: {exc}")
+        return
+    style = {hardware.FITS: ACCENT, hardware.TIGHT: WARN,
+             hardware.TOO_BIG: ERROR}
+    for model in listed:
+        size = int(getattr(model, "size", 0) or 0)
+        said = hardware.fit(size)
+        line = Text(f"  {getattr(model, 'model', '')}")
+        if size:
+            line.append(f"  {size / hardware.GB:.1f} GB", style=DIM)
+        if said:
+            line.append(f"  {said}", style=style[said])
+        console.print(line)
+
+
+def _fallbacks_command(arg: str) -> None:
+    """/fallbacks lists them; /fallbacks a > b > c sets a's; /fallbacks
+    clear a takes them off; * stands for every model."""
+
+    from . import modelchain
+
+    if not arg:
+        chains = modelchain.all_fallbacks()
+        if not chains:
+            console.print(Text(
+                "No fallbacks. /fallbacks model > another > a third "
+                "tries them in turn when model fails; * for every model.",
+                style=DIM))
+            return
+        for model, chain in chains.items():
+            line = Text(f"  {model}", style=f"bold {ACCENT}")
+            line.append(" > " + " > ".join(chain), style=DIM)
+            console.print(line)
+        return
+    action, _, rest = arg.partition(" ")
+    try:
+        if action.lower() in ("clear", "rm", "remove", "off"):
+            which = rest.strip() or Config.model or ""
+            modelchain.set_fallbacks(which, [])
+            console.print(Text(f"No fallbacks for {which}.", style=DIM))
+            return
+        model, chain = modelchain.parse_chain(arg)
+        if not chain:
+            # Just fallbacks: for the model in use.
+            model, chain = Config.model or "", [model]
+        modelchain.set_fallbacks(model, chain)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(f"When {model} fails: " + " > ".join(chain)
+                       + ", then it fails.", style=DIM))
 
 
 def _install_extension(spec: str) -> bool:
@@ -1956,6 +5446,9 @@ def _install_extension(spec: str) -> bool:
         existing = extensions.find(ext.name)
 
         console.print(_describe_extension(ext, source))
+        note = extensions.source_note(spec)
+        if note:
+            console.print(Text(f"  {note}", style=DIM))
 
         if existing and existing.source and existing.source != source:
             warn(
@@ -1997,12 +5490,39 @@ def _install_extension(spec: str) -> bool:
     return True
 
 
+def _update_extensions(name: str = "") -> bool:
+    """Pull NAME again from where it was installed from (every
+    extension, with no NAME). The old copy stays until the new one is
+    in place: an update that fails leaves it as it was."""
+
+    names = [name] if name else [e.name for e in extensions.installed()]
+    if not names:
+        console.print(Text("No extensions are installed.", style=DIM))
+        return True
+    worked = True
+    for each in names:
+        try:
+            source = extensions.update_source(each)
+        except extensions.ExtensionError as exc:
+            warn(str(exc))
+            worked = False
+            continue
+        worked = _install_extension(source) and worked
+    return worked
+
+
 def _remove_extension(name: str) -> bool:
     if not name:
         warn("Usage: /extension remove <name>")
         return False
 
-    if not extensions.remove(name):
+    try:
+        removed = extensions.remove(name)
+    except extensions.ExtensionError as exc:
+        _extensions_changed()
+        warn(str(exc))
+        return False
+    if not removed:
         warn(f"No extension called {name!r} is installed.")
         return False
 
@@ -2020,16 +5540,25 @@ def _extension_command(arg: str) -> None:
 
     if action in ("", "list", "ls"):
         _list_extensions()
-    elif action in ("install", "add", "update") and rest:
+    elif action in ("install", "add") and rest:
         _install_extension(rest)
+    elif action in ("update", "upgrade", "pull"):
+        if "@" in rest:
+            _install_extension(rest)
+        else:
+            _update_extensions(rest)
     elif action in ("remove", "uninstall", "rm"):
         _remove_extension(rest)
+    elif action == "settings" and rest:
+        _extension_settings(rest)
+    elif action == "set" and rest:
+        _set_extension_setting(rest)
     else:
         warn(EXTENSION_USAGE)
 
 
 def _handle_extension_flags(args) -> bool:
-    """Run --extension-install/-remove/-list. False on a failure."""
+    """Run flash install, remove or list. False on a failure."""
 
     if args.extension_install:
         return _install_extension(args.extension_install)
@@ -2037,8 +5566,232 @@ def _handle_extension_flags(args) -> bool:
     if args.extension_remove:
         return _remove_extension(args.extension_remove)
 
+    if args.extension_update is not None:
+        return _update_extensions(args.extension_update)
+
     _list_extensions()
     return True
+
+
+def _btw(question: str, history: list, working_on: str = "") -> str:
+    """Answer a side question from the conversation so far, with no
+    tools, and show it apart from the conversation, which it never
+    joins. Run on a thread of its own while a turn is going."""
+
+    from . import btw
+
+    if not question:
+        warn(btw.USAGE)
+        return ""
+    if not Config.model:
+        warn("No model is set. Pick one with /model.")
+        return ""
+    asked = Text(f"  {BRANCH} btw ", style=f"bold {ACCENT}")
+    asked.append(question, style=DIM)
+    console.print(asked)
+    try:
+        answer = btw.ask(
+            _client(), Config.model,
+            btw.context(history, question, working_on), _chat_options(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        warn(f"  The side question went unanswered: {exc}")
+        return ""
+    console.print(Panel(
+        Markdown(answer or "(no answer)"), border_style=DIM,
+        title=Text("btw", style=DIM), title_align="left", padding=(0, 1),
+    ))
+    return answer
+
+
+def _secret_command(arg: str) -> None:
+    """/secret list, set NAME, rm NAME: the vault, keys and passwords
+    Flash uses by name without seeing them."""
+
+    import getpass
+
+    from . import vault
+
+    action, _, name = arg.partition(" ")
+    name = name.strip()
+    try:
+        if action in ("", "list"):
+            have = vault.names()
+            console.print(Text(
+                ("Your secrets: " + ", ".join(have) + ". Flash uses each "
+                 "as {{secret:NAME}}, and never sees them.") if have else
+                "No secrets yet. /secret set NAME keeps one.", style=DIM))
+            console.print(Text(f"Their key is kept in {vault.where_kept()}.",
+                               style=DIM))
+        elif action == "set" and name:
+            value = getpass.getpass(f"  Value for {name} (not shown): ")
+            console.print(Text(vault.set_secret(name, value), style=DIM))
+            learning.refresh()
+        elif action in ("rm", "remove", "delete") and name:
+            console.print(Text(
+                f"Removed {name}." if vault.delete(name)
+                else f"There is no secret called {name}.", style=DIM))
+            learning.refresh()
+        else:
+            warn("Usage: /secret list, /secret set NAME, /secret rm NAME")
+    except (vault.VaultError, ImportError, OSError) as exc:
+        warn(str(exc))
+    except (EOFError, KeyboardInterrupt):
+        console.print(Text("Not kept.", style=DIM))
+
+
+def _capture_keys(line: str) -> str:
+    """LINE with any key pasted into it kept in the vault, and its name
+    in its place; the input history forgets the key too."""
+
+    from . import repl_input, vault
+
+    try:
+        line, kept = vault.capture(line)
+    except Exception:  # noqa: BLE001  (no vault: the line as it was)
+        return line
+    if kept:
+        console.print(Text(vault.note(kept), style=DIM))
+        with contextlib.suppress(OSError):
+            path = repl_input.HISTORY_PATH
+            path.write_text(vault.scrub(path.read_text(encoding="utf-8")),
+                            encoding="utf-8")
+    return line
+
+
+def _rate_command(line: str, history: list) -> None:
+    """/good and /bad [why]: the last reply was good or bad, and Flash
+    learns from it now, in the background."""
+
+    word, _, why = line.partition(" ")
+    reply = next((m.get("content") for m in reversed(history)
+                  if m.get("role") == "assistant"
+                  and isinstance(m.get("content"), str)
+                  and m["content"].strip()), "")
+    if not reply:
+        warn("There is no reply to rate yet.")
+        return
+    if not learning.rated(history, reply, word == "/good", why.strip(),
+                          host=Config.host, model=Config.model or ""):
+        warn("No model is set to learn with. Pick one with /model.")
+        return
+    console.print(Text(
+        "Thanks. Flash will keep doing that." if word == "/good" else
+        "Thanks. Flash will learn from it.", style=DIM))
+
+
+# The last debate here, for /debate more to keep going.
+_last_debate: dict = {}
+
+
+def _debate_command(line: str, history: list) -> None:
+    """/debate: two sides argue a question out, a turn at a time, then a
+    summary, which joins the conversation to go on from. Ctrl+C stops it
+    and keeps what was said; /debate more [steer] keeps the last one
+    going, steered by what follows it if anything does."""
+
+    from . import debate
+
+    rest = line[len("/debate"):].strip()
+    before: dict = {}
+    steer = ""
+    if rest == "more" or rest.startswith("more "):
+        before = dict(_last_debate)
+        if not before:
+            warn("There is no debate to keep going. /debate <question> "
+                 "starts one.")
+            return
+        question, models = before["question"], before.get("models", [])
+        steer = rest[len("more"):].strip()
+        rounds = 0
+        until = bool(before.get("until"))
+    else:
+        asked = debate.parse_full(line)
+        question, models, rounds = (asked["question"], asked["models"],
+                                    asked["rounds"])
+        until = asked["until"]
+    if not question:
+        warn(debate.USAGE)
+        return
+    if not Config.model:
+        warn("No model is set. Pick one with /model.")
+        return
+    # What has been said, as it comes, so a Ctrl+C keeps it.
+    heard: dict = {}
+    pieces: dict = {"summary": ""}
+
+    with console.status("The sides are arguing", spinner="dots") as live:
+        def say(event: dict) -> None:
+            if "turn" in event:
+                n = event["turn"]
+                if n not in heard:
+                    heard[n] = {"side": event["side"], "text": ""}
+                    if event["side"] != debate.USER:
+                        live.update(f"{debate.SIDES[event['side']]} is "
+                                    "speaking (Ctrl+C stops it)")
+                heard[n]["text"] += event.get("text", "")
+            elif "settled" in event:
+                live.update(f"Settled: {event['settled']}")
+            elif "summary" in event:
+                if not pieces["summary"]:
+                    live.update("Summing up")
+                pieces["summary"] += event["summary"]
+
+        try:
+            done = debate.run(question, _client(), models, Config.model,
+                              history=history, options=_chat_options(),
+                              say=say, turns=before.get("turns"),
+                              steers=lambda: [steer] if steer else [],
+                              rounds=rounds or debate.ROUNDS, until=until)
+        except KeyboardInterrupt:
+            turns = list(before.get("turns", [])) + [
+                heard[n] for n in sorted(heard) if heard[n]["text"].strip()]
+            done = {"question": question,
+                    "sides": before.get("sides") or list(debate.SIDES),
+                    "models": models, "turns": turns, "summary": "",
+                    "stopped": True}
+        except Exception as exc:  # noqa: BLE001
+            warn(f"  The debate stopped: {exc}")
+            return
+    new = done["turns"][len(before.get("turns", [])):]
+    if not new:
+        console.print(Text("Stopped before anyone said anything.",
+                           style=DIM))
+        return
+    colours = (ACCENT, "#5b8def")
+    console.print(Text(f"  Debate: {done['question']}"
+                       + (" (going on)" if before else ""), style="bold"))
+    for turn in new:
+        if turn["side"] == debate.USER:
+            console.print(Text(f"  You: {turn['text']}", style=DIM),
+                          justify="center")
+            continue
+        name = done["sides"][turn["side"]]
+        console.print(Panel(
+            Markdown(turn["text"] or "(nothing)"),
+            border_style=colours[turn["side"]],
+            title=Text(name, style=f"bold {colours[turn['side']]}"),
+            title_align="left" if turn["side"] == 0 else "right",
+            padding=(0, 1),
+        ))
+    if done.get("until"):
+        how = debate.settled_text(done.get("settled", ""), done["sides"])
+        console.print(Text(f"  Ended because {how}." if how else
+                           "  It never settled before the rounds ran out.",
+                           style=DIM))
+    if done["summary"]:
+        console.print(Panel(
+            Markdown(done["summary"]), border_style=DIM,
+            title=Text("Summary", style="bold"), title_align="left",
+            padding=(0, 1),
+        ))
+    elif done.get("stopped"):
+        console.print(Text("Stopped before the summary.", style=DIM))
+    console.print(Text("/debate more [what to argue next] keeps it going.",
+                       style=DIM))
+    _last_debate.clear()
+    _last_debate.update(done)
+    history.extend(debate.note(done))
 
 
 def _web_command(arg: str) -> None:
@@ -2056,12 +5809,35 @@ def _web_command(arg: str) -> None:
         ))
         return
 
-    if arg not in ("", "lan"):
-        warn("Usage: /web [lan|stop]")
+    if arg == "tunnel" or arg.startswith("tunnel "):
+        _web_tunnel(arg[len("tunnel"):].strip())
+        return
+
+    # Parts between semicolons or spaces, in any order: lan, port N.
+    lan = False
+    port: Optional[int] = None
+    words = arg.replace(";", " ").split()
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word == "lan":
+            lan = True
+        elif word == "port" and i + 1 < len(words) and \
+                words[i + 1].isdigit():
+            port = int(words[i + 1])
+            i += 1
+        elif word.startswith("port=") and word[5:].isdigit():
+            port = int(word[5:])
+        else:
+            warn("Usage: /web [lan] [port N] | stop | tunnel [service|off]")
+            return
+        i += 1
+    if port is not None and not 1 <= port <= 65535:
+        warn("A port is a number from 1 to 65535.")
         return
 
     try:
-        server = web.start_background(lan=arg == "lan")
+        server = web.start_background(port=port, lan=lan)
     except OSError as exc:
         show_error(str(exc))
         return
@@ -2074,7 +5850,751 @@ def _web_command(arg: str) -> None:
     ))
 
 
+def _web_tunnel(arg: str) -> None:
+    """/web tunnel: the web UI on a public address, through a tunnel
+    service, shown, started (/web tunnel cloudflare), or stopped."""
+
+    from . import tunnel, web
+
+    server = web.running_background()
+    if not arg:
+        found = server.session.tunnel if server else None
+        if found is not None and found.state == tunnel.ON:
+            line = Text("Flash is on the internet at ", style=WARN)
+            line.append(found.url, style=f"bold {ACCENT}")
+            console.print(line)
+            console.print(Text("/web tunnel off takes it off.", style=DIM))
+        body = Text("Tunnel services:\n", style=DIM)
+        for service in tunnel.services():
+            body.append(f"  {service['name']:<14}", style=ACCENT)
+            body.append(
+                service["about"] + ("" if service["installed"] else
+                                    f" Install: {service['install']}.")
+                + "\n", style=DIM)
+        body.append(
+            "/web tunnel <service> puts the web UI on the internet. Anyone "
+            "with its link can use Flash as you.", style=DIM)
+        console.print(body)
+        return
+    if arg == "off":
+        if server is not None:
+            server.session.tunnel.stop()
+        console.print(Text("Flash is off the internet.", style=DIM))
+        return
+    if server is None:
+        try:
+            server = web.start_background()
+        except OSError as exc:
+            show_error(str(exc))
+            return
+    console.print(Text(
+        "This puts Flash on the internet. Anyone who gets the link can use "
+        "it as you, from anywhere: read your chats, run commands, change "
+        "files, send messages. The link is as good as your password. Keep "
+        "autonomous mode off, and turn it off when you're done.",
+        style=WARN,
+    ))
+    prompt = Text("  Put Flash on the internet? ", style=DIM)
+    prompt.append("y", style=f"bold {ACCENT}")
+    prompt.append("/n ", style=DIM)
+    console.print(prompt, end="")
+    if yes_no() != "y":
+        console.print(Text("Left as it was.", style=DIM))
+        return
+    try:
+        console.print(Text("Opening it, and checking it reaches Flash…",
+                           style=DIM))
+        found = server.session.tunnel.start(
+            arg, server.port, check=web.reaches(server.session),
+        )
+    except tunnel.TunnelError as exc:
+        warn(str(exc))
+        return
+    link = f"{found['url']}/?token={server.token}"
+    line = Text("On the internet at ", style=WARN)
+    line.append(link, style=f"bold {ACCENT}")
+    console.print(line)
+    console.print(Text(web.qr_text(link), no_wrap=True, overflow="ignore"))
+    console.print(Text(
+        "Keep the link to yourself. /web tunnel off ends it; so does "
+        "quitting Flash.", style=WARN,
+    ))
+
+
+def _smarthome_command(arg: str) -> None:
+    """/smarthome: the devices and how each is. /smarthome connect
+    <address> connects Home Assistant (the token is asked for, and kept
+    in the vault); /smarthome off forgets it; anything else narrows the
+    list, like /smarthome kitchen."""
+
+    from . import smarthome, vault
+
+    words = arg.split()
+    try:
+        if words[:1] == ["connect"]:
+            if len(words) < 2:
+                show_error("Use /smarthome connect "
+                           "http://homeassistant.local:8123")
+                return
+            url = words[1].rstrip("/")
+            if not url.startswith(("http://", "https://")):
+                url = "http://" + url
+            console.print(Text(
+                "  A long-lived access token: in Home Assistant, your "
+                "profile, Security, Create token.", style=DIM))
+            token = console.input("  Token: ", password=True).strip()
+            if not token:
+                return
+            set_config_var(smarthome.URL_SETTING, url)
+            vault.set_secret(smarthome.TOKEN, token)
+            said = smarthome.check()
+            count = len(
+                [x for x in smarthome.listing().splitlines() if x])
+            console.print(Text(
+                f"Connected: {said}. {count} devices to control.",
+                style=DIM))
+            return
+        if words == ["off"]:
+            set_config_var(smarthome.URL_SETTING, "")
+            vault.delete(smarthome.TOKEN)
+            console.print(Text("Smart home disconnected.", style=DIM))
+            return
+        console.print(Text(smarthome.listing(arg.strip())))
+    except smarthome.HomeError as exc:
+        show_error(str(exc))
+
+
+def _instructions_command(arg: str) -> None:
+    """/instructions: the standing instructions for every reply; with
+    text, replaces them; /instructions clear removes them."""
+
+    from . import instructions
+
+    if arg:
+        try:
+            kept = instructions.save("" if arg.lower() == "clear" else arg)
+        except ValueError as exc:
+            warn(str(exc))
+            return
+        console.print(Text(
+            "Custom instructions saved: every reply follows them now."
+            if kept else "Custom instructions cleared.", style=DIM,
+        ))
+        return
+    text = instructions.read()
+    if not text:
+        console.print(Text(
+            "No custom instructions. /instructions <text> sets how every "
+            "reply should be, such as: use metric, no bullet points.",
+            style=DIM,
+        ))
+        return
+    body = Text("\nCustom instructions\n\n", style="bold")
+    body.append(f"{text}\n", style="")
+    body.append(
+        "\n  /instructions <text> replaces them; /instructions clear "
+        "removes them.\n", style=DIM,
+    )
+    console.print(body)
+
+
+# --- Kept conversations: /resume, /fork, /forks ---------------------------
+
+_session: Optional[Any] = None
+
+
+def _keep_session(messages: list) -> None:
+    """Keep this conversation, so /resume can pick it up again."""
+
+    global _session
+    from . import sessions
+
+    if not messages and _session is None:
+        return
+    if _session is None:
+        _session = sessions.Session()
+    try:
+        sessions.save(_session, messages)
+    except OSError:
+        pass  # not kept this time; the next turn tries again
+
+
+def _start_session(messages: list) -> None:
+    """Keep this conversation as it is, and start the next one afresh."""
+
+    global _session
+    _keep_session(messages)
+    _session = None
+
+
+def _ago(when: float) -> str:
+    gone = max(0, time.time() - when)
+    if gone < 60:
+        return "just now"
+    if gone < 3600:
+        return f"{int(gone // 60)} min ago"
+    if gone < 86400:
+        return f"{int(gone // 3600)} h ago"
+    return f"{int(gone // 86400)} d ago"
+
+
+def _recap(messages: list, turns: int = 2) -> None:
+    """The end of a conversation picked up again, so you know where it
+    was: its last few turns, short."""
+
+    shown = [m for m in messages if m.get("role") in ("user", "assistant")
+             and str(m.get("content") or "").strip()
+             and not str(m.get("content")).startswith(STEER_NOTE)]
+    for message in shown[-2 * turns:]:
+        mine = message["role"] == "user"
+        text = " ".join(str(message["content"]).split())
+        line = Text(f"  {'You' if mine else 'Flash'}  ",
+                    style=f"bold {ACCENT}" if not mine else "bold")
+        line.append(text if len(text) <= 160 else text[:159] + ELLIPSIS,
+                    style=DIM)
+        console.print(line)
+
+
+def _resume_command(arg: str, messages: list) -> None:
+    """/resume: pick a kept conversation up again, from a list, the
+    latest first; /resume <words> picks the latest whose title has them."""
+
+    global _session
+    from . import sessions
+
+    listed = [s for s in sessions.listing()
+              if _session is None or s["id"] != _session.id]
+    words = arg.lower().strip()
+    if words:
+        listed = [s for s in listed if words in s["title"].lower()]
+    if not listed:
+        warn("No other conversations to pick up." if not words else
+             f"No conversation's title has {arg!r}.")
+        return
+    if words or not model_picker.can_pick():
+        if not words:
+            for s in listed[:20]:
+                console.print(Text(f"  {s['title'] or '(untitled)'}  ",
+                                   style="bold").append(
+                    f"{s['turns']} turns · {_ago(s['updated'])}", style=DIM))
+            console.print(Text("/resume <words from a title> picks one.",
+                               style=DIM))
+            return
+        chosen = listed[0]["id"]
+    else:
+        names: dict[str, str] = {}
+        rows = []
+        for s in listed:
+            name = s["title"] or "(untitled)"
+            while name in names:
+                name += " "
+            names[name] = s["id"]
+            where = s["cwd"].replace(str(Path.home()), "~", 1)
+            rows.append(model_picker.Model(
+                name=name, note=_ago(s["updated"]),
+                summary=f"{s['turns']} turn{'' if s['turns'] == 1 else 's'}"
+                + (f" · {s['forks']} forks" if s["forks"] else "")
+                + (f" · in {where}" if where else ""),
+            ))
+        picked = model_picker.choose(
+            rows, title="Pick up a conversation",
+            unmatched="nothing is called {typed!r}", empty="none kept yet",
+        )
+        if not picked or picked not in names:
+            return
+        chosen = names[picked]
+    if messages:
+        _keep_session(messages)
+    _session = sessions.load(chosen)
+    messages[:] = _session.messages
+    clear_collapsed()
+    plan.clear()
+    worknotes.clear()
+    console.print(Text(f"Picked up: {_session.title or 'a conversation'}"
+                       + (f" (fork {_session.fork})"
+                          if _session.fork and _session.fork != sessions.MAIN
+                          else ""), style=f"bold {ACCENT}"))
+    if _session.cwd and _session.cwd != os.getcwd():
+        console.print(Text(f"  It was started in {_session.cwd}.",
+                           style=DIM))
+    _recap(messages)
+
+
+def _fork_command(arg: str, messages: list) -> None:
+    """/fork [n]: try another way, from here or N turns back. The way it
+    went is kept: /forks goes back to it."""
+
+    from . import sessions
+
+    try:
+        back = int(arg) if arg else 0
+    except ValueError:
+        warn("Usage: /fork, or /fork <turns back>")
+        return
+    if not messages:
+        warn("Nothing to fork yet.")
+        return
+    _keep_session(messages)
+    try:
+        made, kept = sessions.fork(_session, messages, back,
+                                   (STEER_NOTE, TOOL_IMAGE_NOTE))
+    except sessions.SessionError as exc:
+        warn(str(exc))
+        return
+    messages[:] = kept
+    clear_collapsed()
+    console.print(Text(
+        f"Forked ({made}). Carry on from "
+        + ("here" if not back else f"{back} turn{'' if back == 1 else 's'}"
+           " back")
+        + "; /forks goes back to the way it went.", style=DIM))
+    if back:
+        _recap(messages, 1)
+
+
+def _forks_command(arg: str, messages: list) -> None:
+    """/forks: this conversation's forks as a tree, to pick one from;
+    /forks rm <id> lets one go."""
+
+    from . import sessions
+
+    if _session is None or not _session.forks:
+        console.print(Text("No forks yet. /fork tries another way from "
+                           "here, or /fork 2 from two turns back.",
+                           style=DIM))
+        return
+    action, _, rest = arg.partition(" ")
+    try:
+        if action in ("rm", "remove", "delete") and rest.strip():
+            messages[:] = sessions.delete_fork(_session, messages,
+                                               rest.strip())
+            console.print(Text(f"Fork {rest.strip()} deleted.", style=DIM))
+            return
+        if action and action not in ("rm", "remove", "delete"):
+            messages[:] = sessions.switch(_session, messages, action)
+            console.print(Text(f"On fork {action}.", style=DIM))
+            _recap(messages, 1)
+            return
+    except sessions.SessionError as exc:
+        warn(str(exc))
+        return
+    rows = sessions.tree(_session, messages)
+    if not model_picker.can_pick():
+        for row in rows:
+            line = Text(f"  {row['lead']}")
+            line.append(row["id"], style=f"bold {ACCENT}" if row["current"]
+                        else "bold")
+            line.append(f"  {row['label']}  ", style="")
+            line.append(f"{row['turns']} turns"
+                        + (" · showing" if row["current"] else ""),
+                        style=DIM)
+            console.print(line)
+        return
+    picked = model_picker.choose(
+        [model_picker.Model(
+            name=f"{row['lead']}{row['label'] or row['id']}",
+            note="showing" if row["current"] else row["id"],
+            summary=f"{row['turns']} turns" + (
+                f" · last: {row['last']}" if row["last"] else ""),
+        ) for row in rows],
+        title="Forks (rm with /forks rm <id>)",
+        unmatched="nothing is called {typed!r}", empty="no forks",
+        start=next((i for i, r in enumerate(rows) if r["current"]), 0),
+    )
+    found = next((r for r in rows
+                  if f"{r['lead']}{r['label'] or r['id']}" == picked), None)
+    if found is None or found["current"]:
+        return
+    messages[:] = sessions.switch(_session, messages, found["id"])
+    console.print(Text(f"On fork {found['id']}.", style=DIM))
+    _recap(messages, 1)
+
+
+def _review_command(arg: str, messages: list[dict]) -> None:
+    """/review [branch|commit|a..b]: the change reviewed for bugs. What
+    it found joins the conversation as Flash's answer, so "fix them" is
+    the next message rather than a paste."""
+
+    from .tools import review_code
+
+    if not Config.model:
+        show_error("Model is not set. Use `/model <model>` to set it.")
+        return
+    said = review_code(arg)
+    if said.startswith("Error:"):
+        return
+    messages += [
+        _message("user", "Review " + (arg or "my uncommitted changes")
+                 + " for bugs."),
+        _message("assistant", said),
+    ]
+
+
+def _think_command(arg: str) -> None:
+    """/think auto on|off: whether Flash may turn its thinking on by
+    itself, for a message it judges needs it. Bare, says which it is."""
+
+    from .tools import THINK_AUTO_SETTING, think_auto
+
+    words = arg.lower().split()
+    if words[:1] == ["auto"] and words[1:2] in (["on"], ["off"]):
+        set_config_var(THINK_AUTO_SETTING, "1" if words[1] == "on" else "0")
+    elif words:
+        console.print(Text("Use /think auto on or /think auto off.",
+                           style=WARN))
+        return
+    can = _think_level() is not None
+    console.print(Text(
+        ("Flash turns its thinking on when a message needs it"
+         if think_auto() else "Flash thinks only when you ask it to")
+        + ("." if can else f", but {Config.model} cannot think apart "
+           "from its answer."),
+        style=DIM,
+    ))
+
+
+def _briefing_about(card: dict) -> str:
+    """A line for the box, to ask Flash about CARD."""
+
+    body = " ".join(str(card.get("body") or "").split())
+    body = body if len(body) <= 300 else body[:299] + "…"
+    who = f", {card['who']}" if card.get("who") else ""
+    return (f"From my briefing ({card['label'].lower()}{who}): "
+            f"\"{card['title']}\"" + (f": {body}" if body else "") + " ")
+
+
+def _briefing_command() -> None:
+    """/briefing: what came in while you were away, a card at a time,
+    full screen, as on the web. What the user picks on a card is done
+    once it closes: a reply or a question starts in the box."""
+
+    from . import briefing, briefing_view, sparks
+
+    console.print(Text("Gathering your briefing…", style=DIM))
+    problems: list[str] = []
+    cards = briefing.cards(None, problems=problems, since=briefing.opened())
+    missed = tuple(p.split(":")[0] for p in problems)
+    if not model_picker.can_pick():
+        for card in cards:
+            line = Text(f"{card['label']}: ", style="bold")
+            line.append(card["title"])
+            line.append(f"  {briefing_view.when(card)}", style=DIM)
+            console.print(line)
+        console.print(Text(
+            f"{len(cards)} card{'s' if len(cards) != 1 else ''}"
+            + (f"; could not look at {', '.join(missed)}" if missed else ""),
+            style=DIM,
+        ))
+        return
+    chosen = briefing_view.feed(cards, missed)
+    if not chosen:
+        return
+    action, card = chosen
+    kind = card["kind"]
+    if action == "ask":
+        carry(_briefing_about(card))
+    elif action == "reply" and kind == "email":
+        carry(f"Reply to the email from {card.get('who')} about "
+              f"\"{card['title']}\" (uid {card.get('uid')} in "
+              f"{card.get('account')}). Say: ")
+    elif action == "reply" and kind == "imessage":
+        to = f"the {card['place']} group" if card.get("place") \
+            else card.get("who")
+        carry(f"Reply to {to} on iMessage: ")
+    elif action == "reply" and kind == "spark":
+        _sparks_command(f"chat {card['spark']}")
+    elif action in ("reply", "open") and kind == "ping":
+        # Where it was said: the team's chat, or a chat with the spark.
+        _sparks_command(f"teamchat {card['team']}" if card.get("team")
+                        else f"chat {card['spark']}")
+    elif action == "open" and kind == "team":
+        _sparks_command(f"teamchat {card['team']}")
+    elif action == "open" and kind == "email" and card.get("link"):
+        import webbrowser
+
+        webbrowser.open(card["link"])
+    elif action == "open" and kind == "spark":
+        spark = sparks.find(card["spark"])
+        report = next((r for r in (spark.reports if spark else [])
+                       if int(r.at) == int(card["at"])), None)
+        if report is None:
+            console.print(Text("That report is gone.", style=DIM))
+            return
+        console.print(Panel(
+            Markdown(report.text), title=card["title"], title_align="left",
+            box=ROUNDED, border_style=DIM, padding=(0, 1),
+        ))
+        sparks.mark_read(spark.id)
+
+
+def _loader_command(arg: str) -> None:
+    """/loader: pick the animation that turns while Flash works, from a
+    list with each one's frames, or name one; /loader morph [on|off] has
+    it turn into another every few seconds."""
+
+    from .models import Model, can_pick, choose
+
+    every = loaders.all_loaders()
+    now = loaders.chosen()
+
+    def preview(loader) -> str:
+        fancy = can_encode("".join(loader.frames))
+        frames = loader.frames if fancy else loader.ascii
+        # Spaces shown as dots, or a frame that moves by them reads as
+        # the same frame over and over.
+        return "  ".join(
+            f.replace(" ", "·") if len(f) > 1 else (f.strip() or "·")
+            for f in frames[:8]
+        )
+
+    word, _, rest = arg.partition(" ")
+    if word.lower() == "morph":
+        rest = rest.strip().lower()
+        if rest in ("", "toggle"):
+            on = not loaders.morphing()
+        elif rest in ("on", "enable", "true", "1"):
+            on = True
+        elif rest in ("off", "disable", "false", "0"):
+            on = False
+        else:
+            warn("Usage: /loader morph [on|off]")
+            return
+        set_config_var(loaders.MORPH_SETTING, "1" if on else "0")
+        console.print(Text(
+            f"Morph on: every {loaders.MORPH_SECONDS:.0f}s the loader "
+            "turns into another, at random." if on else "Morph off.",
+            style=DIM,
+        ))
+        return
+
+    if not arg or arg == "list":
+        rows = [
+            Model(
+                loader.name,
+                (loader.about + (f" (from {loader.source})"
+                                 if loader.source else "")),
+                note=preview(loader)
+                + ("   in use" if loader.id == now else ""),
+            )
+            for loader in every
+        ]
+        if arg == "list" or not can_pick():
+            for row in rows:
+                line = Text("  ")
+                line.append(row.name.ljust(10), style="bold")
+                line.append(f" {row.note}", style=ACCENT)
+                console.print(line)
+            console.print(Text(
+                "  Morph is "
+                + ("on" if loaders.morphing() else "off")
+                + ": /loader morph on|off", style=DIM,
+            ))
+            return
+        start = next(
+            (i for i, loader in enumerate(every) if loader.id == now), 0,
+        )
+        arg = choose(
+            rows, title="Loading animation",
+            unmatched="no loader is called {typed!r}",
+            empty="no loaders", start=start,
+        ) or ""
+        if not arg:
+            return
+
+    found = loaders.find(arg)
+    if found is None:
+        warn(
+            f"No loader is called {arg!r}. /loader lists them: "
+            + ", ".join(loader.id for loader in every) + "."
+        )
+        return
+    set_config_var(loaders.SETTING, found.id)
+    line = Text(f"Loader: {found.name}  ", style=DIM)
+    line.append(preview(found), style=ACCENT)
+    console.print(line)
+
+
+HOST_USAGE = "Usage: /host [<name|url>|list|add <url> [name]|remove <name>]"
+
+
+def _find_host(wanted: str) -> Optional[dict]:
+    """The listed host WANTED names, by its name or its address."""
+
+    from . import workspace
+
+    listed = workspace.hosts(Config.host)
+    by_name = [h for h in listed if h["name"].lower() == wanted.lower()]
+    if by_name:
+        return by_name[0]
+    key = workspace.host_key(wanted)
+    return next(
+        (h for h in listed if workspace.host_key(h["url"]) == key), None,
+    )
+
+
+def _host_rows() -> tuple[list, int]:
+    """The hosts as picker rows, each checked, and the one in use."""
+
+    from . import workspace
+    from .models import Model
+
+    in_use = workspace.host_key(Config.host)
+    rows, start = [], 0
+    for at, host in enumerate(workspace.hosts_with_health(Config.host)):
+        state = (
+            "up" if host["up"] else
+            "needs key" if host["refused"] else "down"
+        )
+        if workspace.host_key(host["url"]) == in_use:
+            start = at
+            state += ", in use"
+        rows.append(Model(
+            host["name"],
+            host["url"] + ("  (API key saved)" if host.get("locked") else ""),
+            note=state,
+        ))
+    return rows, start
+
+
+def _switch_host(url: str) -> None:
+    """Use the Ollama at URL from the next message on, as the web UI's
+    host menu does, and say how it answers."""
+
+    from . import workspace
+    from .models import installed_models
+
+    url = workspace.normalize_host(url)
+    set_config_var("OLLAMA_HOST", url)
+    # The same model name can be a different model on another server.
+    forget_model_facts()
+    found = _find_host(url)
+    name = found["name"] if found else url
+    state = workspace.host_state(url)
+    if state == "refused":
+        warn(
+            f"Switched to {name}, but it turned Flash away: it wants an "
+            f"API key. /host add {url} saves one."
+        )
+        return
+    if state != "up":
+        warn(f"Switched to {name}, but nothing answers at {url} yet.")
+        return
+    console.print(Text(f"Switched to {name} ({url}).", style=DIM))
+    if not Config.model or providers.routed(Config.model):
+        return
+    rows = installed_models(_client(), Config.model)
+    if rows is not None and not any(r.note == "active" for r in rows):
+        warn(f"{Config.model} is not on this host. /model picks one here.")
+
+
+def _pin_model(on: bool, name: str) -> None:
+    """/model pin and /model unpin: keep a model at the top of this
+    host's list, in the picker here and in the web UI's, or stop."""
+
+    from . import workspace
+
+    name = name or Config.model or ""
+    if not name:
+        warn("Name a model to pin: /model pin <model>")
+        return
+    pinned = workspace.pin_model(Config.host, name, on)
+    shown = Text(
+        f"{'Pinned' if on else 'Unpinned'} {name} on this host.",
+        style=DIM,
+    )
+    if pinned:
+        shown.append(f" Pinned here: {', '.join(pinned)}.", style=DIM)
+    console.print(shown)
+
+
+def _host_command(arg: str) -> None:
+    """/host: pick, switch, list, add, or remove an Ollama server. The
+    hosts are the web UI's, so one saved in either shows in both."""
+
+    from . import workspace
+    from .models import can_pick, choose
+
+    action, _, rest = arg.partition(" ")
+    action, rest = action.lower(), rest.strip()
+
+    try:
+        if not arg:
+            if not can_pick():
+                action = "list"
+            else:
+                rows, start = _host_rows()
+                picked = choose(
+                    rows, title="Switch host",
+                    unmatched="Enter switches to {typed!r}",
+                    empty="Type an address to switch to",
+                    start=start,
+                )
+                if picked:
+                    found = _find_host(picked)
+                    _switch_host(found["url"] if found else picked)
+                return
+
+        if action == "list":
+            rows = _host_rows()[0]
+            names = max(len(r.name) for r in rows)
+            urls = max(len(r.summary) for r in rows)
+            for row in rows:
+                state, _, in_use = row.note.partition(", ")
+                line = Text("  ")
+                line.append(row.name.ljust(names),
+                            style="bold" if in_use else "")
+                line.append(f"  {row.summary.ljust(urls)}  ", style=DIM)
+                line.append(state, style="green" if state == "up"
+                            else "yellow")
+                if in_use:
+                    line.append(f"  {in_use}", style=DIM)
+                console.print(line)
+            return
+
+        if action == "add":
+            url, _, name = rest.partition(" ")
+            if not url:
+                warn("Usage: /host add <url> [name]")
+                return
+            url = workspace.normalize_host(url)
+            import getpass
+
+            try:
+                key = getpass.getpass(
+                    "  API key, if the server asks for one "
+                    "(hidden, Enter for none): "
+                )
+            except (EOFError, KeyboardInterrupt):
+                key = ""
+            added = workspace.add_host(name, url, key)
+            console.print(Text(f"Saved {added['name']}.", style=DIM))
+            _switch_host(added["url"])
+            return
+
+        if action in ("remove", "rm"):
+            found = _find_host(rest) if rest else None
+            if found is None or not found.get("saved"):
+                warn(
+                    f"No saved host is called {rest!r}." if rest
+                    else "Usage: /host remove <name>"
+                )
+                return
+            if workspace.host_key(found["url"]) == \
+                    workspace.host_key(Config.host):
+                warn("That host is in use. Switch to another one first.")
+                return
+            workspace.remove_host(found["url"])
+            console.print(Text(f"Removed {found['name']}.", style=DIM))
+            return
+
+        found = _find_host(arg)
+        _switch_host(found["url"] if found else arg)
+    except workspace.WorkspaceError as exc:
+        warn(f"{exc}. {HOST_USAGE}")
+
+
 def _print_backend_error(detail: str) -> None:
+    progress.failed(detail)
     show_error(f"Ollama backend error: {detail}")
 
 
@@ -2089,7 +6609,10 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
-    text = render_latex(text)
+    # A spoken reply's cues ([happy], [laugh]) are said, never shown.
+    text = render_latex(serif.for_terminal(visuals.for_terminal(
+        frontmatter.for_terminal(humanvoice.strip(text))
+    )))
 
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)
@@ -2123,20 +6646,72 @@ KEYS = [
     ("Alt+Enter", "new line (or end the line with \\ and press Enter)"),
     ("Up / Down", "earlier messages, kept across sessions"),
     ("Ctrl+R", "search earlier messages"),
-    ("Shift+Tab", "toggle autonomous mode"),
+    ("Shift+Tab", "ask first, autonomous, then UltraAuto if allowed"),
     ("Ctrl+O", "show tool output that was cut short this turn"),
     ("Ctrl+C", "stop the model mid-answer"),
+    ("Enter, while working", "steer: the model reads it before its next step"),
+    ("Tab, while working", "queue it to run once this turn is done"),
 ]
 
 
-def _set_auto(on: bool) -> None:
-    """Autonomous mode on or off, from /auto, saying which."""
+ULTRA_WARNING = (
+    "UltraAuto never stops to ask you about anything. Flash and every "
+    "spark run commands and edits, send email and iMessages in your name, "
+    "hire and let go of sparks, change things through connected apps, and "
+    "take over the mouse and keyboard with Computer Use, all without a "
+    "word to you first. None of that can be taken back. System One still "
+    "reviews each step if it is on; nothing else does."
+)
 
-    set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
-    state = "enabled" if on else "disabled"
-    console.print(
-        Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
-    )
+
+def _set_auto(on) -> None:
+    """A mode from /auto (True or False for autonomous or not, or one of
+    MODES), saying which."""
+
+    name = on if isinstance(on, str) else ("auto" if on else "ask")
+    try:
+        name = set_mode(name)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    said = {"ask": "Autonomous mode disabled.",
+            "auto": "Autonomous mode enabled.",
+            "careful": "Careful mode on: only high-stakes commands ask.",
+            "ultra": "UltraAuto on: nothing asks first."}[name]
+    colour = WARN if name == "ultra" else ACCENT
+    console.print(Text(said, style=f"bold {colour}"))
+    if name != "ask" and systemone.enabled():
+        console.print(Text(
+            f"  System One ({systemone.model()}) reviews each command and "
+            "edit before it runs.", style=DIM,
+        ))
+
+
+def _ultra_command(words: list[str]) -> None:
+    """/auto ultra: UltraAuto, allowed first (with a warning and a typed
+    yes) when it is not yet; /auto ultra off stops offering it."""
+
+    if words == ["off"]:
+        allow_ultra(False)
+        console.print(Text(
+            "UltraAuto is off and no longer offered."
+            + (" Autonomous mode is still on." if
+               Config.no_command_confirmation else ""),
+            style=DIM,
+        ))
+        return
+    if words:
+        warn("Usage: /auto ultra [off]")
+        return
+    if not Config.ultra_allowed:
+        warn(ULTRA_WARNING)
+        prompt = Text("  Type ultra to allow it: ", style=DIM)
+        console.print(prompt, end="")
+        if typed().strip().lower() != "ultra":
+            console.print(Text("  Not allowed.", style=DIM))
+            return
+        allow_ultra(True)
+    _set_auto("ultra")
 
 
 def _hard_breaks(text: str) -> str:
@@ -2170,12 +6745,18 @@ def _render_sent_message(
     the plain text prompt_toolkit erased on submit -- so things like
     `code` show up highlighted rather than as raw backticks."""
 
-    prompt = Text.from_ansi(prompt_ansi)
-    body = Markdown(
-        _hard_breaks(render_latex(text)),
-        code_theme="monokai",
-        hyperlinks=True,
-    )
+    # A shell command keeps the ! prompt it was typed at, and its text
+    # as typed: Markdown would eat a `*` or a `_` out of it.
+    if is_shell_line(text):
+        prompt = Text.from_ansi(shell_prompt(prompt_ansi))
+        body = Text(text[1:].strip())
+    else:
+        prompt = Text.from_ansi(prompt_ansi)
+        body = Markdown(
+            _hard_breaks(render_latex(text)),
+            code_theme="monokai",
+            hyperlinks=True,
+        )
 
     def paint() -> None:
         console.print(prompt, end="")
@@ -2233,7 +6814,7 @@ def _set_voice(on: bool) -> None:
     if on:
         missing = missing_packages()
         if missing:
-            show_error(VOICE_INSTALL_HINT)
+            show_error(install_hint())
             return
 
         if not models_present() and not _download_voice_models():
@@ -2248,7 +6829,7 @@ def _set_voice(on: bool) -> None:
     told = Text()
     told.append("Voice mode on. ", style=f"bold {ACCENT}")
     told.append(
-        "Press Enter on an empty line to start talking."
+        "Press Enter on an empty line to start talking. "
         "Talk over a reply with \"interrupt\" to cut it "
         "short, and say \"voice off\" to stop the conversation; Enter "
         "starts it again.\nType /voice off to disable voice mode "
@@ -2258,8 +6839,9 @@ def _set_voice(on: bool) -> None:
     console.print(told)
 
 
-def _voice_input() -> Optional[str]:
-    """Record one spoken turn and return it, or None if nothing was said."""
+def _voice_input(stop: Optional[Callable[[], bool]] = None) -> Optional[str]:
+    """Record one spoken turn and return it, or None if nothing was said
+    (or STOP said to give up listening)."""
 
     # VOICE can be set by hand, and a model directory can be deleted, so
     # the models are checked here rather than only when /voice turns on.
@@ -2269,13 +6851,28 @@ def _voice_input() -> Optional[str]:
     try:
         with Live(Text(), console=console, transient=True,
                   refresh_per_second=10) as live:
-            def on_state(state: str) -> None:
-                live.update(Text(
-                    f"{VOICE_STATES.get(state, state)}{ELLIPSIS}",
-                    style=ACCENT,
-                ))
+            now = {"state": "", "words": ""}
 
-            heard, why = listen(on_state)
+            def draw() -> None:
+                shown = Text(
+                    f"{VOICE_STATES.get(now['state'], now['state'])}"
+                    f"{ELLIPSIS}",
+                    style=ACCENT,
+                )
+                # What has been heard so far, as it is said.
+                if now["words"]:
+                    shown.append(f"\n  {now['words']}")
+                live.update(shown)
+
+            def on_state(state: str) -> None:
+                now["state"] = state
+                draw()
+
+            def on_words(words: str) -> None:
+                now["words"] = words
+                draw()
+
+            heard, why = listen(on_state, on_words, stop=stop)
     except KeyboardInterrupt:
         # Ctrl+C ends the spoken turn and hands the prompt back, rather
         # than tearing down whatever else the main loop was doing.
@@ -2287,10 +6884,208 @@ def _voice_input() -> Optional[str]:
         return None
 
     if not heard:
-        console.print(Text("Nothing heard.", style=DIM))
+        if stop is None or not stop():
+            console.print(Text("Nothing heard.", style=DIM))
         return None
 
     return heard
+
+
+def voice_styles() -> list[str]:
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    return list(voice.STYLES)
+
+
+def _voice_style(name: str) -> None:
+    """Show the voice's styles, or pick one."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    if name:
+        if name not in voice.STYLES:
+            warn(f"No style called {name!r}. Try {', '.join(voice.STYLES)}.")
+            return
+        set_config_var("VOICE_STYLE", name)
+    body = Text("\nHow Flash's voice speaks\n\n", style="bold")
+    for style_name, style in voice.STYLES.items():
+        current = style_name == voice.voice_style()
+        body.append("  ● " if current else "    ", style=ACCENT)
+        body.append(f"{style_name:<8}", style=ACCENT if current else "")
+        body.append(f"{style.label.split(': ', 1)[-1]}\n", style=DIM)
+    body.append("\n  /voice style <name> picks one.\n", style=DIM)
+    console.print(body)
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{round(size / 1e6)} MB"
+
+
+def _voice_models() -> None:
+    """/voice models: what Flash can listen and speak with, which are
+    downloaded, and which are in use."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    console.print()
+    for kind, title in (("listening", "Listening, speech to text"),
+                        ("speaking", "Speaking, text to speech")):
+        console.print(Text(title, style="bold"))
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(no_wrap=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(no_wrap=True, justify="right")
+        grid.add_column()
+        in_use = voice.model_in_use(kind)
+        engine = ""
+        for choice in voice.by_engine(voice.offered(kind)):
+            # Each engine's together, a line between them.
+            if voice.engine_label(choice.name) != engine:
+                engine = voice.engine_label(choice.name)
+                grid.add_row(Text(""), Text(f"── {engine} ", style=DIM),
+                             Text(""), Text(""))
+            current = choice.name == in_use
+            have = voice.model_installed(kind, choice.name)
+            ready = "ready" if voice.is_extension(choice.name) \
+                or voice.siri.is_siri(choice.name) else "downloaded"
+            grid.add_row(
+                Text("  ●" if current else "   ", style=ACCENT),
+                Text(choice.name, style=ACCENT if current else ""),
+                Text(ready if have else _megabytes(choice.size),
+                     style=DIM),
+                Text(choice.label, style=DIM),
+            )
+        console.print(grid)
+        console.print()
+    console.print(Text(
+        "  /voice listen and /voice speak pick one from a list. "
+        "/voice pull <name> downloads one and switches to it, and "
+        "/voice remove <name> deletes one. Part of a name will do: "
+        "/voice pull ryan.", style=DIM,
+    ))
+
+
+def _voice_pick(kind: str) -> None:
+    """/voice listen and /voice speak: pick what Flash listens or speaks
+    with from a list, each engine's together; a pick not downloaded yet
+    downloads first."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    if not model_picker.can_pick():
+        _voice_models()
+        return
+    in_use = voice.model_in_use(kind)
+    choices = voice.by_engine(voice.offered(kind))
+    rows = [
+        model_picker.Model(
+            name=choice.name,
+            summary=f"{voice.engine_label(choice.name)}: {choice.label}",
+            size=_megabytes(choice.size),
+            note="in use" if choice.name == in_use else (
+                "downloaded" if voice.model_installed(kind, choice.name)
+                else ""),
+        )
+        for choice in choices
+    ]
+    start = next((i for i, c in enumerate(choices) if c.name == in_use), 0)
+    chosen = model_picker.choose(
+        rows,
+        title="Listen with" if kind == "listening" else "Speak with",
+        unmatched="nothing is called {typed!r}",
+        empty="no models",
+        start=start,
+    )
+    if chosen and any(c.name == chosen for c in choices):
+        _voice_pull(chosen)
+
+
+def _voice_download(kind: str, name: str) -> str:
+    """Download NAME with a progress line, on a thread so Ctrl+C can
+    call it off. Returns what voice.download_model does."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    stop = threading.Event()
+    result = [""]
+    last: list = [None]
+    with Live(Text(f"Starting the download{ELLIPSIS}", style=DIM),
+              console=console, transient=True,
+              refresh_per_second=10) as live:
+        def on_progress(label: str, percent: int) -> None:
+            if last[0] != (label, percent):
+                last[0] = (label, percent)
+                live.update(_voice_progress_line(label, percent))
+
+        def fetch() -> None:
+            try:
+                result[0] = voice.download_model(
+                    kind, name, on_progress, stop,
+                )
+            finally:
+                done.set()
+
+        # Waited on with an event rather than join(): a Ctrl+C landing in
+        # join() can leave the thread looking finished while it is not.
+        done = threading.Event()
+        threading.Thread(target=fetch, daemon=True).start()
+        try:
+            while not done.wait(0.1):
+                pass
+        except KeyboardInterrupt:
+            stop.set()
+            done.wait()
+    return result[0]
+
+
+def _voice_pull(query: str) -> None:
+    """/voice pull <name>: download a listening model or a voice, if it is
+    not already, and switch to it."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    try:
+        kind, choice = voice.find_model(query)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    if not voice.model_installed(kind, choice.name):
+        console.print(Text(
+            f"Downloading {choice.name}, {_megabytes(choice.size)}. "
+            "Ctrl+C stops it.", style=DIM,
+        ))
+        why = _voice_download(kind, choice.name)
+        if why == voice.CANCELLED:
+            console.print(Text("Download stopped. Nothing of it was kept.",
+                               style=DIM))
+            return
+        if why:
+            show_error(why)
+            return
+    set_config_var(voice.SETTINGS[kind], choice.name)
+    doing = "listens with" if kind == "listening" else "speaks with"
+    console.print(Text(f"Flash {doing} {choice.name} now.",
+                       style=f"bold {ACCENT}"))
+
+
+def _voice_remove(query: str) -> None:
+    """/voice remove <name>: delete a downloaded model not in use."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    try:
+        kind, choice = voice.find_model(query)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    if choice.name == voice.model_in_use(kind):
+        warn(f"{choice.name} is in use. /voice pull another one first.")
+        return
+    if not voice.model_installed(kind, choice.name):
+        console.print(Text(f"{choice.name} is not downloaded.", style=DIM))
+        return
+    voice.remove_model(kind, choice.name)
+    console.print(Text(f"Removed {choice.name}.", style=DIM))
 
 
 def _speak_reply(text: str, heard: bool = True) -> bool:
@@ -2327,6 +7122,21 @@ def _speak_reply(text: str, heard: bool = True) -> bool:
     return True
 
 
+def _uninstall_command(args) -> None:
+    """flash uninstall: everything Flash set up, then Flash."""
+
+    from . import uninstall
+
+    if not confirm("Uninstall Flash from this machine?"):
+        console.print(Text("Nothing was changed.", style=DIM))
+        return
+    purge = True if args.purge else False if args.keep_data else None
+    if purge is None and getattr(args, "yes", False):
+        purge = False  # -y never deletes what you made
+    uninstall.run(purge=purge, ask=confirm,
+                  say=lambda line: console.print(Text(line, style=DIM)))
+
+
 def _handle_scheme_flags(args) -> None:
     """Run --register-url-scheme / --unregister-url-scheme and exit."""
 
@@ -2352,9 +7162,48 @@ def _handle_scheme_flags(args) -> None:
         sys.exit(1)
 
 
-def _run_update(*, force: bool = False) -> bool:
+def _run_update(*, force: bool = False, dev: bool = False) -> bool:
     """Check for a newer Flash version and, if one exists (or FORCE),
-    install it. Returns False only on an actual failure."""
+    install it. Returns False only on an actual failure. Installed from
+    the dev branch (or DEV), the newest commit there is what's newer: its
+    version number doesn't change with every change."""
+
+    from . import updater
+
+    was = updater.installed()
+    branch = "dev" if dev else was["branch"]
+    if branch != "main":
+        with console.status(
+            f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
+            spinner="bouncingBall", spinner_style=ACCENT
+        ):
+            newest = updater.remote_commit(branch)
+        if newest is None and not force:
+            warn("Could not check for updates "
+                 "(no network, GitHub unreachable, or git missing).")
+            return False
+        if (newest and newest == was["commit"] and branch == was["branch"]
+                and not force):
+            console.print(Text(f"Already up to date ({branch}, "
+                               f"{newest[:7]}).", style=DIM))
+            return True
+        if not force:
+            target = f"the latest {branch}" + (f" ({newest[:7]})"
+                                               if newest else "")
+            ask = Text(f"  Update Flash to {target}? ", style=DIM)
+            ask.append("y", style=f"bold {ACCENT}")
+            ask.append("/n ", style=DIM)
+            console.print(ask, end="")
+            try:
+                answer = yes_no()
+            except EOFError:
+                console.print()
+                return True
+            console.print()
+            if answer != "y":
+                console.print(Text("Update cancelled.", style=DIM))
+                return True
+        return _install_update(branch)
 
     with console.status(
         f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
@@ -2380,7 +7229,7 @@ def _run_update(*, force: bool = False) -> bool:
         ask.append("/n ", style=DIM)
         console.print(ask, end="")
         try:
-            answer = typed()
+            answer = yes_no()
         except EOFError:
             console.print()
             return True
@@ -2389,6 +7238,10 @@ def _run_update(*, force: bool = False) -> bool:
             console.print(Text("Update cancelled.", style=DIM))
             return True
 
+    return _install_update("main")
+
+
+def _install_update(branch: str) -> bool:
     with console.status(
         f"[bold {ACCENT}]Updating{ELLIPSIS} ",
         spinner="arrow3", spinner_style=ACCENT
@@ -2402,6 +7255,7 @@ def _run_update(*, force: bool = False) -> bool:
                 f"[bold {ACCENT}]{label}{ELLIPSIS} "
             ),
             on_output=lambda line: console.print(Text(line, style=DIM)),
+            branch=branch,
         )
 
     if ok:
@@ -2435,7 +7289,7 @@ def _confirm_url_prompt(prompt: str) -> bool:
     console.print(ask, end="")
 
     try:
-        answer = typed()
+        answer = yes_no()
     except EOFError:
         console.print()
         return False
@@ -2445,23 +7299,129 @@ def _confirm_url_prompt(prompt: str) -> bool:
 
 
 def main() -> None:
-    """Main app loop"""
+    """Main app loop. Ctrl+C pressed twice anywhere outside a turn
+    leaves quietly, without a traceback."""
 
+    try:
+        _main()
+    except KeyboardInterrupt:
+        console.print()
+        sys.exit(130)
+
+
+def _import_memories(source: str) -> bool:
+    """flash --import-memories and /import-memories: SOURCE's facts into
+    the user's memory, said how many."""
+
+    try:
+        added, known = memory.import_from(source)
+    except OSError as exc:
+        show_error(f"Could not read {source}: {exc}")
+        return False
+    if not added and not known:
+        warn("No facts found in it: one a line, or a JSON list.")
+        return False
+    said = f"Saved {len(added)} new " + ("memory" if len(added) == 1
+                                          else "memories")
+    if known:
+        said += f"; {known} already saved"
+    console.print(Text(said + ".", style=DIM))
+    return True
+
+
+def _main() -> None:
     args = parse_args()
 
     if args.register_url_scheme or args.unregister_url_scheme:
         _handle_scheme_flags(args)
         return
 
+    if getattr(args, "yes", False):
+        from . import theme
+
+        theme.assume_yes()
+
     if args.update:
-        sys.exit(0 if _run_update(force=args.force) else 1)
+        sys.exit(0 if _run_update(force=args.force,
+                                  dev=getattr(args, "dev", False)) else 1)
+
+    if args.command == "completion":
+        from .cli import completion_script
+
+        print(completion_script(args.target or ""))
+        return
+
+    if args.command == "doctor":
+        sys.exit(1 if _doctor_command(fix=args.fix, cli=True) else 0)
+
+    if args.command == "uninstall":
+        _uninstall_command(args)
+        return
 
     if (
         args.extension_install
         or args.extension_remove
         or args.extension_list
+        or args.extension_update is not None
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
+
+    if getattr(args, "memory_prompt", False):
+        print(memory.IMPORT_PROMPT)
+        return
+
+    if getattr(args, "import_memories", None):
+        sys.exit(0 if _import_memories(args.import_memories) else 1)
+
+    if args.sparks:
+        _keep_sparks()
+        return
+
+    if args.listen:
+        _keep_listening()
+        return
+
+    if args.shortcut:
+        from . import launcher
+
+        try:
+            said = launcher.install() if args.shortcut == "add" \
+                else launcher.remove()
+        except Exception as exc:  # noqa: BLE001 -- said, not raised
+            show_error(f"Could not make the shortcut: {exc}")
+            sys.exit(1)
+        console.print(Text(said, style=DIM))
+        return
+
+    # The Mac's Flash app, made again if it is out of date (a fix to it,
+    # or Flash moved), on a thread of its own so nothing waits for it.
+    if sys.platform == "darwin":
+        from . import launcher
+        threading.Thread(target=launcher.refresh, daemon=True).start()
+
+    # flash://open: the web UI, wherever it is running, or here. With
+    # --web, any flash:// link opens there too, its prompt waiting in the
+    # message box (how the Mac app opens links, with no terminal to ask in).
+    if args.url and (is_open_url(args.url) or args.web):
+        from . import web
+
+        prompt = ""
+        if not is_open_url(args.url):
+            try:
+                prompt = parse_flash_url(args.url)
+            except SchemeError as exc:
+                show_error(str(exc))
+                sys.exit(2)
+        try:
+            web.open_ui(port=args.port or web.DEFAULT_PORT, lan=args.lan,
+                        prompt=prompt)
+        except OSError as exc:
+            show_error(str(exc))
+            # From a shortcut there is no terminal to wait in.
+            if sys.stdin is not None and sys.stdin.isatty():
+                input("\n\nPress any key to continue ")
+            sys.exit(1)
+        return
 
     if args.web:
         from . import web  # only the web UI needs the server
@@ -2479,6 +7439,11 @@ def main() -> None:
 
     pending: list[str] = []
 
+    # What was sent from the dock while a turn ran and did not reach it:
+    # queued with Tab, or a steer the turn finished before taking. Each
+    # runs as a turn of its own, in the order it was sent.
+    queued: list[str] = []
+
     if args.url:
         try:
             pending.append(parse_flash_url(args.url))
@@ -2487,9 +7452,41 @@ def main() -> None:
             input("\n\nPress any key to continue ")
             sys.exit(2)
 
-    client = ollama.Client(host=Config.host)
+    from . import startup
 
-    _clear_screen()
+    startup.say("Finding your models")
+    client = _client()
+
+    # Sparks work for as long as Flash is open, and the MCP servers start
+    # with it, so their tools are there for the first turn and shift.
+    startup.say("Waking the sparks")
+    sparks.start()
+    from . import keepalive
+
+    # Notes from these threads wait for the first prompt, so none lands in
+    # the middle of the opening screen as it is painted.
+    from .repl_input import hold_until_prompt, print_at_prompt
+
+    hold_until_prompt()
+
+    threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
+        # Said above the prompt, now or when it next comes up: never in
+        # the middle of a reply being written.
+        "say": lambda said: print_at_prompt(
+            lambda: console.print(Text(f"  {said}", style=DIM)))},
+        daemon=True).start()
+    startup.say("Connecting your tools")
+    connectors.start()
+    # A spark's @user rings the terminal's bell and shows on the desktop.
+    pings.on_ping(_terminal_ping)
+    # A spark's call rings here, and on the computer.
+    from . import sparkcalls
+
+    sparkcalls.listen(_terminal_ring, _terminal_ring_end)
+
+    if not startup.active():
+        # (Behind the startup face, the screen is cleared as it goes.)
+        _clear_screen()
 
     messages: list = []
 
@@ -2507,16 +7504,25 @@ def main() -> None:
         terminal.write_hook(hook_shell)
 
     def wake_ready() -> bool:
+        if _ring_waiting():
+            return True
+        from . import bgtasks
+
         return (
             wakes_in_a_row < MAX_WAKES_IN_A_ROW
-            and bool(subagents.unseen())
+            and bool(subagents.unseen() or bgtasks.unseen(""))
         )
 
+    startup.say("Checking for updates")
     update = check_for_update()
+    _check_system_one()
 
+    if startup.stop():
+        _clear_screen()
     backdrop = open_screen(console, update)
 
     banner_showing = True
+    session_started = time.monotonic()
 
     def redraw_banner() -> None:
         """Paint the opening screen again, for a resize or a toggle."""
@@ -2533,7 +7539,84 @@ def main() -> None:
         _sync(False)
         screen_redrawn(painted)
 
+    def dock_key(key: str) -> None:
+        """Shift+Tab and Ctrl+O, pressed in the dock mid-turn."""
+
+        if key == TOGGLE_AUTO:
+            set_mode(next_mode())
+        elif key == EXPAND:
+            # Mid-turn the reply goes on printing below: never take rows
+            # back from under it, only print the outputs again.
+            forget_expanded()
+            expand_collapsed()
+
+    asides: list = []
+    asides_lock = threading.Lock()
+
+    def dock_btw(line: str) -> None:
+        """A /btw sent mid-turn: answered on the side, on a thread of its
+        own, while the turn carries on."""
+
+        question = btw_question(line) or ""
+
+        def answer() -> None:
+            said = _btw(question, list(messages), uin)
+            if said:
+                # the working model hears of it at its next step
+                with asides_lock:
+                    asides.append((question, said))
+
+        threading.Thread(target=answer, daemon=True).start()
+
+    def start_dock(heard: bool) -> Optional[Dock]:
+        """The input box and status bar, kept up while the turn runs."""
+
+        if not _dock_wanted(heard):
+            return None
+        dock = Dock(
+            Config.prompt,
+            status=lambda: _status_text(messages),
+            health=lambda: _backend_health,
+            on_key=dock_key,
+            on_btw=dock_btw,
+        )
+        dock.start()
+        return dock
+
+    def end_dock(dock: Optional[Dock], stopped: bool = False) -> None:
+        """Take the dock down. What was sent and not taken runs next,
+        unless the turn was stopped: then it goes back in the box, for
+        the user to send again or not."""
+
+        if dock is None:
+            return
+        left = [text for _, text in dock.stop()]
+        if stopped:
+            carry("\n".join(left))
+        else:
+            queued.extend(left)
+
+    def steers(dock: Optional[Dock]) -> list[str]:
+        """What the user sent to steer the turn since the model's last
+        step, shown in the conversation as they are handed over."""
+
+        if dock is None:
+            return []
+        said = dock.take(STEER)
+        for text in said:
+            _render_sent_message(console, Config.prompt, text)
+        return said
+
+    # From here a single Ctrl+C stops a running turn; at the prompt the
+    # input box asks for a second press itself.
+    arm_exit(interrupt.release())
+    # The terminal works in a folder: a project folder's memory goes with
+    # every turn in it.
+    memory.FOLDER_MEMORY = True
+
     while True:
+        dock: Optional[Dock] = None
+        stopped = False
         try:
             pending_images: Optional[list[str]] = None
             heard = False
@@ -2545,16 +7628,27 @@ def main() -> None:
                 if not _confirm_url_prompt(uin):
                     console.print(Text("Prompt discarded.", style=DIM))
                     break
+            elif queued:
+                uin = queued.pop(0)
+                _render_sent_message(console, Config.prompt, uin)
             elif listening_on:
                 # An empty line is what the voice branch below listens on.
                 listening_on = False
                 uin = ""
+            elif _ring_waiting():
+                if _ring.get("answer"):
+                    _answer_ring()
+                else:
+                    _show_ring()
+                continue
             elif wake_ready():
                 # Finished while the last turn was still running.
                 woken = True
             else:
                 if not banner_showing:
                     _note_learning()
+                    _note_sparks()
+                    _note_calls()
                 try:
                     uin = read_line(
                         Config.prompt,
@@ -2573,7 +7667,7 @@ def main() -> None:
                         backdrop=backdrop if banner_showing else None,
                     )
                 except EOFError:
-                    print()
+                    _leave(messages, not banner_showing, session_started)
                     return
 
                 if uin == RESIZE:
@@ -2606,18 +7700,30 @@ def main() -> None:
                     # forth. The feedback is the status bar's "auto",
                     # or on the opening screen, which has no status
                     # bar, the banner's autonomous notice.
-                    set_config_var(
-                        "NO_COMMAND_CONFIRMATION",
-                        "0" if Config.no_command_confirmation else "1",
-                    )
+                    set_mode(next_mode())
                     if banner_showing:
                         redraw_banner()
                     continue
 
+                if uin == MODEL_PICK:
+                    # The model's name in the status line, clicked.
+                    uin = "/model"
+
                 if uin == EXPAND:
                     expand_collapsed()
                     continue
+                # Anything else said or done prints below Ctrl+O's block: a
+                # second Ctrl+O no longer takes it back.
+                if uin not in (WAKE,):
+                    forget_expanded()
 
+                if uin == WAKE and _ring_waiting():
+                    # A spark calling, or a call answered on the desktop.
+                    if _ring.get("answer"):
+                        _answer_ring()
+                    else:
+                        _show_ring()
+                    continue
                 if uin == WAKE:
                     woken = True
                 elif uin.strip():
@@ -2640,6 +7746,11 @@ def main() -> None:
                 wakes_in_a_row += 1
             else:
                 wakes_in_a_row = 0
+
+            if uin.strip() == "" and _ring and _ring.get("shown"):
+                # Enter while a spark is calling picks it up.
+                _answer_ring()
+                continue
 
             if uin.strip() == "":
                 if not Config.voice:
@@ -2666,12 +7777,32 @@ def main() -> None:
 
             if uin in ("/bye", "/exit"):
                 _clear_scratch_dir()
+                _leave(messages, True, session_started)
                 return
 
             if uin == "/model" or uin.startswith("/model "):
                 arg = uin[len("/model"):].strip()
+                action, _, named = arg.partition(" ")
 
-                if arg:
+                if action.lower() in ("pin", "unpin"):
+                    _pin_model(action.lower() == "pin", named.strip())
+                    continue
+
+                if action.lower() == "fit":
+                    _model_fit(client)
+                    continue
+
+                from . import modelchain
+
+                if arg and modelchain.is_auto(arg):
+                    arg = modelchain.AUTO
+                    offered = modelchain.auto_models(Config.host)
+                    console.print(Text(
+                        "Auto: System One picks the model for each "
+                        "message, from " + (", ".join(offered) or
+                                            "the models you pin") + ".",
+                        style=DIM))
+                elif arg:
                     # Setting a model by hand stays allowed whatever the
                     # backend says, so a declined or failed download is
                     # not a reason to leave MODEL where it was.
@@ -2680,11 +7811,16 @@ def main() -> None:
                     # Bare /model picks from what this machine holds.
                     # Picking nothing falls through to the summary below
                     # rather than leaving the screen bare.
-                    arg = pick_model(client, Config.model or "") or ""
+                    from . import workspace
+
+                    arg = pick_model(
+                        client, Config.model or "",
+                        workspace.favorite_models(Config.host),
+                    ) or ""
 
                 if arg:
                     set_config_var("MODEL", arg)
-                    client = ollama.Client(host=Config.host)
+                    client = _client()
                     console.print(
                         Text(f"Model set to {arg}.", style=DIM)
                     )
@@ -2697,16 +7833,126 @@ def main() -> None:
                     console.print(info)
                 continue
 
+            asked_aside = btw_question(uin)
+            if asked_aside is not None:
+                said = _btw(asked_aside, messages)
+                if said:
+                    from . import btw as side
+
+                    messages.append(_message("user", side.aside(asked_aside, said)))
+                continue
+
+            if uin == "/resume" or uin.startswith("/resume "):
+                _resume_command(uin[len("/resume"):].strip(), messages)
+                continue
+
+            if uin == "/secret" or uin.startswith("/secret "):
+                _secret_command(uin[len("/secret"):].strip())
+                continue
+
+            if uin == "/fleet" or uin.startswith("/fleet "):
+                _fleet_command(uin[len("/fleet"):].strip())
+                continue
+
+            if uin == "/compare" or uin.startswith("/compare "):
+                _compare_command(uin[len("/compare"):].strip())
+                continue
+
+            if uin == "/calendar" or uin.startswith("/calendar "):
+                _calendar_command(uin[len("/calendar"):].strip())
+                continue
+
+            if uin == "/fallbacks" or uin.startswith("/fallbacks "):
+                _fallbacks_command(uin[len("/fallbacks"):].strip())
+                continue
+
+            if uin.split(" ", 1)[0] in ("/good", "/bad"):
+                _rate_command(uin, messages)
+                continue
+
+            if uin == "/debate" or uin.startswith("/debate "):
+                _debate_command(uin, messages)
+                continue
+
+            if uin == "/fork" or uin.startswith("/fork "):
+                _fork_command(uin[len("/fork"):].strip(), messages)
+                continue
+
+            if uin == "/forks" or uin.startswith("/forks "):
+                _forks_command(uin[len("/forks"):].strip(), messages)
+                continue
+
+            if uin == "/think" or uin.startswith("/think "):
+                _think_command(uin[len("/think"):].strip())
+                continue
+
+            if uin == "/briefing":
+                _briefing_command()
+                continue
+
+            if uin in ("/doctor", "/doctor fix"):
+                _doctor_command(fix=uin.endswith("fix"))
+                continue
+
+            if uin == "/loader" or uin.startswith("/loader "):
+                _loader_command(uin[len("/loader"):].strip())
+                continue
+
+            if uin == "/instructions" or uin.startswith("/instructions "):
+                _instructions_command(uin[len("/instructions"):].strip())
+                continue
+
+            if uin == "/host" or uin.startswith("/host "):
+                _host_command(uin[len("/host"):].strip())
+                client = _client()
+                continue
+
             if uin == "/auto" or uin.startswith("/auto "):
                 arg = uin[len("/auto"):].strip().lower()
                 if arg in ("", "toggle"):
-                    _set_auto(not Config.no_command_confirmation)
+                    _set_auto(next_mode())
                 elif arg in ("on", "enable", "true", "1"):
                     _set_auto(True)
-                elif arg in ("off", "disable", "false", "0"):
+                elif arg in ("off", "disable", "false", "0", "ask"):
                     _set_auto(False)
+                elif arg == "careful":
+                    _set_auto("careful")
+                elif arg.split()[:1] == ["ultra"]:
+                    _ultra_command(arg.split()[1:])
                 else:
-                    warn("Usage: /auto [on|off|toggle]")
+                    warn("Usage: /auto [on|off|toggle|careful|ultra [off]]")
+                continue
+
+            if uin == "/activity" or uin.startswith("/activity "):
+                _activity_command(uin[len("/activity"):].strip().lower())
+                continue
+
+            if uin == "/preset" or uin.startswith("/preset "):
+                _preset_command(uin[len("/preset"):].strip())
+                continue
+
+            if uin == "/stats":
+                _stats_command()
+                continue
+
+            if uin == "/mcp" or uin.startswith("/mcp "):
+                _mcp_command(uin[len("/mcp"):].strip())
+                continue
+
+            if uin == "/sandbox" or uin.startswith("/sandbox "):
+                _sandbox_command(uin[len("/sandbox"):].strip())
+                continue
+
+            if uin == "/computer" or uin.startswith("/computer "):
+                _computer_command(uin[len("/computer"):].strip())
+                continue
+
+            if uin == "/notify" or uin.startswith("/notify "):
+                _notify_command(uin[len("/notify"):].strip())
+                continue
+
+            if uin == "/systemone" or uin.startswith("/systemone "):
+                _system_one_command(uin[len("/systemone"):].strip())
                 continue
 
             if uin == "/web" or uin.startswith("/web "):
@@ -2715,6 +7961,26 @@ def main() -> None:
 
             if uin == "/skills" or uin.startswith("/skills "):
                 _skills_command(uin[len("/skills"):].strip())
+                continue
+
+            if uin == "/email" or uin.startswith("/email "):
+                _email_command(uin[len("/email"):].strip())
+                continue
+
+            if uin == "/answer":
+                _answer_ring()
+                continue
+
+            if uin == "/decline":
+                _decline_ring()
+                continue
+
+            if uin == "/call" or uin.startswith("/call "):
+                _call_command(uin[len("/call"):].strip())
+                continue
+
+            if uin == "/sparks" or uin.startswith("/sparks "):
+                _sparks_command(uin[len("/sparks"):].strip())
                 continue
 
             if uin == "/background" or uin.startswith("/background "):
@@ -2729,8 +7995,23 @@ def main() -> None:
                     _set_voice(True)
                 elif arg in ("off", "disable", "false", "0"):
                     _set_voice(False)
+                elif arg == "style" or arg.startswith("style "):
+                    _voice_style(arg[len("style"):].strip())
+                elif arg == "models":
+                    _voice_models()
+                elif arg in ("listen", "speak"):
+                    _voice_pick("listening" if arg == "listen"
+                                else "speaking")
+                elif arg == "pull" or arg.startswith("pull "):
+                    _voice_pull(arg[len("pull"):].strip())
+                elif arg == "remove" or arg.startswith("remove "):
+                    _voice_remove(arg[len("remove"):].strip())
                 else:
-                    warn("Usage: /voice [on|off|toggle]")
+                    warn(
+                        "Usage: /voice [on|off|toggle|models|listen|speak|"
+                        "pull <name>|"
+                        f"remove <name>|style [{'|'.join(voice_styles())}]]"
+                    )
                 continue
 
             if uin == "/set" or uin.startswith("/set "):
@@ -2741,7 +8022,7 @@ def main() -> None:
                     continue
                 name, value = parts
                 set_config_var(name, value)
-                client = ollama.Client(host=Config.host)
+                client = _client()
                 console.print(
                     Text(f"{name} set in {ENV_PATH}.", style=DIM)
                 )
@@ -2753,7 +8034,7 @@ def main() -> None:
                     warn("Usage: /unset NAME")
                     continue
                 if unset_config_var(name):
-                    client = ollama.Client(host=Config.host)
+                    client = _client()
                     console.print(Text(f"{name} unset.", style=DIM))
                 else:
                     console.print(Text(f"{name} was not set.", style=DIM))
@@ -2765,7 +8046,7 @@ def main() -> None:
                 learning.refresh()
                 _extensions_changed()
                 forget_model_facts()
-                client = ollama.Client(host=Config.host)
+                client = _client()
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
 
@@ -2778,6 +8059,19 @@ def main() -> None:
                     console.print(Text(listing, style=DIM))
                 else:
                     console.print(Text("No memories saved yet.", style=DIM))
+                continue
+
+            if uin == "/import-memories" or \
+                    uin.startswith("/import-memories "):
+                source = uin[len("/import-memories"):].strip()
+                if not source:
+                    console.print(Text(
+                        "Usage: /import-memories <file> (one fact a line, "
+                        "another assistant's export, or JSON). To get an "
+                        "export, give another assistant this:\n\n"
+                        + memory.IMPORT_PROMPT, style=DIM))
+                    continue
+                _import_memories(source)
                 continue
 
             if uin == "/forget" or uin.startswith("/forget "):
@@ -2794,12 +8088,14 @@ def main() -> None:
                 continue
 
             if uin == "/clear":
+                _start_session(messages)
                 messages.clear()
                 clear_collapsed()
                 # The prompt starts over anyway, so it can pick up what
                 # was learned this session.
                 learning.refresh()
                 plan.clear()
+                worknotes.clear()
                 checkpoint.clear()
                 console.print(Text("Context cleared.", style=DIM))
                 continue
@@ -2808,8 +8104,35 @@ def main() -> None:
                 console.print(Text(checkpoint.undo(), style=DIM))
                 continue
 
+            if uin == "/history":
+                # the time machine: each turn that changed files, and /undo to N to go back to before one
+                turns = checkpoint.history()
+                if not turns:
+                    console.print(Text("Nothing Flash changed this session is waiting to be undone.", style=DIM))
+                for t in turns:
+                    files = ", ".join(("+" if f["change"] == "made" else "-" if f["change"] == "deleted" else "~") + f["name"]
+                                      + (" (command)" if f["shell"] else "") for f in t["files"][:8])
+                    console.print(Text(f"  {t['index']}  {t['label'] or 'a turn'}: {files}", style=DIM))
+                if turns:
+                    console.print(Text("  /undo to N goes back to before turn N.", style=DIM))
+                continue
+
+            if uin.startswith("/undo to "):
+                try:
+                    console.print(Text(checkpoint.undo_to(int(uin.split()[-1])), style=DIM))
+                except ValueError:
+                    warn("Say which turn: /undo to N, with N from /history.")
+                continue
+
             if uin == "/context":
                 _render_context(messages)
+                continue
+
+            if uin == "/smarthome" or uin.startswith("/smarthome "):
+                _smarthome_command(uin[len("/smarthome"):].strip())
+                continue
+            if uin == "/review" or uin.startswith("/review "):
+                _review_command(uin[len("/review"):].strip(), messages)
                 continue
 
             if uin == "/compact":
@@ -2832,7 +8155,8 @@ def main() -> None:
                     )
                 else:
                     was = context.total_tokens(messages)
-                    messages[:] = [context.summary_message(summary)]
+                    messages[:] = [context.summary_message(
+                        worknotes.with_notes(summary))]
                     now = context.total_tokens(messages)
                     tool_result(
                         f"{was} tokens of history down to {now}"
@@ -2846,6 +8170,19 @@ def main() -> None:
 
             if uin == "/hook" or uin.startswith("/hook "):
                 _hook_command(uin[len("/hook"):].strip().lower())
+                continue
+
+            if uin == "/tasks" or uin.startswith("/tasks "):
+                from . import bgtasks
+
+                rest = uin[len("/tasks"):].split()
+                if rest[:1] == ["stop"] and len(rest) > 1:
+                    said = bgtasks.stop(rest[1])
+                elif rest:
+                    said = bgtasks.output(rest[0], everything=True)
+                else:
+                    said = bgtasks.listing("")
+                console.print(Text(said, style=DIM))
                 continue
 
             if uin == "/agents" or uin.startswith("/agents "):
@@ -2988,7 +8325,13 @@ def main() -> None:
             # Riding inside the user's own message, not beside it, keeps
             # roles alternating for templates that require it, and lets
             # history trimming keep or drop the two together.
+            if not woken:
+                uin = _capture_keys(uin)
             agent_news, delivered_ids = subagents.notices()
+            from . import bgtasks
+
+            task_news, task_ids = bgtasks.notices("")
+            agent_news = "\n\n".join(p for p in (agent_news, task_news) if p)
             looked_at = time.time()
             ran = "" if woken else terminal.since(terminal_seen)
             content = "\n\n".join(
@@ -2996,6 +8339,8 @@ def main() -> None:
             )
 
             messages.append(_message("user", content, pending_images))
+            # Remember, recall and forget reach this folder's project.
+            memory.enter_folder()
             _fit_and_compact(console, client, messages)
 
             system_message = _message(
@@ -3003,41 +8348,44 @@ def main() -> None:
             )
 
             checkpoint.start_turn(_turn_label(uin))
+            # What System One holds this turn's tool calls up against: a
+            # woken turn carries on with what the user last asked.
+            if not woken:
+                systemone.set_request(uin)
             clear_collapsed()
             # A local backend runs one generation at a time, and this
             # turn is the one the user is waiting on.
             learning.cancel()
 
             turn = Turn()
-            offered = turn_tools()
+            # Followed by any extension that asked to be.
+            progress.begin("terminal", title=uin, request=uin)
+            end_thinking()
+            offered = turn_tools() + think_tools(_think_level() is not None)
 
             def bar() -> Text:
                 return _bar_text(messages)
 
-            nudged = [0]
-            first = [system_message] + messages
-            final, thinking, tool_calls, err = _chat_until_acted(
-                console, client, first, offered, nudged,
+            dock = start_dock(heard)
+            final, thinking, tool_calls, err = _chat_retry_until_response(
+                console, client, [system_message] + messages, offered,
                 is_image=bool(pending_images), turn=turn, bar=bar,
-            )
-            if err and not nudged[0]:
-                _print_backend_error(err)
-                messages.pop()
-                continue
-            # A reply that promised work and was told to do it stays in
-            # the history, as the user saw it; the nudge does not.
-            messages.extend(
-                m for m in first[1 + len(messages):]
-                if m.get("role") != "system"
             )
             if err:
                 _print_backend_error(err)
+                messages.pop()
                 continue
 
             subagents.mark_delivered(delivered_ids)
+            bgtasks.mark_delivered(task_ids)
             if not woken:
                 terminal_seen = looked_at
             clear_user_runs()
+
+            if not tool_calls:
+                # Done: the box goes, and what was sent to it runs next.
+                end_dock(dock)
+                dock = None
 
             _render_thinking(thinking)
 
@@ -3051,9 +8399,12 @@ def main() -> None:
                 _render_markdown(console, final)
                 _render_done(turn)
                 _render_stats(turn)
+                _note_showcase(turn, 0)
                 _note_running_agents()
                 _note_learning()
+                _note_sparks()
                 notify_reply_ready()
+                progress.end(True, summary=final)
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _fit_and_compact(console, client, messages)
@@ -3067,59 +8418,67 @@ def main() -> None:
             # remembers what was read, run, and changed.
             keep_from = len(tool_messages)
             tool_outputs = []
-            followup = ""
-            tool_error = None
             sent_tool_images = False
+            saw_images = [False]
 
-            for _ in range(Config.max_tool_rounds):
-                assistant_tool_calls = []
-                for call in tool_calls:
-                    name, call_args = _tool_call_name_args(call)
-                    assistant_tool_calls.append(
-                        {"function": {"name": name, "arguments": call_args}}
-                    )
+            def ask(convo: list, with_tools: bool) -> loop.Reply:
+                said, thought, calls, err = _chat_retry_until_response(
+                    console, client, convo, offered if with_tools else None,
+                    turn=turn, is_image=saw_images[0], bar=bar,
+                )
+                saw_images[0] = False
+                if err:
+                    return loop.Reply(error=err)
+                _render_thinking(thought)
+                return loop.Reply(content=said, thinking=thought, calls=[
+                    _tool_call_name_args(c) for c in calls])
 
-                tool_messages.append({
-                    "role": "assistant",
-                    "content": final,
-                    "tool_calls": assistant_tool_calls,
-                })
+            def call(name: str, call_args: dict) -> str:
+                # Not `tool_result`: that is the imported renderer, and a
+                # local of that name shadows it for the whole of main(),
+                # including code that runs before this.
+                output = run_tool((name, call_args))
+                tool_outputs.append(f"{name}:\n{trim_tool_output(output, name)}")
+                return output
 
-                for call in tool_calls:
-                    name, call_args = _tool_call_name_args(call)
-                    # Not `tool_result`: that is the imported renderer,
-                    # and a local of that name shadows it for the whole
-                    # of main(), including code that runs before this.
-                    output = run_tool((name, call_args))
-                    trimmed = trim_tool_output(output, name)
-                    tool_outputs.append(f"{name}:\n{trimmed}")
-                    tool_messages.append({
-                        "role": "tool",
-                        "content": trimmed,
-                        "tool_name": name,
-                    })
-
+            def after(convo: list, calls: list) -> None:
+                nonlocal offered, sent_tool_images
+                if any(n == "refresh_tools" for n, _ in calls):
+                    # New tools from the connected apps, from the next
+                    # step on.
+                    offered = turn_tools() + think_tools(
+                        _think_level() is not None, thinking_harder())
+                if thinking_harder():
+                    # On already: not offered again.
+                    offered = [t for t in offered
+                               if t["function"]["name"] != "think_harder"]
                 tool_images = take_pending_images()
                 if tool_images:
-                    sent_tool_images = True
-                    tool_messages.append(
-                        _message("user", TOOL_IMAGE_NOTE, tool_images)
-                    )
+                    sent_tool_images = saw_images[0] = True
+                    convo.append(_message("user", TOOL_IMAGE_NOTE, tool_images))
+                # Whatever the user sent to steer this turn, read before
+                # the model decides its next step.
+                for said in steers(dock):
+                    convo.append(_message("user", f"{STEER_NOTE}\n{said}"))
+                # and what was asked on the side meanwhile, with its answer
+                with asides_lock:
+                    taken, asides[:] = list(asides), []
+                for question, said in taken:
+                    from . import btw as side
 
-                final, thinking, tool_calls, err = _chat_until_acted(
-                    console, client, tool_messages, offered, nudged,
-                    turn=turn, is_image=bool(tool_images), bar=bar,
-                )
-                if err:
-                    tool_error = err
-                    break
+                    convo.append(_message("user", side.aside(question, said)))
 
-                _render_thinking(thinking)
-
-                followup = final
-
-                if not tool_calls:
-                    break
+            # The one agent loop (loop.py): changed code is checked before
+            # the turn ends, and at the round limit the steps the model
+            # asked for still run, then it answers from what they found.
+            done = loop.run(
+                tool_messages, ask=ask, call=call, rounds=Config.max_tool_rounds,
+                first=loop.Reply(content=final, thinking=thinking, calls=[
+                    _tool_call_name_args(c) for c in tool_calls]),
+                after_round=after, retries=0,
+            )
+            followup = done.reply.content
+            tool_error = done.reply.error
 
             if tool_error:
                 _print_backend_error(tool_error)
@@ -3147,12 +8506,17 @@ def main() -> None:
                 )
                 followup += "\n```"
 
+            end_dock(dock)
+            dock = None
             _render_markdown(console, followup)
             _render_done(turn)
             _render_stats(turn)
+            _note_showcase(turn, len(tool_outputs))
             _note_running_agents()
             _note_learning()
+            _note_sparks()
             notify_reply_ready()
+            progress.end(True, summary=followup)
             listening_on = _speak_reply(followup, heard)
             messages.extend(_worth_keeping(tool_messages, keep_from))
             messages.append(_message("assistant", followup))
@@ -3162,8 +8526,20 @@ def main() -> None:
             console.print()
 
         except KeyboardInterrupt:
+            stopped = True
             console.print()
             continue
+        finally:
+            end_dock(dock, stopped)
+            # A yes to Computer Use lasts the one reply, and so does
+            # thinking turned on by the model.
+            computeruse.end("terminal")
+            end_thinking()
+            # Kept, for /resume.
+            _keep_session(messages)
+            # A turn that got here without finishing failed, or was
+            # stopped; nothing, when there was no turn.
+            progress.end(False, error="Stopped." if stopped else "")
 
 
 if __name__ == "__main__":

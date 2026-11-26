@@ -3,6 +3,7 @@
 import threading
 import time
 
+import pytest
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
@@ -255,7 +256,7 @@ def test_history_survives_and_keeps_secrets_out(tmp_path):
     reread = list(repl_input.SessionHistory(str(path)).load_history_strings())
 
     assert reread == ["explain this repo"]  # nosec B101
-    assert "sk-secret" not in path.read_text()  # nosec B101
+    assert "sk-secret" not in path.read_text(encoding="utf-8")  # nosec B101
 
 
 def test_a_broken_history_file_costs_only_the_history(tmp_path):
@@ -275,3 +276,87 @@ def test_ctrl_r_searches_history(monkeypatch, tmp_path):
     assert _typed(  # nosec B101
         monkeypatch, tmp_path, "\x12fir\r\r", history=2
     ) == "first message"
+
+
+# --- shell mode --------------------------------------------------------------
+
+def test_a_shell_line_wears_a_bang_in_the_prompts_colour():
+    from flash.theme import CHEVRON
+
+    accent, reset = "\x1b[38;5;209m", "\x1b[0m"
+    plain = f"{accent}{CHEVRON} {reset}"
+    remote = f"\x1b[2mgpu{reset} {plain}"
+    bang = f"{accent}! {reset}"
+
+    assert repl_input.shell_prompt(plain) == bang  # nosec B101
+    assert repl_input.shell_prompt(remote).endswith(bang)  # nosec B101
+    assert repl_input.shell_prompt(remote).startswith(  # nosec B101
+        "\x1b[2mgpu"
+    )
+
+
+def _shown(text):
+    from types import SimpleNamespace
+
+    from prompt_toolkit.document import Document
+
+    ti = SimpleNamespace(
+        lineno=0, document=Document(text), fragments=[("", text)],
+    )
+    done = repl_input.HideShellMark().apply_transformation(ti)
+    return "".join(f[1] for f in done.fragments), done
+
+
+def test_the_bang_is_kept_out_of_sight_and_in_the_text():
+    shown, done = _shown("!ls -la")
+
+    assert shown == "ls -la"  # nosec B101
+    # The cursor after the ! sits at the start of what is shown.
+    assert done.source_to_display(1) == 0  # nosec B101
+    assert done.display_to_source(0) == 1  # nosec B101
+    assert _shown("ls -la")[0] == "ls -la"  # nosec B101
+    assert _shown("why is it! broken")[0] == "why is it! broken"  # nosec B101
+
+
+def test_a_shell_line_is_read_with_its_bang(monkeypatch, tmp_path):
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, "!git status\r"
+    ) == "!git status"
+
+
+def test_a_shell_line_comes_back_from_history_as_one(monkeypatch, tmp_path):
+    _typed(monkeypatch, tmp_path, "!ls\r")
+
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, "\x1b[A\r", history=1
+    ) == "!ls"
+
+
+# --- Ctrl+C at the prompt ----------------------------------------------------
+
+CTRL_C = "\x03"
+
+
+def test_ctrl_c_clears_what_is_typed(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"half a thought{CTRL_C}fresh\r"
+    ) == "fresh"
+
+
+def test_ctrl_c_twice_on_an_empty_line_leaves(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    with pytest.raises(EOFError):
+        _typed(monkeypatch, tmp_path, CTRL_C + CTRL_C)
+
+
+def test_one_ctrl_c_only_asks(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"{CTRL_C}still here\r"
+    ) == "still here"
+    # The second press has to come soon, or it is a first one again.
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"{CTRL_C}again\r"
+    ) == "again"

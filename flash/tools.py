@@ -1,8 +1,10 @@
 """AI Tool System"""
 
 import base64
+import contextlib
 import difflib
 import fnmatch
+import inspect
 import io
 import json
 import os
@@ -12,11 +14,14 @@ import re
 import struct
 import subprocess  # nosec B404
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+from collections.abc import Callable
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -24,18 +29,38 @@ from tempfile import mkdtemp
 from typing import Any, Optional, Union
 
 from ddgs import DDGS
-from rich.live import Live
+from rich.markdown import Markdown
 from rich.text import Text
 
 from . import agent as subagents
+from . import browser as page_devtools
+from . import sources as _sources
 from . import (
     checkpoint,
+    computer,
+    computeruse,
+    connectors,
+    design,
     editor,
     extensions,
+    instructions,
     learning,
+    livedocs,
+    location,
+    mail,
+    midi,
     model3d,
+    pcb,
     plan,
     skills,
+    sparks,
+    systemone,
+    textures,
+    triggers,
+    visuals,
+    xcode,
+    bgtasks,
+    youtube,
 )
 from .browser import (
     ACTIONS,
@@ -56,7 +81,9 @@ from .documents import extract_document_text, is_document_path
 from .edit import Edit, apply_edits
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
-from .notify import notify_needs_input
+from .notify import desktop as desktop_notify
+from .notify import limits as notify_limits
+from .notify import notify_needs_input, take_notify_turn
 from .sysprompt import get_system_prompt, model_sees_images
 from .theme import (
     ACCENT,
@@ -65,25 +92,42 @@ from .theme import (
     ELLIPSIS,
     ERROR,
     WARN,
+    Live,
     capturing,
     console,
+    denial_why,
+    dock_active,
+    drawn_elsewhere,
     glimmer,
     plural,
     remote_answer,
+    set_denial_why,
+    tool_audio,
     tool_browser,
+    tool_canvas,
+    tool_canvas_op,
+    tool_chess,
+    tool_chess_move,
+    tool_course,
     tool_diff,
     tool_document,
     tool_file,
     tool_line,
+    tool_music,
+    tool_notify,
+    tool_project,
     tool_result,
-    typed,
+    yes_no,
 )
+from .tidy import tidy, tidy_args
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
+
 
 TOOL_SYSTEM_PROMPT = f"""
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
+In a brief, a summary or a report: {_sources.RULE}
 When using shell, call the tool without extra text first.
 When searching a codebase or directory for files by name or pattern, use
   the glob tool instead of shell find/ls. When searching file contents for
@@ -141,9 +185,24 @@ To hand the user a Markdown or text document (a report, plan, README,
 To make a 3D model (an object, a prop, a room, a layout), use the
   make_3d_model tool: it builds the model from parts such as boxes,
   cylinders, spheres, lathed profiles, extruded outlines, and blocky
-  text for any words, logos, or signs, saves a
-  .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
-  .stl, or .obj file that already exists.
+  text for any words, logos, or signs, each with a colour and, where the
+  real thing has one, a texture (wood, brick, marble, grass, fabric, or
+  a picture from a file), and any part can move (a wheel turning, a
+  door swinging, a flag waving, a planet circling), saves a .glb, and
+  shows it in a 3D viewer that plays the motion. Use send_3d_model to
+  show a .glb, .stl, or .obj file that already exists.
+To design a printed circuit board (any electronics: a controller, a
+  sensor, earbuds, a dev board), use the design_pcb tool. Give it the
+  board's shape and every part with its package and what each pin
+  connects to; it places the parts, routes every net on as many layers
+  as you give it, checks the rules, and writes the files a board house
+  takes, a KiCad board, and a 3D model, shown beside the chat. Never
+  stop at a netlist, a parts list, or a script the user has to run:
+  make the board.
+To make music (a tune, a chord progression, a drum beat), use the
+  make_midi tool: it writes the tracks of notes you give it as a .mid
+  and plays it to the user in a player with a piano roll. Use send_midi
+  to play a .mid file that already exists.
 When you make an image, PDF, web page, or document for the user, send it
   with the matching tool as soon as it is finished, without being asked:
   that is how they see it.
@@ -200,6 +259,10 @@ To save a durable fact or preference for future sessions, use the remember
   tool. What is already saved is under === Memory === below, when there is
   any; recall searches older entries by a specific phrase. To delete one
   saved memory by its 1-based index, use the forget tool.
+When the user refers to an earlier conversation ("like we discussed",
+  "the plan from last week") or asks what was said or decided before,
+  search_chats finds it among their past chats; read the one that fits
+  with its chat_id and sum up what it says, rather than guessing.
 When a task matches a skill under === Skills === below, call skill_view on
   it first and follow it. When the user asks you to remember how to do
   something, or corrects how you did a task that will come up again, save
@@ -243,12 +306,19 @@ def _flash_system_prompt(extension_prompt: str = "") -> str:
     """
 
     added = f"{extension_prompt}\n" if extension_prompt else ""
+    # Rich answers are part of how Flash writes, so they sit with its own
+    # style, read afresh so the Settings switch takes effect at once.
+    rich = "\n".join(
+        part for part in (visuals.prompt_block(), design.prompt_block())
+        if part
+    )
+    rich = f"\n{rich}\n" if rich else ""
 
     return f"""
 === System Prompt ===
 
 {FLASH_PROMPT}
-{TOOL_SYSTEM_PROMPT}
+{rich}{TOOL_SYSTEM_PROMPT}
 {CURRENT_DATE_PROMPT}
 {added}=== END OF SYSTEM PROMPT ===
 
@@ -262,13 +332,19 @@ SYSTEM_PROMPT = _flash_system_prompt()
 def build_system_prompt(model_prompt: str = "") -> str:
     """Prepend the model's own system prompt to Flash's, when it has one."""
 
+    from . import memory
+
     model_prompt = model_prompt.strip()
     added = "\n\n".join(
         part
-        for part in (extensions.system_prompt(), learning.prompt_block())
+        for part in (
+            extensions.system_prompt(), instructions.prompt_block(),
+            instructions.agents_block(), memory.folder_block(),
+            learning.prompt_block(), sparks.roster_block(),
+        )
         if part
     )
-    flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
+    flash_prompt = _flash_system_prompt(added)
 
     if not model_prompt:
         return flash_prompt
@@ -283,18 +359,32 @@ def build_system_prompt(model_prompt: str = "") -> str:
 DEFAULT_SHELL_TIMEOUT = 15
 MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
+# Careful: autonomous, but high-stakes commands still ask (stakes.py).
+CAREFUL = False
+# UltraAuto: not even what asks in autonomous mode asks.
+ULTRA_AUTO = False
 OLLAMA_HOST = ""
 MODEL_NAME = ""
-MAX_TOOL_OUTPUT_CHARS = 1200
+MAX_TOOL_OUTPUT_CHARS = 4000
 
 
 def init(config, ):
     global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
-    global MAX_TOOL_OUTPUT_CHARS
+    global MAX_TOOL_OUTPUT_CHARS, ULTRA_AUTO, CAREFUL
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
+    CAREFUL = bool(getattr(config, "careful", False))
+    ULTRA_AUTO = bool(getattr(config, "ultra_auto", False))
     OLLAMA_HOST = config.host
     MODEL_NAME = config.model or ""
     MAX_TOOL_OUTPUT_CHARS = config.max_tool_output_chars
+
+
+def ultra_auto() -> bool:
+    """Whether UltraAuto is on, as the user last set it: from the env
+    file, as a spark reads autonomous mode, so a keeper serving sparks
+    goes by what was switched in another Flash."""
+
+    return sparks.ultra()
 
 
 # read already caps its own output by whole lines and tells the model how
@@ -302,27 +392,142 @@ def init(config, ):
 # The page tools cap themselves too, and their element list is only useful
 # whole: a trim through the middle of it takes away the very numbers the
 # next click has to name.
-_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
+_SELF_LIMITING_TOOLS = {
+    "read", "open_page", "interact", "devtools", "play_realtime",
+    "check_inbox",
+    "read_email",
+}
+
+
+# The output limit for the task in hand, raised by more_output; and the
+# last result that was cut, whole, so more_output can show what was cut
+# without the command being run again. Per thread: a sub-agent's or a
+# spark's limit is its own.
+_output = threading.local()
+MOST_OUTPUT_CHARS = 200_000
+
+
+def reset_output_limit() -> None:
+    """A new task starts at the configured limit (loop.run calls this)."""
+
+    _output.limit = None
+    _output.cut = None
+
+
+def output_limit() -> int:
+    return getattr(_output, "limit", None) or MAX_TOOL_OUTPUT_CHARS
 
 
 def trim_tool_output(text: str, name: str = "") -> str:
-    """Cut a tool result down to MAX_TOOL_OUTPUT_CHARS, keeping both ends."""
+    """Cut a tool result down to the output limit, keeping both ends."""
 
     text = text.strip() or "(no output)"
-    limit = MAX_TOOL_OUTPUT_CHARS
+    limit = output_limit()
 
     if name in _SELF_LIMITING_TOOLS or len(text) <= limit:
         return text
 
+    _output.cut = (name, text)
     head_len = limit // 2
     tail_len = limit - head_len
     omitted = len(text) - limit
 
     return (
         text[:head_len]
-        + f"\n\n... truncated {omitted} characters ...\n\n"
+        + f"\n\n... truncated {omitted} characters (call more_output to "
+        "see them) ...\n\n"
         + text[-tail_len:]
     )
+
+
+def flash_icons_tool(action: str = "get", names: str = "", format: str = "html", **style_args) -> str:
+    """Flash Icons: get them, list them, or read and change their style."""
+
+    from . import icons
+
+    wanted = [n.strip() for n in re.split(r"[,\n]+", str(names or "")) if n.strip()]
+    try:
+        if action == "list":
+            return "\n".join(f"{cat}: {', '.join(keys)}" for cat, keys in icons.catalogue().items())
+        if action == "reset":
+            return "Back to Flash's own icon style: " + icons.describe(icons.reset_style()) + "."
+        if action == "style":
+            changes = {k: v for k, v in style_args.items() if k in icons.DEFAULT_STYLE and v not in (None, "")}
+            now = icons.set_style(changes) if changes else icons.style()
+            return (("Saved. " if changes else "") + "Icon style: " + icons.describe(now) + ". "
+                    + "Every icon you make follows it; pages made before keep the stylesheet they were made with "
+                    "until it is replaced with the new one (action get, format css).")
+        if action == "preview":
+            page = icons.FLASH_DIR / "icons-preview.html"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(icons.preview_page(wanted or None), encoding="utf-8")
+            return (f"Wrote a preview of {'those icons' if wanted else 'every icon'} in the current style to {page}. "
+                    "Show it with send_html.")
+        if action == "get":
+            if not wanted:
+                return "Error: name the icons to get, comma-separated. action list shows them."
+            return icons.pack(wanted, (format or "html").lower())
+        return "Error: action is get, list, style, preview or reset."
+    except icons.IconError as exc:
+        return f"Error: {exc}"
+
+
+def checkin_preferences_tool(interests=None, quiet_hours=None) -> str:
+    """Read the user's check-in preferences, or change them."""
+
+    from . import checkins
+
+    try:
+        if interests is not None:
+            checkins.set_interests(str(interests))
+        if quiet_hours is not None:
+            checkins.set_quiet_hours(str(quiet_hours))
+    except checkins.CheckinError as exc:
+        return f"Error: {exc}"
+    said = checkins.interests() or "(nothing set)"
+    quiet = checkins.quiet_words() or "off"
+    changed = interests is not None or quiet_hours is not None
+    return (("Saved. " if changed else "")
+            + f"What to tell the user about, in their words: {said}\n"
+            f"Quiet hours: {quiet}"
+            + (" (it is quiet hours now)" if checkins.is_quiet() else ""))
+
+
+def read_briefing_tool() -> str:
+    """The user's briefing, read for them and marked read."""
+
+    from . import briefing
+
+    tool_line("ReadBriefing()")
+    said = briefing.read_out(_BRIEFING_SESSION[0])
+    tool_result(said.splitlines()[0])
+    return said
+
+
+# The web UI's session, when there is one, so the briefing has its chats too.
+_BRIEFING_SESSION: list = [None]
+
+
+def more_output(chars: Any = 0) -> str:
+    """Raise the output limit for the rest of this task, and show the
+    last result that was cut, whole up to the new limit."""
+
+    try:
+        want = int(chars or 0)
+    except (TypeError, ValueError):
+        want = 0
+    want = max(output_limit() * 4 if want <= 0 else want, MAX_TOOL_OUTPUT_CHARS)
+    _output.limit = min(MOST_OUTPUT_CHARS, want)
+    tool_line(f"MoreOutput({_output.limit:,} characters)")
+    cut = getattr(_output, "cut", None)
+    head = (f"Each tool result is now cut at {_output.limit:,} characters "
+            "for the rest of this task.")
+    if not cut:
+        return head + " No result has been cut yet."
+    name, text = cut
+    _output.cut = None
+    return f"{head} The last cut result ({name}), again:\n\n" + \
+        trim_tool_output(text, "more_output")
 
 
 def _run_shell_streaming(
@@ -338,7 +543,7 @@ def _run_shell_streaming(
         shell=shell,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         bufsize=1,
         env=env,
     )
@@ -434,21 +639,227 @@ def clear_user_runs() -> None:
     _user_runs.clear()
 
 
-def shell_tool(command: str, timeout=None, is_user=False) -> str:
-    """Tool to execute a shell command"""
+# The commands running now, by who runs them: a chat's id, or
+# "spark:<id>". Stop ends them then and there, rather than at the end of
+# a command that could run for minutes.
+_running: dict[str, set] = {}
+_running_lock = threading.Lock()
+_owner = threading.local()
+# Commands ended by Stop, to say so rather than how they failed.
+_stopped: set = set()
+# What each running command is, by its process id, for the Background
+# panel: (owner, the command, when it started).
+_running_info: dict[int, tuple[str, str, float]] = {}
+# How long a stopped command has to end before it is killed outright.
+STOP_GRACE = 2.0
+
+
+@contextlib.contextmanager
+def running_as(owner: str):
+    """Commands run on this thread meanwhile are OWNER's, to stop."""
+
+    before = getattr(_owner, "name", "")
+    _owner.name = owner
+    try:
+        yield
+    finally:
+        _owner.name = before
+
+
+# Owners told to stop, for work that is not a command to end, such as a
+# phone call: it hangs up at its next turn.
+_halted: dict[str, float] = {}
+
+
+def halted(owner: str, since: float) -> bool:
+    """Whether OWNER was told to stop after SINCE."""
+
+    return _halted.get(owner, 0.0) > since
+
+
+def stop_commands(owner: str) -> int:
+    """End every command OWNER is running, and what each started. How
+    many there were."""
+
+    _halted[owner] = time.time()
+    with _running_lock:
+        procs = list(_running.get(owner, ()))
+        _stopped.update(p.pid for p in procs)
+    for proc in procs:
+        _end_tree(proc)
+    return len(procs)
+
+
+def running_shells() -> list[dict]:
+    """Every command Flash is running now: its process id, who runs it
+    (a chat's id, "spark:<id>" or "agent:<id>"), what it is, and for how
+    many seconds it has run. Oldest first."""
+
+    now = time.time()
+    with _running_lock:
+        rows = [
+            {"pid": pid, "owner": owner, "command": command,
+             "seconds": round(now - started)}
+            for pid, (owner, command, started) in _running_info.items()
+        ]
+    # and the background tasks, which run on past their turns
+    rows += [{"pid": t.pid, "owner": t.owner, "command": t.command, "seconds": round(t.seconds()),
+              "background": True, "task": t.id} for t in bgtasks.running()]
+    return sorted(rows, key=lambda r: -r["seconds"])
+
+
+def stop_shell(pid: int) -> bool:
+    """End the running command PID and what it started. Whether there
+    was one."""
+
+    with _running_lock:
+        proc = next((p for procs in _running.values() for p in procs
+                     if p.pid == pid), None)
+        if proc is not None:
+            _stopped.add(proc.pid)
+    if proc is None:
+        return bgtasks.stop_pid(pid)
+    threading.Thread(target=_end_tree, args=(proc,), daemon=True).start()
+    return True
+
+
+def _end_tree(proc: subprocess.Popen) -> None:
+    """End PROC and everything it started: asked first, then made to."""
+
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(  # nosec B603 B607 -- a fixed program
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10, check=False,
+            )
+        return
+    import signal
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, sig)
+        try:
+            proc.wait(timeout=STOP_GRACE)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run_owned(args, *, shell: bool, seconds: int,
+               env: Optional[dict]) -> tuple[str, str, int, bool]:
+    """Run a command as subprocess.run would, in a process group of its
+    own, so Stop can end it and all it started. (stdout, stderr, exit
+    code, whether Stop ended it). Raises TimeoutExpired, after ending it,
+    when it runs too long."""
+
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+             if os.name == "nt" else {"start_new_session": True})
+    proc = subprocess.Popen(  # nosec B602 B603 -- the agent's command
+        args, shell=shell, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env, **group,
+    )
+    owner = getattr(_owner, "name", "")
+    shown = args if isinstance(args, str) else " ".join(map(str, args))
+    with _running_lock:
+        _running.setdefault(owner, set()).add(proc)
+        _running_info[proc.pid] = (owner, shown, time.time())
+    try:
+        out, err = proc.communicate(timeout=seconds)
+    except BaseException:
+        _end_tree(proc)
+        with contextlib.suppress(Exception):
+            proc.communicate(timeout=STOP_GRACE)
+        raise
+    finally:
+        with _running_lock:
+            _running.get(owner, set()).discard(proc)
+            _running_info.pop(proc.pid, None)
+            stopped = proc.pid in _stopped
+            _stopped.discard(proc.pid)
+    return out or "", err or "", proc.returncode, stopped
+
+
+def task_output_tool(task_id: str = "", everything: Any = False) -> str:
+    """A background task's output since last read; or the list of them."""
+
+    owner = getattr(_owner, "name", "")
+    if not str(task_id or "").strip():
+        tool_line("TaskList()")
+        return bgtasks.listing(owner)
+    tool_line(f"TaskOutput({task_id})")
+    task = bgtasks.get(task_id)
+    if task is None or task.owner != owner:
+        return f"No background task {task_id!r} of yours. " + bgtasks.listing(owner)
+    said = bgtasks.output(task_id, everything is True or str(everything).lower() == "true")
+    return trim_tool_output(said, "task_output")
+
+
+def task_stop_tool(task_id: str) -> str:
+    """End a background task."""
+
+    tool_line(f"TaskStop({task_id})")
+    owner = getattr(_owner, "name", "")
+    task = bgtasks.get(task_id)
+    if task is None or task.owner != owner:
+        return f"No background task {task_id!r} of yours."
+    said = bgtasks.stop(task_id)
+    tool_result(said, style=DIM)
+    return said
+
+
+def shell_tool(command: str, timeout=None, is_user=False,
+               sandbox: Any = None, background: Any = False,
+               description: str = "") -> str:
+    """Tool to execute a shell command. SANDBOX: run it in the OS sandbox
+    (sandbox.py), as every command Flash runs does when the user turned
+    that on."""
+
+    from . import sandbox as walls
 
     seconds = _shell_timeout(timeout)
+    from . import worktrees
+
+    if not is_user and worktrees.publishes(command) and worktrees.is_private(os.getcwd()):
+        tool_line(f"Bash({command})")
+        result = ("Error: not run. This chat works in a private worktree: its branch stays on this computer, "
+                  "and pushing it or opening a pull request is the user's to do. Commit here instead, and tell "
+                  "the user it is ready to merge.")
+        tool_result(result, style=ERROR)
+        return result
+    walled = not is_user and (walls.enabled() or sandbox is True or str(
+        sandbox).strip().lower() in ("true", "yes", "1"))
 
     if not is_user:
-        suffix = "" \
+        background = background is True or str(background).strip().lower() in ("true", "yes", "1")
+        suffix = " in the background" if background else "" \
             if seconds == DEFAULT_SHELL_TIMEOUT \
             else f" (timeout {seconds}s)"
-        tool_line(f"Bash({command}){suffix}")
+        tool_line(f"Bash({command}){suffix}"
+                  + (" in the sandbox" if walled else ""))
 
-        if not NO_COMMAND_CONFIRMATION:
+        if walled and walls.missing():
+            result = (f"Error: the command was not run: {walls.missing()}"
+                      + (" The sandbox is on for every command, so none "
+                         "run until it is there, or the user turns it off."
+                         if walls.enabled() else ""))
+            tool_result(result, style=ERROR)
+            return result
+
+        # In Ask first mode, a sandboxed command runs without asking when
+        # the user allowed that: what it can do is walled in.
+        from . import stakes
+
+        risky = stakes.why(command) if CAREFUL else ""
+        if (not NO_COMMAND_CONFIRMATION or risky) and not (
+                walled and walls.auto_allow()):
             notify_needs_input()
 
-            user_input = remote_answer(f"Run this command?\n{command}")
+            user_input = remote_answer(
+                f"Run this command?{f' It {risky}.' if risky else ''}"
+                f"\n{command}")
 
             if user_input is None:
                 prompt = Text("  ⎿  ", style=DIM)
@@ -457,14 +868,30 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 prompt.append("/n ", style=DIM)
                 console.print(prompt, end="")
 
-                user_input = typed()
+                user_input = yes_no()
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
                 return "Command blocked by user"
 
+    # A secret named in it is read from the environment, so the command
+    # shown, asked about and kept has only its name.
+    from . import vault
+
+    env: Optional[dict] = None
+    if vault.PLACEHOLDER.search(command):
+        try:
+            command, secrets = vault.for_shell(command, os.name == "nt")
+        except vault.VaultError as exc:
+            tool_result(str(exc), style=ERROR)
+            return f"Error: {exc}"
+        env = {**os.environ, **secrets}
+
     args: Union[list[str], str]
-    if os.name == "nt":
+    if walled:
+        args = walls.wrap(command)
+        shell = False
+    elif os.name == "nt":
         args = [
             "powershell",
             "-NoProfile",
@@ -478,13 +905,28 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
         args = command
         shell = True
 
+    if background and not is_user:
+        # Set aside to run on: an id now, its output to a log, its chat
+        # told when it ends (bgtasks).
+        try:
+            task = bgtasks.start(args, shell=shell, command=command, env=env,
+                                 owner=getattr(_owner, "name", ""), description=description)
+        except (RuntimeError, OSError) as exc:
+            tool_result(f"Error: {exc}", style=ERROR)
+            return f"Error: {exc}"
+        said = (f"Started background task {task.id}. It runs on while you carry on; you are told "
+                f"when it ends. task_output reads what it printed (what is new since you last "
+                f"looked), task_stop ends it.")
+        tool_result(f"Running in the background as {task.id}", style=DIM)
+        return said
+
     try:
         if is_user:
             # Commands typed directly by the user (via `!`) stream their
             # output live as it's produced, instead of waiting for the
             # whole command to finish before showing anything.
             output, returncode = _run_shell_streaming(  # nosec B604
-                args, shell=shell, seconds=seconds
+                args, shell=shell, seconds=seconds, env=env,
             )
             _note_user_run(command, f"exit {returncode}", output)
             if not output.strip():
@@ -492,25 +934,21 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             if returncode:
                 return f"(exit {returncode})"
             return ""
-        if os.name == "nt":
-            result = subprocess.run(  # nosec B603
-                args,
-                capture_output=True,
-                text=True,
-                timeout=seconds,
-                check=False,
-                stdin=subprocess.DEVNULL,
+        # What the command changes is kept as it was, so /undo and the time machine can put it back.
+        try:
+            watch = checkpoint.ShellWatch(command)
+        except Exception:  # noqa: BLE001  (never in the way of the command)
+            watch = None
+        try:
+            out, err, returncode, stopped = _run_owned(
+                args, shell=shell, seconds=seconds, env=env,  # nosec B604
             )
-        else:
-            result = subprocess.run(
-                args,
-                shell=True,  # nosec B602
-                capture_output=True,
-                text=True,
-                timeout=seconds,
-                check=False,
-                stdin=subprocess.DEVNULL,
-            )
+        finally:
+            if watch is not None:
+                try:
+                    watch.finish()
+                except Exception:  # noqa: BLE001
+                    pass
     except subprocess.TimeoutExpired:
         message = (
             f"Error: Command timed out after {seconds} seconds. "
@@ -528,16 +966,25 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             _note_user_run(command, "interrupted with Ctrl+C", "")
         return "Error: Command execution interrupted by user."
 
-    parts = [result.stdout.strip(), result.stderr.strip()]
+    parts = [out.strip(), err.strip()]
     output = "\n".join(part for part in parts if part)
 
-    if result.returncode and output:
-        final = f"(exit {result.returncode})\n{output}"
+    if stopped:
+        final = "Stopped by the user while it ran." + (
+            f" What it printed before:\n{output}" if output else "")
+        tool_result(final, style=WARN)
+        return final
+
+    if returncode and output:
+        final = f"(exit {returncode})\n{output}"
     else:
         final = output or "(no output)"
 
-    tool_result(final, style=ERROR if result.returncode else DIM)
+    tool_result(final, style=ERROR if returncode else DIM)
 
+    if walled and returncode:
+        # A failure may be the walls: said, so it is not taken for a bug.
+        final += "\n(" + walls.describe() + ")"
     return final
 
 
@@ -634,7 +1081,7 @@ def grep_tool(
         return result
 
     try:
-        regex = re.compile(pattern, re.IGNORECASE if case_insensitive else 0)
+        regex = re.compile(pattern, re.IGNORECASE if _truthy(case_insensitive) else 0)
     except re.error as exc:
         result = f"Error: invalid regex: {exc}"
         tool_result(result, style=ERROR)
@@ -822,7 +1269,7 @@ def _read_exact(file_path: Path) -> Optional[str]:
 def write_tool(path: str, content: str, append: Any = False) -> str:
     """Tool to write a text file, showing a diff and asking to confirm."""
 
-    adding = bool(append)
+    adding = _truthy(append)
 
     tool_line(f"Write({path}, append)" if adding else f"Write({path})")
 
@@ -869,31 +1316,14 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     tool_result(summary)
     tool_diff(preview, more=omitted)
 
-    if not NO_COMMAND_CONFIRMATION:
-        if (preview or not existed) and editor.show_diff(
-            old_text, new_text, file_path.name, SCRATCH_DIR
-        ):
-            tool_result("Opened side by side in VS Code")
-
-        notify_needs_input()
-
-        prompt = Text(f"  {BRANCH}  ", style=DIM)
-        prompt.append(
-            "Append to this file? " if adding else "Write this file? ",
-            style=DIM,
-        )
-        prompt.append("y", style=f"bold {ACCENT}")
-        prompt.append("/n ", style=DIM)
-        console.print(prompt, end="")
-
-        try:
-            answer = typed()
-        finally:
-            _close_diff()
-
-        if answer != "y":
-            tool_result("Write blocked by user", style=WARN)
-            return "Write blocked by user"
+    refused = _ask_change(
+        file_path, old_text, new_text,
+        "Append to this file?" if adding else "Write this file?",
+        blocked="Write blocked by user",
+        side_by_side=bool(preview or not existed),
+    )
+    if refused is not None:
+        return refused
 
     checkpoint.record(file_path)
 
@@ -908,6 +1338,7 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         result = f"Error: could not write {file_path}: {exc}"
         tool_result(result, style=ERROR)
         return result
+    livedocs.changed(file_path, new_text)
 
     written = len(content.splitlines())
 
@@ -973,6 +1404,19 @@ def _confirm_change(
         f"{removals} removal{plural(removals)}"
     )
     tool_diff(preview, more=omitted)
+    return _ask_change(file_path, old_text, new_text, question)
+
+
+def _ask_change(
+    file_path: Path,
+    old_text: str,
+    new_text: str,
+    question: str,
+    blocked: str = "Edit blocked by user",
+    side_by_side: bool = True,
+) -> Optional[str]:
+    """Ask whether the change shown may go in. None means go ahead;
+    otherwise BLOCKED, for the model."""
 
     if NO_COMMAND_CONFIRMATION:
         return None
@@ -980,15 +1424,20 @@ def _confirm_change(
     notify_needs_input()
 
     # Asked of the browser when the web UI is running this turn, where
-    # the diff is already on screen above the question.
+    # the diff is already on screen above the question, and the change
+    # in the document itself when it is open in the side panel.
+    livedocs.propose(file_path, new_text)
     answer = remote_answer(f"{question}\n{file_path}")
+    livedocs.take_proposal()
     if answer is not None:
         if answer != "y":
-            tool_result("Edit blocked by user", style=WARN)
-            return "Edit blocked by user"
+            tool_result(blocked, style=WARN)
+            return blocked
         return None
 
-    if editor.show_diff(old_text, new_text, file_path.name, SCRATCH_DIR):
+    if side_by_side and editor.show_diff(
+        old_text, new_text, file_path.name, SCRATCH_DIR
+    ):
         tool_result("Opened side by side in VS Code")
 
     prompt = Text(f"  {BRANCH}  ", style=DIM)
@@ -998,15 +1447,15 @@ def _confirm_change(
     console.print(prompt, end="")
 
     try:
-        answer = typed()
+        answer = yes_no()
     finally:
         # Closed on the way out whichever way it went, and even if the
         # read was interrupted, so a decided diff never lingers.
         _close_diff()
 
     if answer != "y":
-        tool_result("Edit blocked by user", style=WARN)
-        return "Edit blocked by user"
+        tool_result(blocked, style=WARN)
+        return blocked
 
     return None
 
@@ -1098,6 +1547,7 @@ def _edit_file(path: str, edits: list[Edit], question: str) -> str:
     if failed is not None:
         tool_result(failed, style=ERROR)
         return failed
+    livedocs.changed(file_path, new_text)
 
     made = result.replacements
     summary = (
@@ -1120,7 +1570,7 @@ def edit_tool(
 
     return _edit_file(
         path,
-        [Edit(str(old_string), str(new_string), bool(replace_all))],
+        [Edit(str(old_string), str(new_string), _truthy(replace_all))],
         "Apply this edit?",
     )
 
@@ -1159,7 +1609,7 @@ def _parse_edits(edits: Any) -> Union[list[Edit], str]:
         parsed.append(Edit(
             str(entry["old_string"]),
             str(entry["new_string"]),
-            bool(entry.get("replace_all", False)),
+            _truthy(entry.get("replace_all", False)),
         ))
 
     return parsed
@@ -1451,10 +1901,70 @@ def get_os() -> str:
 
 
 def reason(thought: str) -> str:
-    """Show the user a line of reasoning without ending the turn."""
+    """Show the user a line of reasoning without ending the turn, its
+    Markdown drawn: a list as a list, code as code, all of it dim."""
 
-    console.print(Text(f"\n{thought}\n", style=f"italic {DIM}"))
+    console.print()
+    console.print(Markdown(
+        str(thought or "").strip(), code_theme="monokai",
+        style=f"italic {DIM}",
+    ))
+    console.print()
     return "(noted)"
+
+
+def ask_system_one(
+    question: str = "", kind: str = "yes_no", options: Any = None,
+    context: str = "",
+) -> str:
+    """Put the agent's question to System One, and say what it answered."""
+
+    tool_line(f"SystemOne({str(question).strip()})")
+
+    if not systemone.active():
+        result = (
+            "System One is off. It works in autonomous mode, once the "
+            "user turns it on with /systemone on or in Settings."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    try:
+        answer = systemone.answer_question(
+            OLLAMA_HOST, question, kind, options, context,
+        )
+    except systemone.SystemOneError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    tool_result(answer)
+    return f"System One ({systemone.model()}): {answer}"
+
+
+def review_code(target: Any = "", model: str = "") -> str:
+    """Review a change for bugs: what might be wrong, then each of
+    those checked on its own, and only what holds up reported."""
+
+    from . import ai, review  # deferred: ai imports this module
+
+    target = " ".join(str(target or "").split())
+    model = str(model or MODEL_NAME or "")
+    tool_line(f"Review({target or 'uncommitted changes'})")
+    if not model:
+        result = "Error: no model is set to review with."
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        found = review.review(
+            ai._client(), model, target, options=ai._chat_options(),
+            doing=tool_result,
+        )
+    except review.ReviewError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    said = review.report(found)
+    tool_result(said, style=WARN if found.findings else DIM)
+    return said
 
 
 def _plan_steps(steps: Any) -> list[str]:
@@ -1509,35 +2019,150 @@ def check_step(index: Any) -> str:
     return plan.as_text()
 
 
-def remember(entry: str) -> str:
-    """Save a fact or preference to persistent memory for future sessions."""
+def notes_tool(add: Any = "", rewrite: Any = None, drop: Any = "") -> str:
+    """Keep working notes on a long task: kept word for word through
+    every compaction of the chat."""
 
-    tool_line(f"Remember({entry})")
-    result = add_memory(entry)
+    from . import worknotes
+
+    if isinstance(add, (list, tuple)):
+        add = "\n".join(str(item) for item in add)
+    if isinstance(rewrite, (list, tuple)):
+        rewrite = "\n".join(str(item) for item in rewrite)
+    if not str(add or "").strip() and rewrite is None and \
+            not str(drop or "").strip():
+        notes = worknotes.lines()
+        tool_line("Notes()")
+        tool_result(f"{len(notes)} lines" if notes else "None yet", style=DIM)
+        return "\n".join(f"- {line}" for line in notes) or "No notes yet."
+    notes = worknotes.change(str(add or ""), None if rewrite is None
+                             else str(rewrite), str(drop or ""))
+    what = "rewritten" if rewrite is not None else "dropped" if \
+        str(drop or "").strip() and not str(add or "").strip() else "added"
+    tool_line(f"Notes({what})")
+    tool_result(f"{len(notes)} line{'' if len(notes) == 1 else 's'} kept",
+                style=DIM)
+    return ("Your notes now:\n" + "\n".join(f"- {line}" for line in notes)
+            if notes else "Your notes are empty.")
+
+
+# How the project's memory is told apart in recall's results.
+PROJECT_MARK = "project "
+
+
+def _project_memory(wanted: Any) -> tuple[Optional[Path], str]:
+    """The project memory a call asks for, or (None, why not) when it
+    asked for one outside a project; (None, "") when it did not ask."""
+
+    from . import memory
+
+    if wanted not in (True, "true", "yes", 1):
+        return None, ""
+    project = memory.current_project()
+    if not project:
+        return None, ("Error: this chat is not in a project, so there is "
+                      "no project memory. Leave project out to use the "
+                      "user's own memory.")
+    return memory.project_path(project), ""
+
+
+def remember(entry: str, project: Any = False) -> str:
+    """Save a fact or preference to persistent memory for future sessions:
+    the user's own, or with PROJECT, the project's this chat is in."""
+
+    from . import guard, vault
+
+    tool_line(f"Remember({entry})" + (" in the project"
+                                      if project is True else ""))
+    found = guard.signs(entry)
+    if found:
+        result = ("Not remembered: it reads like instructions to an "
+                  f"assistant ({found[0]}), which is not a fact about the "
+                  "user. If the user asked for it, say so and ask them to "
+                  "add it themselves.")
+        tool_result(result, style=WARN)
+        return result
+    with contextlib.suppress(Exception):
+        entry = vault.scrub(entry)
+    path, why = _project_memory(project)
+    if why:
+        tool_result(why, style=ERROR)
+        return why
+    result = add_memory(entry, path)
+    if path is not None and result.startswith("Remembered"):
+        result = result.replace("Remembered", "Remembered for this project",
+                                1)
     tool_result(result)
     return result
 
 
 def recall(phrase: str) -> str:
-    """Search saved memory for every entry containing a phrase."""
+    """Search saved memory for every entry containing a phrase: the
+    user's, and the project's when the chat is in one."""
+
+    from . import memory
 
     tool_line(f"Recall({phrase})")
-    matches = search_memory(phrase)
-    result = (
-        "\n".join(f"{i}. {entry}" for i, entry in matches)
-        if matches
-        else "No matching memories."
-    )
+    lines = [f"{i}. {entry}" for i, entry in search_memory(phrase)]
+    if memory.current_project():
+        path = memory.project_path(memory.current_project())
+        lines += [f"{PROJECT_MARK}{i}. {entry}"
+                  for i, entry in search_memory(phrase, path)]
+    result = "\n".join(lines) if lines else "No matching memories."
     tool_result(result)
     return result
 
 
-def forget(index: int) -> str:
-    """Delete one saved memory entry by its 1-based index."""
+def update_user_model(section: str, content: str) -> str:
+    """Rewrite one section of the user profile."""
 
-    tool_line(f"Forget({index})")
+    from . import usermodel
+
+    tool_line(f"UpdateProfile({section})")
+    if not usermodel.enabled():
+        result = ("Not updated: the user turned off keeping their profile "
+                  "up to date.")
+    else:
+        result = usermodel.update(section, content)
+    if result.startswith(("Error", "Not")):
+        tool_result(result, style=ERROR)
+    else:
+        tool_result(result)
+    return result
+
+
+def search_chats(query: str = "", chat_id: str = "", limit: int = 5) -> str:
+    """Search the user's past conversations, or read one back."""
+
+    from . import pastchats, worknotes
+
+    if chat_id:
+        tool_line(f"ReadChat({chat_id}{', ' + query if query else ''})")
+        result = pastchats.read(chat_id.strip(), query)
+        tool_result(result.split("\n", 1)[0])
+        return result
+    if not query.strip():
+        result = "Error: give a query to search for, or a chat_id to read."
+        tool_result(result, style=ERROR)
+        return result
+    tool_line(f"SearchChats({query})")
+    found = pastchats.search(query, limit, exclude=worknotes.current())
+    result = pastchats.describe(found, query)
+    tool_result(f"{len(found)} found" if found else "Nothing found")
+    return result
+
+
+def forget(index: int, project: Any = False) -> str:
+    """Delete one saved memory entry by its 1-based index: the user's,
+    or with PROJECT, the project's."""
+
+    tool_line(f"Forget({'project ' if project is True else ''}{index})")
+    path, why = _project_memory(project)
+    if why:
+        tool_result(why, style=ERROR)
+        return why
     try:
-        result = forget_memory(index)
+        result = forget_memory(index, path)
     except IndexError as exc:
         result = str(exc)
     tool_result(result)
@@ -1558,6 +2183,198 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def image_tool(action: str = "create", prompt: str = "", path: str = "", size: str = "square", steps: Any = None,
+               count: Any = 1, model: str = "", factor: Any = 2) -> str:
+    """Make pictures with an image model, change one, cut its background away, or make it bigger (flash/imagine.py)."""
+
+    from . import imagine
+
+    action = str(action or "create").strip().lower()
+    tool_line(f"Image({action}{': ' + prompt[:60] if prompt else ''}{' ' + path if path and not prompt else ''})")
+    try:
+        if action in ("create", "edit"):
+            if action == "edit" and not path:
+                raise imagine.ImageError("edit needs the picture's path")
+            made = imagine.make(prompt, size, int(steps) if steps else None, model, path if action == "edit" else "",
+                                int(count or 1), progress=lambda said: tool_result(said, style=DIM))
+        elif action == "remove_background":
+            made = [imagine.remove_background(path)]
+        elif action == "upscale":
+            made = [imagine.upscale(path, int(factor or 2))]
+        else:
+            raise imagine.ImageError("action is create, edit, remove_background or upscale")
+    except imagine.ImageError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    for p in made:
+        tool_file(str(p))
+    result = "Made, and shown to the user:\n" + "\n".join(str(p) for p in made) + \
+        "\nLook at it with view_image before saying it is right; edit it with action edit and this path."
+    tool_result(f"{len(made)} picture{'s' if len(made) > 1 else ''}")
+    return result
+
+
+def table_tool(action: str = "", path: str = "", name: str = "", sheet: str = "", sql: str = "") -> str:
+    """Spreadsheets kept as tables: import, query, list, export, remove."""
+
+    from . import tables
+
+    action = str(action or "").strip().lower()
+    tool_line(f"Table({action}{' ' + (name or Path(path).name if (name or path) else '')})")
+    try:
+        if action == "import":
+            if not path:
+                return "import needs path: the spreadsheet's file."
+            made = tables.import_file(path, name, sheet)
+            said = tables.describe_import(made)
+            tool_result(said.splitlines()[0])
+            return said
+        if action == "query":
+            cols, rows, more = tables.query(sql)
+            tool_result(f"{len(rows)}{'+' if more else ''} row{'s' if len(rows) != 1 else ''}")
+            return tables.markdown(cols, rows, more) if cols else "The query gave nothing back."
+        if action == "list":
+            found = tables.listing()
+            if not found:
+                return "No tables yet: import a spreadsheet first."
+            return "\n".join(f"{t['name']}: {t['rows']:,} rows from {t['source']} ({t['what']}), imported "
+                             f"{t['imported']}. Columns: " + ", ".join(f"{c['name']} {c['type']}" for c in t['columns'])
+                             for t in found)
+        if action == "export":
+            if not (name and path):
+                return "export needs name (the table) and path (the CSV to write)."
+            return f"Wrote {name} to {tables.export(name, path)}."
+        if action == "remove":
+            if not name:
+                return "remove needs name."
+            return f"Forgot table {tables.table_name(name)}; the file it came from is as it was." \
+                if tables.drop(name) else f"There is no table {name}."
+        return "action is import, query, list, export or remove."
+    except tables.TableError as exc:
+        return f"Error: {exc}"
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return f"Error: could not read that file: {exc}"
+
+
+def digest_tool(source: str = "", question: str = "", fresh: Any = False) -> str:
+    """Something too big to read at once, read in full part by part and mapped (flash/digest.py)."""
+
+    from . import digest
+
+    tool_line(f"Digest({source}{': ' + question[:50] if question else ''})")
+    try:
+        result = digest.digest(source, question, progress=lambda said: tool_result(said, style=DIM), fresh=_truthy(fresh))
+    except digest.DigestError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.split("\n", 1)[0][:120])
+    return result
+
+
+def meetings_tool(query: str = "", limit: Any = 10) -> str:
+    """Meetings recorded in Flash, newest first, or those that talked about QUERY (flash/meeting.py)."""
+
+    from . import meeting
+
+    tool_line(f"Meetings({query[:60]})" if query else "Meetings()")
+    try:
+        n = max(1, min(int(limit or 10), 50))
+    except (TypeError, ValueError):
+        n = 10
+    found = meeting.past(str(query or ""), n)
+    if not found:
+        result = "No meetings found" + (f" that talk about {query}." if query else " yet.")
+        tool_result(result)
+        return result
+    parts = []
+    for item in found:
+        lines = [f"- {item['title']} ({item['length']}), transcript: {item['path']}"]
+        if item.get("matches"):
+            lines += [f"    {line}" for line in item["matches"]]
+        elif item["opening"]:
+            lines.append(f"    Opens: {item['opening']}")
+        parts.append("\n".join(lines))
+    tool_result(f"{len(found)} meeting{'s' if len(found) != 1 else ''}")
+    return ("\n".join(parts) + "\n\nRead a transcript with read for the whole of it; "
+            "the chat each was written up in can be found with past chats.")
+
+
+def maps_tool(action: str = "", query: str = "", near: str = "", what: str = "", places: Any = None, mode: str = "driving",
+              radius: Any = 1500, limit: Any = 8) -> str:
+    """Places, what is near them, and routes, from OpenStreetMap (flash/maps.py)."""
+
+    from . import maps
+
+    tool_line(f"Maps({(action or '').strip()}{': ' + str(query or what or places or '')[:60] if (query or what or places) else ''})")
+    result = maps.run(action, query=query, near=near, what=what, places=places, mode=mode, radius=radius, limit=limit)
+    tool_result(result.split("\n", 1)[0][:120], style=ERROR if result.startswith("Error") else None)
+    return result
+
+
+def science_tool(action: str = "", query: str = "", id: str = "", source: str = "all", limit: Any = None, full: Any = False,
+                 status: str = "", style: str = "bibtex", sort: str = "relevance", sequence: Any = False, activity: Any = True) -> str:
+    """The research databases: papers, trials, compounds, proteins, citations (flash/science.py)."""
+
+    from . import science
+
+    what = (query or id or "").strip()
+    tool_line(f"Science({(action or '').strip()}{': ' + what[:60] if what else ''})")
+    result = science.run(action, query=query, id=id, source=source, limit=limit, full=full, status=status, style=style,
+                         sort=sort, sequence=sequence, activity=activity)
+    first = result.split("\n", 1)[0]
+    tool_result(first[:120], style=ERROR if result.startswith("Error") else None)
+    return result
+
+
+def flows_tool(action: str = "list", name: str = "", steps: Any = None, trigger: Any = None,
+               step: str = "", yes: Any = None) -> str:
+    """Flows: several sparks in order, side by side, with the user's yes where it matters."""
+
+    from . import flows
+
+    act = (action or "list").strip().lower()
+    tool_line(f"Flows({act}{' ' + name if name else ''})")
+    try:
+        if act == "list":
+            found = flows.all_flows()
+            if not found:
+                return "No flows yet."
+            out = []
+            for f in found:
+                sm = flows.summary(f)
+                last = sm["last"]
+                out.append(f"{f['name']} ({sm['trigger'] or 'run by hand'}): " + " -> ".join(
+                    (s["who"]["name"] + ": " + s["task"][:50]) if s["kind"] == "spark" else f"[approval] {s['task'][:50]}"
+                    for s in sm["steps"]) + (f". Last run: {last['state']}" if last else ""))
+            return "\n".join(out)
+        if act == "create":
+            f = flows.create(name, steps, trigger or "")
+            return (f"Made the flow {f['name']}, {len(f['steps'])} steps, "
+                    + (f"on schedule ({f['trigger']['text']})." if f["trigger"]["text"] else "run by hand (run starts it).")
+                    + " It shows on the Sparks page.")
+        if act == "update":
+            f = flows.update(name, steps=steps, trigger=trigger)
+            return f"Changed {f['name']}."
+        if act == "run":
+            run = flows.start(name)
+            return f"Started {name}: " + ", ".join(f"{k} {v['state']}" for k, v in run.get("steps", {}).items())
+        if act == "answer":
+            run = flows.answer(name, step, _truthy(yes))
+            return f"Answered. The run is {run.get('state')}."
+        if act == "stop":
+            return "Stopped." if flows.stop(name) else "It was not running."
+        if act in ("pause", "resume"):
+            flows.update(name, paused=act == "pause")
+            return f"{'Paused' if act == 'pause' else 'Resumed'} {name}."
+        if act == "delete":
+            return "Deleted." if flows.remove(name) else f"No flow called {name!r}."
+        return "Error: action is list, create, update, run, answer, stop, pause, resume or delete."
+    except flows.FlowError as exc:
+        return f"Error: {exc}"
+
+
 def skill_manage_tool(
     action: str = "",
     name: str = "",
@@ -1570,6 +2387,22 @@ def skill_manage_tool(
     """Create, patch, rewrite, or delete a skill."""
 
     tool_line(f"SkillManage({action} {name})")
+    act = (action or "").strip().lower()
+    if act in ("share", "add"):
+        # A skill as a code to give someone, or one added from a code.
+        try:
+            if act == "share":
+                result = (f"The code for {name} (give it whole; it is added with skill_manage add, or "
+                          f"Add from code on the Skills page):\n{skills.share_code(name)}")
+            else:
+                result = skills.add_from_code(content or "", name=name or "")
+                learning.refresh()
+        except (skills.SkillError, OSError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        tool_result(result if act == "add" else f"Code for {name}")
+        return result
     try:
         result = skills.manage(
             action,
@@ -1578,7 +2411,7 @@ def skill_manage_tool(
             content=content,
             old_string=old_string,
             new_string=new_string,
-            managed_only=managed_only,
+            managed_only=_truthy(managed_only),
             # The model is the only caller of this tool: the review, or
             # a chat that asked for one. Either way, Flash wrote it.
             by="flash",
@@ -1646,16 +2479,344 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+EMAIL_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "check_inbox",
+            "description": (
+                "List the user's newest emails, newest first: who from, "
+                "the subject, the first lines, each one's uid, and a link "
+                "that opens it for the user. Nothing is marked read, moved "
+                "or deleted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "True for unread emails only.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Optional words to find in them: a name, an "
+                            "address, a subject."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"How many, at most {mail.MAX_LIST}. "
+                            f"Default {mail.LIST_LIMIT}."
+                        ),
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Optional folder. Default INBOX.",
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "Optional: one of the user's email addresses, "
+                            "to check that account only. Left out, every "
+                            "connected account is checked."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_email",
+            "description": (
+                "Read one email in full, by its uid from check_inbox. It "
+                "stays unread if it was."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Its uid, from check_inbox.",
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Optional folder. Default INBOX.",
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "The account it is in, as check_inbox showed. "
+                            "Needed when more than one is connected."
+                        ),
+                    },
+                },
+                "required": ["uid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": (
+                "Send an email from the user's address, or reply to one "
+                "by its uid. The user sees it and says yes or no first, "
+                "every time. Write it as the user would, in their name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": (
+                            "Who it goes to. Leave it out on a reply to "
+                            "answer the sender, and otherwise to send it "
+                            "to the user's own default address (\"email "
+                            "me this\")."
+                        ),
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": (
+                            "The subject. Leave it out on a reply for "
+                            "Re: and the original's."
+                        ),
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "The whole email, in plain text.",
+                    },
+                    "reply_to": {
+                        "type": "string",
+                        "description": (
+                            "The uid of the email this answers, to thread "
+                            "it as a reply."
+                        ),
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "Optional: who else it goes to.",
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "Which of the user's addresses it is sent from. "
+                            "On a reply, the account the email is in. Left "
+                            "out, the user's default address."
+                        ),
+                    },
+                },
+                "required": ["body"],
+            },
+        },
+    },
+]
+
+SYSTEM_ONE_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_system_one",
+            "description": (
+                "Ask System One, a small, quick model trained to judge, one "
+                "question with a yes/no, a choice, or a score for an "
+                "answer, and get its probabilities back in a moment. Use "
+                "it for a second opinion before a step you are unsure of: "
+                "whether an output looks right, which of a few approaches "
+                "fits, how risky a change is. Put everything it needs in "
+                "context; it sees nothing else of the conversation but the "
+                "user's request. It cannot run tools or write prose."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "The question, plainly, e.g. \"Does this test "
+                            "output show every test passing?\""
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": list(systemone.ASK_KINDS),
+                        "description": (
+                            "yes_no for a probability of yes; choice to "
+                            "pick one of the options; score to rate on the "
+                            "options as a scale. yes_no when left out."
+                        ),
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "For choice, the options to pick from. For "
+                            "score, the levels of the scale, lowest first, "
+                            "e.g. [\"Harmless\", \"Risky\", \"Dangerous\"]."
+                        ),
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": (
+                            "What the question is about: the output, code, "
+                            "text, or facts it should judge from."
+                        ),
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+]
+
+
+# Flash turning on thinking by itself, for a reply it judges needs it:
+# on unless the user turned it off.
+THINK_AUTO_SETTING = "THINK_AUTO"
+
+THINK_HARDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "think_harder",
+        "description": (
+            "Turn on your thinking for the rest of this reply: you reason "
+            "at length before each answer. Call it first, before anything "
+            "else, when the request is hard: tricky maths or logic, a bug "
+            "whose cause is not plain, a plan with many steps, a design "
+            "with real trade-offs, or anything where a quick answer would "
+            "likely be wrong. Not for chat, simple questions, quick "
+            "lookups or plain edits."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "why": {
+                    "type": "string",
+                    "description": "A few words on what makes it hard.",
+                }
+            },
+            "required": ["why"],
+        },
+    },
+}
+
+THOUGHT_HARDER = (
+    "Thinking is on for the rest of this reply. Work through it "
+    "carefully: what is really being asked, what could go wrong, the "
+    "alternatives, and a check of your reasoning, any numbers and any "
+    "code. Then carry on."
+)
+
+# The terminal's reply turned its thinking on. The web keeps its own,
+# on each chat.
+_thinking = {"on": False}
+
+
+def think_auto() -> bool:
+    return (os.environ.get(THINK_AUTO_SETTING) or "1").strip().lower() \
+        not in ("0", "false", "off", "no")
+
+
+def think_tools(can_think: bool, already: bool = False) -> list[dict]:
+    """THINK_HARDER_TOOL, when the model can think, the user lets Flash
+    decide, and this reply is not thinking already."""
+
+    return [THINK_HARDER_TOOL] if can_think and think_auto() \
+        and not already else []
+
+
+def thinking_harder() -> bool:
+    """Whether the terminal's reply turned its thinking on."""
+
+    return _thinking["on"]
+
+
+def end_thinking() -> None:
+    _thinking["on"] = False
+
+
+def think_harder_tool(why: str = "") -> str:
+    """The terminal's: thinking on for the rest of the reply."""
+
+    _thinking["on"] = True
+    tool_line(f"ThinkHarder({str(why or '').strip()})")
+    tool_result("Thinking harder for the rest of this reply.")
+    return THOUGHT_HARDER
+
+
+def available_tools() -> list[dict[str, Any]]:
+    """The built-in tools that can work right now: email's and the smart
+    home's only once each is set up, and the computer's only once the
+    user has allowed it, and only what they have not switched off of
+    it, so a model is not offered tools that can only fail."""
+
+    from . import smarthome
+
+    home = smarthome.connected()
+    return (
+        [t for t in tools if home or t["function"]["name"] != "smart_home"]
+        + (EMAIL_TOOLS if mail.configured() else [])
+        + computer_tools()
+        + (computer_use_tools() if computeruse.enabled() else [])
+        + ([PHONE_TOOL if ultra_auto() else HANG_UP_TOOL]
+           if computer.system() == "mac" else [])
+        + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
+           else [])
+        + (LOCATION_TOOLS if location.current() else [])
+        + (XCODE_TOOLS if computer.system() == "mac" and _has_xcode() else [])
+        + TIMER_TOOLS
+    )
+
+
+_XCODE_SEEN: dict[str, bool] = {}
+
+
+def _has_xcode() -> bool:
+    """Whether this Mac has Xcode, asked once."""
+
+    if "ok" not in _XCODE_SEEN:
+        _XCODE_SEEN["ok"] = xcode.available()
+    return _XCODE_SEEN["ok"]
+
 
 def turn_tools() -> list[dict[str, Any]]:
     """The tools offered on this turn: the editor's only inside VS Code,
-    and whatever the installed extensions add."""
+    System One's only while it is at work, and whatever the installed
+    extensions and the connected MCP servers add."""
+
+    offered = flash_tools()
+    taken = frozenset(t["function"]["name"] for t in offered)
+    return offered + connectors.tool_schemas(taken)
+
+
+def flash_tools() -> list[dict[str, Any]]:
+    """Flash's own tools on this turn, the extensions' with them: all
+    turn_tools offers but the connected MCP servers'."""
 
     return (
-        tools
+        available_tools()
         + (EDITOR_TOOLS if editor.available() else [])
+        + (SYSTEM_ONE_TOOLS if systemone.active() else [])
         + extensions.tool_schemas(frozenset(FUNCTIONS))
     )
+
+
+def _flash_tool_changes(before: list[dict[str, Any]],
+                        after: list[dict[str, Any]]) -> list[str]:
+    """What changed in Flash's own tools, one line each: none if none."""
+
+    old = {t["function"]["name"]: t for t in before}
+    new = {t["function"]["name"]: t for t in after}
+    added = [n for n in new if n not in old]
+    removed = [n for n in old if n not in new]
+    updated = [n for n in new if n in old and new[n] != old[n]]
+    return ([f"added: {', '.join(added)}"] if added else []) + (
+        [f"removed: {', '.join(removed)}"] if removed else []) + (
+        [f"updated: {', '.join(updated)}"] if updated else [])
 
 
 def run_extension_command(
@@ -1698,6 +2859,42 @@ def run_extension_command(
     return ""
 
 
+def _why_not() -> str:
+    """In the terminal, after a no: why, if they want to say. Enter
+    skips it."""
+
+    try:
+        said = console.input(Text("  ⎿  Why not? (optional, Enter skips) ",
+                                  style=DIM))
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    return " ".join(said.split())[:500]
+
+
+def _user_allows(question: str, ask_why: bool = False) -> bool:
+    """Ask the user QUESTION, yes or no, wherever they are: the web page
+    when one is asking, else the terminal. ASK_WHY: after a no in the
+    terminal, ask why too (denial_why() has it, as for the page's)."""
+
+    notify_needs_input()
+    answer = remote_answer(question)
+
+    if answer is None:
+        prompt = Text("  ⎿  ", style=DIM)
+        prompt.append(question + " ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no()
+        if answer != "y" and ask_why:
+            set_denial_why(_why_not())
+
+    if answer != "y":
+        tool_result("Blocked by user", style=WARN)
+        return False
+    return True
+
+
 def _extension_tool(name: str, args: dict) -> Optional[str]:
     """Answer a call to an extension's tool, or None if none has it."""
 
@@ -1710,28 +2907,82 @@ def _extension_tool(name: str, args: dict) -> Optional[str]:
     shown = json.dumps(args, ensure_ascii=False)
     tool_line(f"{name}({shown})")
 
-    if tool.confirm and not NO_COMMAND_CONFIRMATION:
-        notify_needs_input()
+    if tool.confirm and not NO_COMMAND_CONFIRMATION and not _user_allows(
+        f"Let {extension.name} run {name}?"
+    ):
+        return "Blocked by user"
 
-        question = f"Let {extension.name} run {name}?"
-        answer = remote_answer(question)
+    from . import vault
 
-        if answer is None:
-            prompt = Text("  ⎿  ", style=DIM)
-            prompt.append(question + " ", style=DIM)
-            prompt.append("y", style=f"bold {ACCENT}")
-            prompt.append("/n ", style=DIM)
-            console.print(prompt, end="")
-            answer = typed()
-
-        if answer != "y":
-            tool_result("Blocked by user", style=WARN)
-            return "Blocked by user"
-
-    result = extensions.call_tool(extension, tool, args)
+    try:
+        given = vault.expand_args(args)
+    except vault.VaultError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    result = extensions.call_tool(extension, tool, given)
+    result = _tool_pictures(result)
     tool_result(
         result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
     )
+    return result
+
+
+def _tool_pictures(output: str) -> str:
+    """An extension tool's output, with any pictures it gave handed to the
+    model as built-in tools' are: a tool that prints
+    {"text": "...", "images": ["<base64>", ...]} shows the model what it
+    sees (a robot's camera). Anything else is passed on as it is."""
+
+    if not output.startswith("{") or '"images"' not in output:
+        return output
+    try:
+        found = json.loads(output)
+    except ValueError:
+        return output
+    if not isinstance(found, dict) or not isinstance(found.get("images"), list):
+        return output
+    shown = 0
+    for item in found["images"][:4]:
+        try:
+            _pending_images.append(base64.b64decode(str(item), validate=True))
+            shown += 1
+        except (ValueError, TypeError):
+            continue
+    text = str(found.get("text") or "")
+    return (text + ("\n" if text else "")
+            + (f"({shown} picture{'s' if shown != 1 else ''} attached)" if shown else "")).strip() or "(no output)"
+
+
+def _connector_tool(name: str, args: dict) -> Optional[str]:
+    """Answer a call to a connected MCP server's tool, or None if no
+    server has it. One its server does not mark read-only asks first,
+    unless autonomous mode is on."""
+
+    found = connectors.find(name)
+
+    if found is None:
+        return None
+
+    server, tool = found
+    shown = json.dumps(args, ensure_ascii=False)
+    tool_line(f"{name}({shown[:300]})")
+
+    if not connectors.read_only(tool) and not NO_COMMAND_CONFIRMATION \
+            and not _user_allows(
+                f"Let the {server.name} connector run {tool['name']}?"
+            ):
+        return "Blocked by user"
+
+    from . import vault
+
+    try:
+        given = vault.expand_args(args)
+    except vault.VaultError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    result, images = connectors.call(server, tool, given)
+    _pending_images.extend(images)
+    tool_result(result, style=ERROR if result.startswith("Error") else DIM)
     return result
 
 
@@ -1791,6 +3042,1425 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
     return entry.result
 
 
+# --- Email ----------------------------------------------------------------
+
+
+def _truthy(value: Any) -> bool:
+    """A yes/no argument as the model sent it. Models write booleans as
+    strings often enough ("false", "False", "0"), and bool("false") is
+    True, so a string is read for what it says."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("true", "yes", "y", "1", "on")
+
+
+def check_inbox(
+    unread_only: Any = False, query: str = "", limit: Any = 0,
+    folder: str = "INBOX", account: str = "",
+) -> str:
+    """The newest emails, newest first, without marking any read: from
+    ACCOUNT, or from every connected account."""
+
+    unread = _truthy(unread_only)
+    what = "unread" if unread else "newest"
+    account = str(account or "").strip()
+    tool_line(
+        f"CheckInbox({what}"
+        + (f", {account}" if account else "")
+        + (f", {query!r}" if str(query or "").strip() else "")
+        + (f", {folder}" if folder and folder != "INBOX" else "") + ")"
+    )
+    try:
+        limit = int(limit or 0) or mail.LIST_LIMIT
+    except (TypeError, ValueError):
+        limit = mail.LIST_LIMIT
+    problems: list = []
+    try:
+        found = mail.inbox(
+            unread, str(query or ""), limit, folder or "INBOX", account,
+            problems,
+        )
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    trouble = [f"Could not check {who}: {why}" for who, why in problems]
+    for line in trouble:
+        tool_result(line, style=WARN)
+    if not found:
+        said = "No unread email." if unread else "No email found."
+        tool_result(said)
+        return "\n".join([said, *trouble])
+    tool_result(f"{len(found)} email{plural(len(found))}")
+    # Which account each is in matters once there is more than one: a
+    # uid is only that account's.
+    several = len({item["account"] for item in found}) > 1 or (
+        not account and len(mail.addresses()) > 1
+    )
+    lines = [
+        f"{len(found)} email{plural(len(found))}, newest first. read_email "
+        "with a uid"
+        + (" and its account" if several else "")
+        + " reads one; nothing here was marked read. When you tell the "
+        "user about one, link it, as [its subject](its link), so they can "
+        "open it.",
+        *trouble,
+    ]
+    for item in found:
+        count = item["attachments"]
+        clip = f" [{count} attached]" if count else ""
+        unread = " (unread)" if item["unread"] else ""
+        subject = item["subject"] or "(no subject)"
+        where = f" · in {item['account']}" if several else ""
+        lines.append(
+            f"- uid {item['uid']}{unread}{where} · {item['date']} · "
+            f"{item['from']}\n  {subject}{clip}: {item['snippet']}"
+            + (f"\n  link: {item['link']}" if item.get("link") else "")
+        )
+    return "\n".join(lines)
+
+
+def read_email(uid: Any = "", folder: str = "INBOX", account: str = "") -> str:
+    """One email in full, by its uid from check_inbox and the account it
+    is in. It stays unread."""
+
+    tool_line(f"ReadEmail({uid}{f', {account}' if account else ''})")
+    try:
+        found = mail.read(str(uid), folder or "INBOX", str(account or ""))
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(found["subject"] or "(no subject)")
+    body = found["body"] or "(no text)"
+    if len(body) > mail.BODY_CHARS:
+        body = body[:mail.BODY_CHARS] + "\n[... the rest is cut]"
+    head = [
+        f"uid: {found['uid']}", f"Account: {found['account']}",
+        f"From: {found['from']}", f"To: {found['to']}",
+    ]
+    if found["cc"]:
+        head.append(f"Cc: {found['cc']}")
+    head += [f"Date: {found['date']}", f"Subject: {found['subject']}"]
+    if found.get("link"):
+        head.append(f"Link, to give the user: {found['link']}")
+    if found["attachments"]:
+        head.append(f"Attachments: {', '.join(found['attachments'])}")
+    return "\n".join(head) + f"\n\n{body}"
+
+
+def send_email(
+    to: str = "", subject: str = "", body: str = "", reply_to: Any = "",
+    cc: str = "", account: str = "",
+) -> str:
+    """Send an email from ACCOUNT, or reply to one by its uid in ACCOUNT.
+    Always asks first."""
+
+    account = str(account or "").strip()
+    why = unfinished("send_email", {
+        "to": to, "subject": subject, "body": body, "cc": cc,
+    })
+    if why:
+        tool_line(f"SendEmail({to or reply_to})")
+        tool_result(why.removeprefix("Error: "), style=ERROR)
+        return why
+    try:
+        original = mail.read(str(reply_to), account=account) \
+            if str(reply_to or "").strip() else None
+        message = mail.compose(to, subject, body, original, cc, account)
+    except mail.MailError as exc:
+        tool_line(f"SendEmail({to or reply_to})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    tool_line(f"SendEmail({message['To']})")
+    preview = (
+        f"From: {message['From']}\nTo: {message['To']}"
+        + (f"\nCc: {message['Cc']}" if message.get("Cc") else "")
+        + f"\nSubject: {message['Subject']}\n\n"
+        + message.get_content().strip()
+    )
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not: an email cannot be taken
+    # back, and it goes out in the user's name. Only UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(f"Send this email?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Send this email? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no()
+    if answer != "y":
+        tool_result("Not sent: the user said no", style=WARN)
+        return "Not sent: the user said no. Do not send it again."
+
+    try:
+        sent_to = mail.send(message)
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(f"Sent to {sent_to}")
+    return f"Sent to {sent_to}."
+
+
+def ask_spark(spark: str = "", question: str = "") -> str:
+    """Ask one of the user's sparks QUESTION, and have its answer now."""
+
+    try:
+        found, answer = sparks.consult(
+            spark, question, asker="Flash",
+            who=", the assistant the user talks to",
+        )
+    except sparks.SparkError as exc:
+        tool_line(f"AskSpark({spark})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    except Exception as e:  # noqa: BLE001
+        tool_line(f"AskSpark({spark})")
+        tool_result(str(e), style=ERROR)
+        return f"Error: it could not answer: {e.__class__.__name__}: {e}"
+    tool_line(f"AskSpark({found.name})")
+    tool_result(answer)
+    return f"{found.name} ({found.handle}) says: {answer}"
+
+
+def give_spark(spark: str = "", job: str = "", chat: str = "") -> str:
+    """Hand one of the user's sparks JOB: a shift of its own starts now,
+    and its report comes back to CHAT, the web chat asking, if any."""
+
+    try:
+        found = sparks.take_on(spark, job, chat)
+    except sparks.SparkError as exc:
+        tool_line(f"GiveSpark({spark})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    where = "in this chat" if chat else "in its reports (/sparks)"
+    tool_line(f"GiveSpark({found.name})")
+    tool_result(f"A shift starts now; the report comes back {where}")
+    return (
+        f"(given to {found.name}: a shift starts now, and its report "
+        f"comes back {where}. Tell the user it is on it.)"
+    )
+
+
+def make_spark(
+    name: str, goal: str, every: Any = "", boundaries: str = "",
+    project: str = "", model: str = "", paused: Any = False,
+    events: Any = "",
+) -> str:
+    """Make a spark: an agent that works on GOAL on a schedule, or when
+    one of EVENTS comes in. PAUSED makes it without starting it, to
+    resume when the user wants."""
+
+    paused = paused is True or str(paused).strip().lower() in ("true", "yes")
+    try:
+        minutes, at = sparks.parse_schedule(every)
+    except sparks.SparkError as exc:
+        tool_line(f"MakeSpark({name}, {every}{', paused' if paused else ''})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    schedule = sparks.schedule_words({"every": minutes, "at": at})
+    tool_line(f"MakeSpark({name}, {schedule}{', paused' if paused else ''})")
+
+    # The model it runs on: the one the user named, else the one new
+    # sparks are made on, else Flash's, named in the question so it is
+    # chosen, not assumed.
+    model = str(model or "").strip()
+    fell_back = ""
+    if not model:
+        model, fell_back = sparks.model_for_new(MODEL_NAME)
+    if not model:
+        result = "Error: no model is set. Ask the user which one it runs on."
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        wanted = triggers.parse(events if isinstance(events, list)
+                                else str(events or ""))
+    except ValueError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    # It goes on working after this conversation is over, so it is the
+    # person's to agree to, as a command would be.
+    if not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
+        question = (
+            f"Make a spark called {name} that works on this "
+            f"{schedule}"
+            + (f", and on {' or '.join(map(triggers.words, wanted))}"
+               if wanted else "")
+            + f", on {model}"
+            f"{', paused until you resume it' if paused else ''}?\n{goal}"
+        )
+        answer = remote_answer(question)
+        if answer is None:
+            prompt = Text("  ⎿  ", style=DIM)
+            prompt.append("Make this spark? ", style=DIM)
+            prompt.append("y", style=f"bold {ACCENT}")
+            prompt.append("/n ", style=DIM)
+            console.print(prompt, end="")
+            answer = yes_no()
+        if answer != "y":
+            tool_result("Blocked by user", style=WARN)
+            return "Blocked by user"
+
+    try:
+        spark = sparks.create(
+            name, goal, boundaries, at or minutes, project, model=model,
+            paused=paused, events=wanted,
+        )
+    except sparks.SparkError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    from . import keepalive  # deferred: only a new spark needs it
+
+    schedule = sparks.schedule_words(spark)
+    first = time.strftime(
+        "%A at %H:%M", time.localtime(spark.next_run)
+    ) if spark.at else ""
+    result = (
+        f"Made {spark.name} ({spark.handle}), on {spark.model}. " + (
+            "It is paused: nothing runs until the user resumes it "
+            f"(/sparks resume {spark.name}, or Resume in its window), "
+            f"then {schedule}. "
+            if spark.paused else
+            f"It works {schedule}; its first shift is {first}. "
+            if spark.at else
+            "It is on call: it has no schedule, and works only when it is "
+            "called on, by Run now, a hand-off, give_spark, or "
+            f"{spark.handle} in a chat. "
+            if sparks.on_call(spark) else
+            f"Its first shift starts now, then {schedule}. "
+        ) + "Its reports are under /sparks, or Sparks in the web UI."
+    )
+    if fell_back:
+        result += f" Tell the user: {fell_back}"
+    if not keepalive.installed():
+        result += (
+            " Sparks only work while Flash is open right now. Offer to "
+            "keep them working with it closed: /sparks always on in the "
+            "terminal, or Settings in the web UI."
+        )
+    tool_result(result)
+    return result
+
+
+PHONE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "phone_call",
+        "description": (
+            "Hold a phone call for the user, in your own voice, through "
+            "their iPhone's calling on this computer, or FaceTime Audio: call "
+            "someone (\"call "
+            "John and tell him I'm running late\"), or answer a call "
+            "that is ringing now (answer does not wait: to wait for a "
+            "call, use wait_for with events \"call:<name>\" or \"call\", "
+            "then answer when it wakes you), or join a call the user is "
+            "already on, such as "
+            "Google Meet (\"talk to my friend\"). You say first that you "
+            "are an automated assistant "
+            "calling for the user, talk towards the goal, hang up, and "
+            "get the transcript. Only in UltraAuto. hang_up ends the call "
+            "on this computer now, in any mode: the one you are on, one "
+            "ringing (declined), or the user's own (\"hang up\", "
+            "\"end the call\", \"decline it\")."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["call", "answer", "join", "hang_up"],
+                           "description": "call them now, answer "
+                           "their next call, join the call the user "
+                           "is on now (who is optional), or hang up the "
+                           "call going now (who and goal are not needed)."},
+                "who": {"type": "string",
+                        "description": "A name from Contacts, or a "
+                        "phone number."},
+                "goal": {"type": "string",
+                         "description": "What the call is for, in the "
+                         "user's words: what to say, or find out."},
+                "via": {"type": "string",
+                        "enum": ["phone", "facetime_audio"],
+                        "description": "call: through the iPhone (the "
+                        "default), or FaceTime Audio over the internet, "
+                        "which needs no iPhone and can call an email "
+                        "address. Answering takes either."},
+                "ready": {"type": "boolean",
+                          "description": "join: true only once the user "
+                          "has said they set the call app's mic and "
+                          "speakers as you asked. Without it, join only "
+                          "tells you what to ask them."},
+                "app": {"type": "string",
+                        "description": "join: the call app, as the user "
+                        "would say it: Meet, Zoom, Teams..."},
+            },
+            "required": ["action"],
+        },
+    },
+}
+
+
+# Outside UltraAuto, phone_call can only end a call: hanging up asks for
+# nothing that calling or answering would.
+HANG_UP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "phone_call",
+        "description": (
+            "Hang up the call going on this computer now: one ringing is "
+            "declined, one the user is on is ended (\"hang up\", \"end "
+            "the call\", \"decline it\"). Making, answering and talking "
+            "on calls needs UltraAuto."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["hang_up"]},
+            },
+            "required": ["action"],
+        },
+    },
+}
+
+
+def computer_tools() -> list[dict[str, Any]]:
+    """The computer's tools, as far as the user allows them: none while
+    it is off, and only the actions they have not switched off. Calls
+    only in UltraAuto, on a Mac."""
+
+    if not computer.enabled():
+        return []
+    actions = computer.allowed_actions()
+    found = []
+    if actions:
+        found.append({
+            "type": "function",
+            "function": {
+                "name": "computer",
+                "description": (
+                    "Do a simple thing on the user's computer, which they "
+                    "have allowed. Use it when they ask for one of these "
+                    "(\"stop the music\", \"turn it down\", \"open "
+                    "Spotify\"); it cannot click, type or run commands. "
+                    "Actions: "
+                    + "; ".join(f"{name}: {computer.ACTIONS[name]}"
+                                for name in actions)
+                    + "."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": actions,
+                            "description": "What to do.",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": (
+                                "What the action needs, where it needs "
+                                "something: the volume level, the app's "
+                                "name, the link or path, the text, on or "
+                                "off."
+                            ),
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+        })
+    if computer.allowed("imessage_read"):
+        found += READ_IMESSAGES_TOOLS
+    if computer.allowed("imessage"):
+        found += IMESSAGE_TOOLS
+    if computer.allowed("imessage_mark"):
+        found += MARK_IMESSAGES_TOOLS
+    return found
+
+
+def computer_use_tools() -> list[dict[str, Any]]:
+    """Computer Use's one tool, said for this computer."""
+
+    mac = computer.system() == "mac"
+    quick = computeruse.fast()
+    actions = {**computeruse.ACTIONS, **computeruse.FAST_ACTIONS} if quick \
+        else computeruse.ACTIONS
+    schema: dict[str, Any] = {
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": (
+                "See the user's screen and work their mouse and keyboard "
+                "yourself (beta). ONLY for what no other tool can do: a "
+                "setting or button in an app with no other way in. Use "
+                "every other tool first (shell, files, the browser tools, "
+                "computer, connectors), as this is slow and the user is "
+                "asked before you get their computer. Start with "
+                "screenshot; each step after gives a fresh screenshot. x "
+                "and y are pixels in the latest screenshot. If the user "
+                "says no, takes the computer back or presses the stop "
+                "keys, stop "
+                "and do not try again unless they ask. Never enter "
+                "passwords or payment details. "
+                + ("This is a Mac: shortcuts use cmd (cmd+c, cmd+tab). "
+                   if mac else "Shortcuts use ctrl (ctrl+c, alt+tab). ")
+                + "Actions: "
+                + "; ".join(f"{name}: {what}"
+                            for name, what in actions.items())
+                + "."
+                + (" Fast mode is on: to be quick, list the elements "
+                   "and click or type into them by name (element), and "
+                   "do several actions in one call with steps, looking "
+                   "only once at the end. Fall back to a screenshot and "
+                   "x, y for what elements does not list."
+                   if quick else "")
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(actions)},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                    "to_x": {"type": "number",
+                             "description": "Where a drag ends."},
+                    "to_y": {"type": "number"},
+                    "button": {"type": "string",
+                               "enum": ["left", "right", "middle"]},
+                    "text": {"type": "string",
+                             "description": "What type types."},
+                    "keys": {"type": "string",
+                             "description": "For key: e.g. enter, tab, "
+                             "cmd+shift+4, ctrl+a."},
+                    "direction": {"type": "string",
+                                  "enum": ["up", "down", "left", "right"]},
+                    "amount": {"type": "integer",
+                               "description": "How far to scroll, in "
+                               "steps. Default 3."},
+                    "seconds": {"type": "number",
+                                "description": "How long wait waits."},
+                },
+                "required": ["action"],
+            },
+        },
+    }
+    if quick:
+        props = schema["function"]["parameters"]["properties"]
+        props["element"] = {
+            "type": "string",
+            "description": "In place of x, y: an element's name or number "
+                           "from the last elements list.",
+        }
+        props["to_element"] = {"type": "string",
+                               "description": "Where a drag ends, by "
+                               "element."}
+        props["steps"] = {
+            "type": "array",
+            "description": (
+                f"Up to {computeruse.MOST_STEPS} actions done one after "
+                "the other, with one screenshot after the last: each an "
+                "object like the call itself, e.g. {\"action\": \"click\", "
+                "\"element\": \"Name\"}, {\"action\": \"type\", "
+                "\"text\": \"Ada\"}, {\"action\": \"key\", \"keys\": "
+                "\"enter\"}. Set action to steps with it."),
+            "items": {"type": "object"},
+        }
+        props["action"]["enum"] = [*actions, "steps"]
+    return [schema]
+
+
+# On a Mac, with the computer allowed: the user's recent iMessages.
+READ_IMESSAGES_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_imessages",
+            "description": (
+                "Read the user's recent iMessages and texts on their Mac, "
+                "newest first: when, who from (by their name in Contacts), "
+                "and what was said, with group chats named. Use it when "
+                "they ask what someone said, whether anyone messaged, or "
+                "to catch up before replying. Nothing is marked read: "
+                "mark_imessages_read does that, when they ask."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "string",
+                        "description": (
+                            "Optional: only the conversation with this "
+                            "person, by a name or nickname in Contacts, a "
+                            "phone number or an email address."
+                        ),
+                    },
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "True for unread messages only.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"How many, at most {computer.MOST_READ}. "
+                            f"Default {computer.READ_LIMIT}."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+]
+
+
+def read_imessages(limit: Any = computer.READ_LIMIT,
+                   unread_only: Any = False, **given: Any) -> str:
+    """The user's recent iMessages, when they allow it."""
+
+    # "with" is a keyword in Python, so it comes in as given.
+    who = str(given.get("with") or "").strip()
+    unread = unread_only in (True, "true", "yes", 1)
+    tool_line("ReadIMessages(" + (who or ("unread" if unread else "recent"))
+              + ")")
+    if not computer.allowed("imessage_read"):
+        result = (
+            "Error: the user has not let Flash read their iMessages. They "
+            "can turn it on in Settings or with /computer on imessage_read."
+            if computer.enabled() and "imessage_read" in computer.kinds()
+            else "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.read_imessages(who, limit, unread)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(result)
+    return result
+
+
+# On a Mac, with the computer allowed: marking iMessages read.
+MARK_IMESSAGES_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_imessages_read",
+            "description": (
+                "Mark the user's unread iMessages read on their Mac: all "
+                "of them, or one person's. Only when they ask. Messages "
+                "comes to the front and shows each conversation for a "
+                "moment, then the app they were in comes back; anyone "
+                "they send read receipts to sees them as read. Group "
+                "chats are left unread. Says what was marked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "string",
+                        "description": (
+                            "Optional: only the conversation with this "
+                            "person, by a name or nickname in Contacts, a "
+                            "phone number or an email address."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+]
+
+
+def mark_imessages_read(**given: Any) -> str:
+    """Mark the user's unread iMessages read, when they allow it."""
+
+    who = str(given.get("with") or "").strip()
+    tool_line(f"MarkIMessagesRead({who or 'all'})")
+    if not computer.allowed("imessage_mark"):
+        result = (
+            "Error: the user has not let Flash mark iMessages read. They "
+            "can turn it on in Settings or with /computer on imessage_mark."
+            if computer.enabled() and "imessage_mark" in computer.kinds()
+            else "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.mark_imessages_read(who)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(result)
+    return result
+
+
+# On a Mac, with the computer allowed: an iMessage, asked about every
+# time, as an email is.
+IMESSAGE_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "send_imessage",
+            "description": (
+                "Send an iMessage from the user's Mac, in their name, "
+                "through Messages. The user sees it and says yes or no "
+                "before it goes. Use it when they ask to text or message "
+                "someone. Write it as they would, ready to send."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": (
+                            "Who to: a name or nickname as it is in their "
+                            "Contacts, a phone number, or an email address."
+                        ),
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The message, exactly as it goes.",
+                    },
+                    "attachment": {
+                        "type": "string",
+                        "description": (
+                            "Optional: a file to send with it (a photo, a "
+                            "PDF...), by its full path on this Mac. It goes "
+                            "after the text; text may then be left empty."
+                        ),
+                    },
+                },
+                "required": ["to", "text"],
+            },
+        },
+    },
+]
+
+
+def send_imessage(to: str = "", text: str = "", attachment: str = "") -> str:
+    """Send TEXT, and ATTACHMENT if given, to TO as an iMessage. Always
+    asks first."""
+
+    to, text = str(to or "").strip(), str(text or "").strip()
+    attachment = str(attachment or "").strip()
+    tool_line(f"SendIMessage({to})")
+    if not computer.allowed("imessage"):
+        result = (
+            "Error: the user has not let Flash send iMessages. They can "
+            "turn it on in Settings or with /computer on imessage."
+            if computer.enabled() and "imessage" in computer.kinds() else
+            "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    why = unfinished("send_imessage", {"to": to, "text": text}
+                     if text or not attachment else {"to": to})
+    if why:
+        tool_result(why.removeprefix("Error: "), style=ERROR)
+        return why
+    if attachment:
+        refused = _image_place_refusal(attachment).replace(
+            "view_image may open images", "send_imessage may send files"
+        ).replace("view_image", "send_imessage")
+        if refused:
+            tool_result(refused, style=ERROR)
+            return f"Error: {refused}"
+        attachment = str(Path(attachment).expanduser().resolve())
+        if not Path(attachment).is_file():
+            tool_result(f"{attachment} is not a file", style=ERROR)
+            return f"Error: {attachment} does not exist or is not a file."
+    try:
+        name, handle = computer.recipient(to)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    shown = name if name == handle else f"{name}, {handle}"
+    preview = f"To: {shown}\n\n{text}" + (
+        f"\n\nAttachment: {attachment}" if attachment else "")
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not: it goes out in the user's
+    # name, and cannot be taken back. Only UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(
+        f"Send this iMessage?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Send this iMessage? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no()
+    if answer != "y":
+        tool_result("Not sent: the user said no", style=WARN)
+        return "Not sent: the user said no. Do not send it again."
+
+    try:
+        computer.send_imessage(handle, text, attachment)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(f"Sent to {shown}")
+    return f"Sent to {shown}."
+
+
+# On a Mac: printing through CUPS (lpstat, lp), asked about every time,
+# as an email is, since paper and ink cannot be taken back.
+PRINT_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_printers",
+            "description": (
+                "List the printers set up on the user's Mac, and which one "
+                "is the default."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "print",
+            "description": (
+                "Print a file on the user's Mac, or a document you made "
+                "with make_document, through macOS printing. The user sees "
+                "what will print and says yes or no first, every time. "
+                "Give path or document, not both."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path of the file, under home, a temp "
+                            "folder or /Volumes; not a hidden path."
+                        ),
+                    },
+                    "document": {
+                        "type": "string",
+                        "description": (
+                            "Title of a document from make_document."
+                        ),
+                    },
+                    "printer": {
+                        "type": "string",
+                        "description": (
+                            "Printer name as list_printers gives it. Left "
+                            "out, the default printer."
+                        ),
+                    },
+                    "copies": {
+                        "type": "integer",
+                        "description": "How many copies, 1 to 99. Default 1.",
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": (
+                            "Pages to print, such as 1-3,5. Default all."
+                        ),
+                    },
+                    "two_sided": {
+                        "type": "boolean",
+                        "description": "Print on both sides of the paper.",
+                    },
+                },
+            },
+        },
+    },
+]
+
+_PAGE_RANGE = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*")
+
+
+def _printers() -> tuple[list[str], str]:
+    """The printers CUPS knows, and the default's name ("" for none).
+    Raises OSError when lpstat cannot be run."""
+
+    run = subprocess.run(  # nosec B603 B607
+        ["lpstat", "-p", "-d"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15,
+        check=False,
+    )
+    names, default = [], ""
+    for line in (run.stdout or "").splitlines():
+        words = line.split()
+        if len(words) > 1 and words[0] == "printer":
+            names.append(words[1])
+        elif line.startswith("system default destination:"):
+            default = line.split(":", 1)[1].strip()
+    return names, default
+
+
+def list_printers() -> str:
+    """Say which printers are set up, and the default."""
+
+    tool_line("ListPrinters()")
+    try:
+        names, default = _printers()
+    except (OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: could not ask macOS for its printers: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    if not names:
+        result = ("No printer is set up on this Mac. The user can add one "
+                  "in System Settings > Printers & Scanners.")
+        tool_result(result, style=WARN)
+        return result
+    lines = [n + (" (default)" if n == default else "") for n in names]
+    if not default:
+        lines.append("No default printer: name one when printing.")
+    result = "\n".join(lines)
+    tool_result(result)
+    return result
+
+
+def _made_document(title: str) -> Optional[Path]:
+    """The newest document make_document saved under TITLE, or None."""
+
+    from . import sparks
+
+    slug = sparks._document_slug(title)  # pylint: disable=protected-access
+    found = list((sparks.sparks_dir() / "docs").glob(f"*/{slug}.md"))
+    return max(found, key=lambda p: p.stat().st_mtime) if found else None
+
+
+def print_tool(path: str = "", document: str = "", printer: str = "",
+               copies: Any = 1, pages: str = "",
+               two_sided: bool = False) -> str:
+    """Print a file or a made document with lp. Always asks first."""
+
+    path, document = str(path or "").strip(), str(document or "").strip()
+    printer, pages = str(printer or "").strip(), str(pages or "").strip()
+    tool_line(f"Print({path or document})")
+
+    def fail(message: str) -> str:
+        tool_result(message, style=ERROR)
+        return f"Error: {message}"
+
+    if bool(path) == bool(document):
+        return fail("give either path or document, one of them.")
+    if document:
+        found = _made_document(document)
+        if found is None:
+            return fail(f"no document called {document!r} was made.")
+        target = found
+    else:
+        reason = _image_place_refusal(path).replace(
+            "view_image may open images", "print may read files").replace(
+            "view_image", "print")
+        if reason:
+            return fail(reason)
+        target = Path(path).expanduser().resolve()
+        if not target.is_file():
+            return fail(f"{path} does not exist or is not a file.")
+    try:
+        copies = 1 if copies in (None, "") else int(copies)
+    except (TypeError, ValueError):
+        return fail(f"copies must be a number, not {copies!r}.")
+    if not 1 <= copies <= 99:
+        return fail("copies must be from 1 to 99.")
+    if pages and not _PAGE_RANGE.fullmatch(pages.replace(" ", "")):
+        return fail(f"pages {pages!r} is not a range like 1-3,5.")
+    pages = pages.replace(" ", "")
+
+    try:
+        names, default = _printers()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return fail(f"could not ask macOS for its printers: {exc}")
+    if not names:
+        return fail("no printer is set up on this Mac. The user can add "
+                    "one in System Settings > Printers & Scanners.")
+    if printer and printer not in names:
+        return fail(f"there is no printer called {printer!r}. Set up: "
+                    + ", ".join(names) + ".")
+    if not printer and not default:
+        return fail("there is no default printer. Name one of: "
+                    + ", ".join(names) + ".")
+
+    shown = printer or f"{default} (default)"
+    preview = (f"File: {target}\nPrinter: {shown}\nCopies: {copies}"
+               f"\nPages: {pages or 'all'}"
+               f"\nTwo-sided: {'yes' if _truthy(two_sided) else 'no'}")
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not, as an email is. Only
+    # UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(f"Print this?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Print this? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no()
+    if answer != "y":
+        tool_result("Not printed: the user said no", style=WARN)
+        return "Not printed: the user said no. Do not print it again."
+
+    command = ["lp"]
+    if printer:
+        command += ["-d", printer]
+    command += ["-n", str(copies)]
+    if pages:
+        command += ["-P", pages]
+    if _truthy(two_sided):
+        command += ["-o", "sides=two-sided-long-edge"]
+    command += ["--", str(target)]
+    try:
+        run = subprocess.run(  # nosec B603 B607
+            command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return fail(f"could not run lp: {exc}")
+    if run.returncode != 0:
+        return fail("lp failed: " + (run.stderr or run.stdout).strip())
+    result = f"Sent to {shown}. {(run.stdout or '').strip()}".strip()
+    tool_result(result)
+    return result
+
+
+# Offered only while the user's watch shares where they are.
+LOCATION_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "user_location",
+            "description": (
+                "Where the user is: the latitude and longitude their Apple "
+                "Watch last gave, how exact and how long ago. Use it for "
+                "'near me', weather here, how far, and the like."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def user_location_tool(**_: Any) -> str:
+    """The user's place, from their watch."""
+
+    tool_line("Location()")
+    result = location.describe()
+    tool_result(result)
+    return result
+
+
+# Flash's own timed reminders, and what is connected and how charged.
+TIMER_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "remind_me",
+            "description": (
+                "Remind the user at a time: Flash itself notifies them "
+                "then, on the desktop and in the briefing, even after a "
+                "restart. add with text and when (an exact local time like "
+                "2026-11-03T18:00, or 'in 20m', 'in 2h', 'in 1d'); list; "
+                "cancel by id. Not Apple Reminders: use reminders for those."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["add", "list", "cancel"]},
+                    "text": {"type": "string",
+                             "description": "add: what to remind of."},
+                    "when": {"type": "string",
+                             "description": "add: the time, or 'in 20m'."},
+                    "id": {"type": "string",
+                           "description": "cancel: its id, from list."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "devices",
+            "description": (
+                "What is connected and how charged: the Mac's battery, "
+                "its network, connected Bluetooth devices (AirPods, "
+                "keyboard...) with battery where known, and the paired "
+                "Apple Watch's battery and when it was last heard from, "
+                "and the iPhones and Watches paired with Xcode. Read-only: "
+                "to open an app on one of those, use the xcode tool."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def _clock_schema() -> dict[str, Any]:
+    from .clock import SCHEMA
+
+    return SCHEMA
+
+
+TIMER_TOOLS.append(_clock_schema())
+
+
+def clock_tool(**args: Any) -> str:
+    """Timers and alarms that ring: set, list, stop, snooze, pause."""
+
+    from . import clock
+
+    tool_line(f"Clock({args.get('action', 'list')})")
+    result = clock.tool(**args)
+    tool_result(result)
+    return result
+
+
+def remind_me_tool(**args: Any) -> str:
+    """Flash's own reminders: add, list, cancel."""
+
+    from . import timers
+
+    tool_line(f"RemindMe({args.get('action', 'list')})")
+    result = timers.tool(**args)
+    tool_result(result)
+    return result
+
+
+def devices_tool(**_: Any) -> str:
+    """Batteries and connections, read-only."""
+
+    from . import devices
+
+    tool_line("Devices()")
+    result = devices.report()
+    tool_result(result)
+    return result
+
+
+# On a Mac: Apple Reminders. Adding and ticking off ask every time.
+REMINDERS_ACTIONS = ("list", "add", "complete", "lists")
+XCODE_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "xcode",
+            "description": (
+                "Build, run and debug Apple apps with Xcode on this Mac: in "
+                "a simulator or on a real iPhone, iPad or Watch paired with "
+                "it. Also how Flash opens apps on the user's own iPhone or "
+                "Apple Watch (\"open Wallet on my watch\": open_app, app "
+                "Wallet, target watch); the computer tool only opens Mac apps. Work the way a developer does: status (Xcode, the "
+                "simulators, the paired devices), schemes (of a project), "
+                "build or test (errors and warnings come back with file and "
+                "line: fix them and build again), run (builds if a project "
+                "is given, installs, launches; console_seconds watches the "
+                "app's own output for that long), screenshot (see the "
+                "simulator's screen), logs (the system log for the app's "
+                "process), crashes (the newest crash report, crashed thread "
+                "first), backtrace (every thread of a running app, for a "
+                "hang), stop, boot, open_url, appearance (light or dark), "
+                "devices_window (Xcode's device window), show (a simulator or "
+                "a plugged-in device on screen in Device Hub, where the "
+                "computer tool can see and tap it), open_app (a built-in app "
+                "by name, like Wallet or Settings, or any by bundle id). After "
+                "a change, run it and look at a screenshot before saying it "
+                "works. When asked to show how to do something on an iPhone "
+                "(\"show me how to use Wallet tap to pay\"): show the device "
+                "(target, else the booted simulator), open_app, then do each "
+                "step on its screen in Device Hub with the computer tool, a "
+                "screenshot after each, and answer with numbered steps, each "
+                "with its screenshot. " + xcode.HANDS_OFF
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(xcode.ACTIONS)},
+                    "project": {"type": "string", "description": "The .xcodeproj, .xcworkspace, or the folder holding one (or a Swift package)."},
+                    "scheme": {"type": "string", "description": "The scheme to build; schemes lists them."},
+                    "target": {"type": "string", "description": "A simulator or device: its name, part of it, or its id; watch, iphone or ipad for the user's own one. Empty: the booted simulator, else the newest iPhone."},
+                    "configuration": {"type": "string", "description": "Debug (default) or Release."},
+                    "bundle_id": {"type": "string", "description": "The app's bundle id, for run, stop and logs without a build (found from the last build otherwise)."},
+                    "console_seconds": {"type": "integer", "description": "With run: watch the app's console output this long (1 to 120)."},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "With run: launch arguments."},
+                    "process": {"type": "string", "description": "For logs, crashes and backtrace: the app's process name (the last built app's by default)."},
+                    "minutes": {"type": "number", "description": "For logs: how far back (default 2)."},
+                    "contains": {"type": "string", "description": "For logs: only lines containing this."},
+                    "url": {"type": "string", "description": "For open_url: a link or deep link."},
+                    "app": {"type": "string", "description": "For open_app: Wallet, Settings, Safari, Photos, Maps... or a bundle id."},
+                    "mode": {"type": "string", "enum": ["light", "dark"], "description": "For appearance."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+]
+
+
+REMINDERS_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders",
+            "description": (
+                "The user's Apple Reminders on their Mac. 'list' what is "
+                "not done yet (every list, or the one named; done: true "
+                "for done ones too); 'add' a reminder, with a due time if "
+                "they gave one; 'complete' one by the id list gives in "
+                "[brackets]; 'lists' names the lists. The user says yes "
+                "or no before anything is added or ticked off. Due times "
+                "are ISO 8601, local: work out 'tomorrow at 9' from "
+                "today's date first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(REMINDERS_ACTIONS)},
+                    "title": {"type": "string",
+                              "description": "What to be reminded of."},
+                    "list": {"type": "string", "description": (
+                        "Optional: the list, by name. Left out: every "
+                        "list to read, the default list to add to.")},
+                    "due": {"type": "string",
+                            "description": "Optional: ISO 8601 due time."},
+                    "notes": {"type": "string"},
+                    "id": {"type": "string",
+                           "description": "The reminder's id, to complete."},
+                    "done": {"type": "boolean", "description": (
+                        "list: include done ones too.")},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+]
+
+
+def reminders_tool(action: str = "list", title: str = "", due: str = "",
+                   notes: str = "", id: str = "",
+                   done: Any = False, **given: Any) -> str:
+    """Read the user's Apple Reminders, add one, or tick one off."""
+
+    from . import reminders
+
+    # "list" is a builtin's name, so it comes in as given.
+    in_list = str(given.get("list") or "").strip()
+    action = str(action or "list").strip().lower()
+    tool_line(f"Reminders({action} {title or in_list or id}".strip() + ")")
+    try:
+        if action == "list":
+            found = reminders.reminders(in_list, _truthy(done))
+            result = "\n".join(reminders.describe(r) for r in found) or (
+                "Nothing to do.")
+        elif action == "lists":
+            result = "\n".join(reminders.lists()) or "No lists."
+        elif action == "add":
+            if not title.strip():
+                raise reminders.RemindersError("Give the reminder a title.")
+            question = f"Add the reminder {title!r}" + (
+                f", due {due}" if due else "") + (
+                f", to {in_list}" if in_list else "") + "?"
+            if not ultra_auto() and not _user_allows(question):
+                return "The user said no to adding it. Do not add it again."
+            made = reminders.add(title, in_list, due, notes)
+            result = "Added: " + reminders.describe(made)
+        elif action == "complete":
+            if not id.strip():
+                raise reminders.RemindersError(
+                    "Give the reminder's id, from list.")
+            if not ultra_auto() and not _user_allows(
+                    f"Mark the reminder {id} done?"):
+                return "The user said no to completing it."
+            result = f"Done: {reminders.complete(id)}"
+        else:
+            result = ("Error: action is one of "
+                      + ", ".join(REMINDERS_ACTIONS) + ".")
+    except reminders.RemindersError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0][:120])
+    return result
+
+
+def computer_tool(action: str, value: Any = "") -> str:
+    """Do one of computer.ACTIONS, when the user has allowed it."""
+
+    shown = str(value or "").strip()
+    tool_line(f"Computer({action}" + (f", {shown[:60]}" if shown else "")
+              + ")")
+    if not computer.enabled():
+        result = (
+            "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.do(action, shown)
+    except computer.ComputerError as exc:
+        result = f"Error: {exc}"
+        tool_result(str(exc), style=ERROR)
+        return result
+    tool_result(result)
+    return result
+
+
+# Which reply works the computer, on this thread, and how it is stopped
+# when the user takes the computer back: the terminal's, unless the web
+# UI says which chat's.
+_computer_user = threading.local()
+
+
+@contextlib.contextmanager
+def computer_user(owner: str, stop: Callable[[], None]):
+    """Computer Use steps run in here are OWNER's, stopped by STOP."""
+
+    before = getattr(_computer_user, "who", None)
+    _computer_user.who = (owner, stop)
+    try:
+        yield
+    finally:
+        _computer_user.who = before
+
+
+def _plan_json(steps: Any) -> list:
+    """STEPS as a list, from a model that sent it as JSON text."""
+
+    if isinstance(steps, str):
+        with contextlib.suppress(ValueError):
+            steps = json.loads(steps)
+    return steps if isinstance(steps, list) else []
+
+
+def computer_use_tool(action: str = "", **args: Any) -> str:
+    """One step of Computer Use, for the reply working the computer.
+    The first step of a reply asks the user, autonomous mode or not; only
+    UltraAuto does not."""
+
+    owner, stop = getattr(_computer_user, "who", None) or (
+        "terminal", computeruse.interrupt_terminal)
+    action = str(action or "").strip().lower()
+    tool_line(f"ComputerUse({action}"
+              + "".join(f", {args[k]}" for k in ("x", "y", "element")
+                        if k in args)
+              + (f", {len(_plan_json(args.get('steps')))} steps"
+                 if args.get("steps") else "")
+              + ")")
+    if not computeruse.enabled():
+        result = ("Error: Computer Use is off. The user can turn it on in "
+                  "Settings, Computer Use, or with /computer use on.")
+        tool_result(result, style=WARN)
+        return result
+    why = computeruse.missing()
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (
+            f"Error: the active model ({MODEL_NAME}) has no vision "
+            "support, so it cannot see the screen. Tell the user Computer "
+            "Use needs a vision-capable model (/model)."
+        )
+        tool_result(result, style=ERROR)
+        return result
+    if computeruse.busy(owner):
+        result = ("Error: another chat is using the computer right now. "
+                  "Wait for it to finish.")
+        tool_result(result, style=WARN)
+        return result
+    if not computeruse.holds(owner):
+        if not ultra_auto() and not _user_allows(
+            "Let Flash see your screen and use your mouse and keyboard "
+            f"for this reply? {computeruse.how_to_stop()} to take it "
+            "back.", ask_why=True,
+        ):
+            why = denial_why()
+            return ("The user said no to Computer Use"
+                    + (f', and why: "{why}"' if why else "")
+                    + ". Do it another way, or tell them what to do; do "
+                    "not ask again.")
+        computeruse.take(owner, stop)
+    try:
+        if computeruse.fast() and (action == "steps" or (
+                isinstance(args.get("steps"), list) and args["steps"])):
+            said, image = computeruse.do_steps(
+                _plan_json(args.get("steps")), owner)
+        else:
+            said, image = computeruse.do(action, args, owner)
+    except computeruse.UseError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    if image:
+        _pending_images.append(image)
+    tool_result(said)
+    return said + (" The screenshot is included with this result: look "
+                   "at it before the next step." if image else "")
+
+
+def refresh_all() -> tuple[list[str], list]:
+    """Read Flash's own tools and extensions again and bring the MCP
+    servers up to date, as refresh_tools does, without printing: which
+    of Flash's tools changed, and every configured server as it is now.
+    Skills are read from disk each time, so they need nothing here."""
+
+    before = flash_tools()
+    extensions.reload()
+    changes = _flash_tool_changes(before, flash_tools())
+    return changes, connectors.refresh()
+
+
+def refresh_tools() -> str:
+    """Bring the connected MCP servers up to date, and say what each has;
+    read Flash's own tools again too, and say which of them changed."""
+
+    tool_line("RefreshTools()")
+    changes, found = refresh_all()
+    flash_part = ("\n\nFlash's own tools that changed, yours from your "
+                  "next step:\n" + "\n".join(changes)) if changes else ""
+    if not found:
+        result = ("No MCP servers are set up. The user adds them in "
+                  "Settings, Connectors, or with /mcp add.") + flash_part
+        tool_result(result, style=WARN)
+        return result
+    lines = []
+    for server in found:
+        if server.state == connectors.READY:
+            names = ", ".join(
+                connectors.tool_name(server.name, str(t["name"]))
+                for t in server.tools) or "no tools"
+            lines.append(f"{server.name}: ready, with {names}")
+        elif server.state == connectors.STARTING:
+            lines.append(f"{server.name}: still starting; refresh again "
+                         "in a moment")
+        else:
+            why = server.why or server.state
+            lines.append(f"{server.name}: not running ({why})")
+    result = ("MCP servers, as they are now. Their tools are yours from "
+              "your next step:\n" + "\n".join(lines)) + flash_part
+    tool_result(result)
+    return result
+
+
 def get_date() -> str:
     """Return the current date using the local timezone."""
 
@@ -1806,7 +4476,7 @@ _pending_images: list[bytes] = []
 
 
 def take_pending_images() -> list[bytes]:
-    """Return the image data queued by view_image, clearing the queue.
+    """Return the images view_image or watch_youtube queued; clear them.
 
     view_image can only queue the bytes; the caller attaches them to the
     conversation, because an image reaches the model as message content
@@ -1818,10 +4488,41 @@ def take_pending_images() -> list[bytes]:
     return images
 
 
+def _image_place_refusal(path: str) -> str:
+    """Say why view_image may not open `path`, or "" when it may.
+
+    Only absolute paths under home, a temp directory or /Volumes, and
+    nothing hidden: a spark runs unattended, so it must not send a key
+    or a dotfile to the model as an "image".
+    """
+
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        return f"{path} is not an absolute path."
+    if any(part.startswith(".") for part in raw.parts[1:]):
+        return f"{path} is a hidden path, which view_image refuses."
+    real = raw.resolve()
+    tmp = Path("/tmp")  # nosec B108
+    roots = {Path.home(), tmp, Path(tempfile.gettempdir()),
+             Path("/Volumes")}
+    for root in roots:
+        root = root.resolve()
+        if real == root or root in real.parents:
+            return ""
+    return (f"{path} is outside your home folder, a temp folder and "
+            "/Volumes, where view_image may open images.")
+
+
 def view_image(path: str) -> str:
     """Attach a local image file so the model can see it."""
 
     tool_line(f"ViewImage({path})")
+
+    reason = _image_place_refusal(path)
+    if reason:
+        result = f"Error: {reason}"
+        tool_result(result, style=ERROR)
+        return result
 
     image_path, reason = resolve_image_path(path)
     if image_path is None:
@@ -1858,6 +4559,57 @@ def view_image(path: str) -> str:
         "included with this tool result, so answer from what you can "
         "actually see in it."
     )
+
+
+def watch_youtube(url: str, frames: bool = True) -> str:
+    """Read a YouTube video's details and captions, and attach frames."""
+
+    tool_line(f"WatchYouTube({url})")
+
+    vid = youtube.video_id(url)
+    if vid is None:
+        result = f"Error: not a YouTube video link: {url}"
+        tool_result(result, style=ERROR)
+        return result
+
+    sees = frames and model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    try:
+        video = youtube.read_video(vid, want_frames=sees)
+    except (OSError, ValueError) as exc:
+        result = f"Error: could not load video {vid}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    minutes, seconds = divmod(video.seconds, 60)
+    lines = [
+        f"Video: https://www.youtube.com/watch?v={vid}",
+        f"Title: {video.title}",
+        f"Channel: {video.channel}",
+        f"Length: {minutes}:{seconds:02d}",
+        f"Description: {video.description or '(none)'}",
+        "",
+    ]
+    if video.transcript:
+        lines += [f"Captions ({video.caption_language}):",
+                  video.transcript]
+    else:
+        lines.append("Captions: none available.")
+
+    if video.frames:
+        _pending_images.extend(video.frames)
+        lines.append(
+            f"\nAttached {video.frame_note}. Describe only what you can "
+            "actually see in them."
+        )
+    elif frames and not sees:
+        lines.append(
+            f"\nNo frames: the active model ({MODEL_NAME}) cannot see "
+            "images."
+        )
+
+    tool_result(f"{video.title} ({minutes}:{seconds:02d}), "
+                f"{len(video.frames)} frame sheet(s)")
+    return "\n".join(lines)
 
 
 # Terminals that can draw a picture between two lines of output. Writing
@@ -1954,7 +4706,8 @@ def _draw_inline(
 
 
 def _open_in_viewer(path: Path) -> str:
-    """Hand PATH to whatever the OS shows pictures with.
+    """Hand PATH to whatever the OS opens its kind of file with: a
+    picture, a PDF, a 3D model, a MIDI file.
 
     Returns "" on success, or a short reason it could not be opened.
     """
@@ -1967,14 +4720,14 @@ def _open_in_viewer(path: Path) -> str:
         elif os.name == "nt":
             start = getattr(os, "startfile", None)
             if start is None:
-                return "no image viewer on this system"
+                return "nothing on this system opens it"
             start(str(path))
         else:
             subprocess.run(  # nosec B603 B607
                 ["xdg-open", str(path)], check=True, timeout=10
             )
     except FileNotFoundError:
-        return "no image viewer on this system"
+        return "nothing on this system opens it"
     except (OSError, subprocess.SubprocessError) as exc:
         return f"the viewer failed ({exc.__class__.__name__})"
 
@@ -2004,7 +4757,10 @@ def _animating() -> bool:
     line to appear.
     """
 
-    return console.is_terminal and not os.environ.get("FLASH_NO_ANIMATION")
+    # Under the dock, a sweep would have to step it aside for every
+    # line, and the box would blink with each tool.
+    return (console.is_terminal and not dock_active()
+            and not os.environ.get("FLASH_NO_ANIMATION"))
 
 
 def _sweep_in(plain: str, settled: Text) -> None:
@@ -2566,8 +5322,10 @@ def send_document(
         return (
             f"Sent {doc.name} ({kilobytes} KB) to the user's screen, "
             f"beside the chat.{pinned} They can edit it there, and "
-            "saving writes the file. Their comments come to you as a "
-            f"message quoting each passage.{unplaced}"
+            "saving writes the file. Your own edits to the file show "
+            "there as they land: change it with edit, not by sending it "
+            "again. Their comments come to you as a message quoting each "
+            f"passage.{unplaced}"
         )
 
     problem = _open_with_spinner(doc)
@@ -2679,6 +5437,150 @@ def _show_model(model_path: Path, label: str) -> str:
     )
 
 
+# ----- Xcode: what was built last, so run, logs and crashes know the app -----
+_XCODE_LAST: dict[str, str] = {}
+
+
+def xcode_tool(action: str, project: str = "", scheme: str = "", target: str = "",
+               configuration: str = "Debug", bundle_id: str = "", console_seconds: Any = 0,
+               args: Any = None, process: str = "", minutes: Any = 2, contains: str = "",
+               url: str = "", mode: str = "", app: str = "") -> str:
+    """Build, run and debug an app with Xcode, a simulator or a device."""
+
+    action = str(action or "").strip().lower()
+    tool_line(f"Xcode({action}{' ' + scheme if scheme else ''}{' on ' + target if target else ''})")
+    if action not in xcode.ACTIONS:
+        return f"Unknown action {action!r}. One of: {', '.join(xcode.ACTIONS)}."
+    if computer.system() != "mac" or not xcode.available():
+        return "Xcode is not on this computer: it needs a Mac with Xcode installed (not only the command line tools)."
+    x, last = xcode.Xcode(), _XCODE_LAST
+    configuration = configuration or "Debug"
+    try:
+        if action == "status":
+            return x.status()
+        if action == "schemes":
+            return x.schemes(project or last.get("project", "."))
+        if action == "devices_window":
+            return x.devices_window()
+        if action == "crashes":
+            return x.crashes(process or last.get("process", ""))
+        if action == "backtrace":
+            name = process or last.get("process", "")
+            if not name:
+                return "Which app? Give process (its name)."
+            return x.backtrace(name)
+        where = x.target(target or last.get("target", ""))
+        if action in ("build", "test"):
+            if not (project and scheme):
+                return "build and test need project and scheme (schemes lists them)."
+            result = x.build(project, scheme, where, configuration, test=action == "test")
+            if result.get("app"):
+                last.update(project=project, scheme=scheme, app=result["app"],
+                            bundle=x.bundle_id(result["app"]), process=Path(result["app"]).stem,
+                            target=where.get("udid") or where.get("id", ""))
+            return xcode.describe(result)
+        if action == "boot":
+            return x.boot(where)
+        if action == "run":
+            app = ""
+            if project and scheme:
+                result = x.build(project, scheme, where, configuration)
+                if not result["ok"]:
+                    return xcode.describe(result)
+                app = result.get("app", "")
+                last.update(project=project, scheme=scheme, app=app, bundle=x.bundle_id(app),
+                            process=Path(app).stem, target=where.get("udid") or where.get("id", ""))
+            elif last.get("app") and not bundle_id:
+                app = last["app"]
+            bundle = bundle_id or last.get("bundle", "")
+            if not bundle:
+                return "Which app? Give project and scheme to build it, or bundle_id for one already installed."
+            secs = max(0, min(120, int(float(console_seconds or 0))))
+            said = x.install_and_launch(where, app, bundle, secs, args if isinstance(args, list) else None)
+            head = f"Running {bundle} on {where['name']}."
+            return head + (f"\nConsole ({secs} s):\n{said[-6000:]}" if secs else (f" {said}" if said else ""))
+        if action == "stop":
+            bundle = bundle_id or last.get("bundle", "")
+            return x.stop(where, bundle) if bundle else "Which app? Give bundle_id."
+        if action == "logs":
+            name = process or last.get("process", "")
+            if not name:
+                return "Which app? Give process (its name)."
+            return x.logs(where, name, float(minutes or 2), contains)
+        if action == "show":
+            return x.show(where)
+        if action == "open_app":
+            return x.open_app(where, app) if app else "open_app needs app: its name, like Wallet, or bundle id."
+        if action == "screenshot":
+            path = str(Path(SCRATCH_DIR) / f"{where['kind']}-{int(time.time())}.png")
+            x.screenshot(where, path)
+            return view_image(path)
+        if action == "open_url":
+            return x.open_url(where, url) if url else "open_url needs url."
+        if action == "appearance":
+            return x.appearance(where, mode)
+    except xcode.XcodeError as exc:
+        return f"Xcode: {exc}"
+    except (OSError, ValueError) as exc:
+        return f"Xcode could not do that: {exc}"
+    return ""
+
+
+def design_pcb(path: str, design: Any, caption: str = "") -> str:
+    """Design a printed circuit board from its parts and their nets:
+    placed, routed, checked, with its fab files, shown to the user."""
+
+    board_path = Path(path).expanduser()
+    if board_path.suffix.lower() != pcb.SUFFIX:
+        board_path = board_path.with_name(board_path.name + pcb.SUFFIX)
+    tool_line(f"DesignPCB({board_path})")
+    try:
+        board = pcb.design(design)
+    except pcb.PcbError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+    stem = board_path.name[:-len(pcb.SUFFIX)]
+    fab = board_path.with_name(f"{stem}-fab.zip")
+    kicad = board_path.with_name(f"{stem}.kicad_pcb")
+    try:
+        board_path.parent.mkdir(parents=True, exist_ok=True)
+        for target in (board_path, fab, kicad):
+            checkpoint.record(target)
+        board_path.write_text(json.dumps(board), encoding="utf-8")
+        fab.write_bytes(pcb.fab_zip(board))
+        kicad.write_text(pcb.kicad(board), encoding="utf-8")
+    except OSError as exc:
+        result = f"Error: could not write {board_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    s = board["stats"]
+    label = (f"{board_path.name} ({s['width']} x {s['height']} mm, "
+             f"{board['layers']} layers, {s['parts']} parts, {s['routed']}"
+             f"/{s['nets']} nets routed"
+             + (", rules clean" if not s["errors"] else
+                f", {s['errors']} to fix") + ")"
+             + (f": {caption.strip()}" if caption.strip() else ""))
+    if tool_file(str(board_path)):
+        tool_result(label)
+        shown = ("It is on the user's screen beside the chat: its copper "
+                 "layers, both sides as made, and in 3D, with the fab "
+                 "files to download.")
+    else:
+        tool_result(label)
+        console.print(Text(f"{' ' * RESULT_INDENT}{_display_path(fab)}",
+                           style=DIM))
+        shown = "Its files' paths are on screen."
+    return (
+        f"Saved {board_path}, the board house's files in {fab} "
+        f"(Gerbers, drills, BOM, pick-and-place) and a KiCad board, "
+        f"{kicad}.\n{shown}\n{pcb.summary(board)}\n"
+        "To change it (move or turn parts with x, y and rotation, a bigger "
+        "board, more layers), call design_pcb again with the whole changed "
+        "design and the same path."
+    )
+
+
 def make_3d_model(
     path: str, parts: Any, title: str = "", caption: str = "",
 ) -> str:
@@ -2734,12 +5636,323 @@ def make_3d_model(
         + (f": {note}" if note else "")
     )
     shown = _show_model(model_path, label)
+    clicks = [p.name for p in built if p.click]
+    told = sum(1 for p in built if p.info)
+    more = " and more" if len(clicks) > 8 else ""
+    interactive = (
+        (f"Clicking {', '.join(clicks[:8])}{more} moves it, and clicking "
+         "again moves it back. " if clicks else "")
+        + (f"{told} part{plural(told)} say what they are when pointed "
+           "at. " if told else "")
+    )
+    if interactive:
+        interactive = "In the viewer: " + interactive.strip() + "\n"
     return (
-        f"Saved {model_path} ({kilobytes} KB).\n"
+        f"Saved {model_path} ({kilobytes} KB).\n{interactive}"
         f"{model3d.describe(built)}\n{shown}\n{_model_preview(model_path)}"
         "\nTo change it, call make_3d_model again with the whole list "
         "of parts, changed, and the same path."
     )
+
+
+# The most steps one test of a model takes, and pictures it sends back.
+MOST_MODEL_STEPS = 12
+MOST_MODEL_PICTURES = 6
+# How long a click's move is given to play before it is looked at.
+MODEL_CLICK_WAIT_S = 1.4
+
+
+def _moved(before: dict, after: dict) -> str:
+    """How a part moved between two of the viewer's states, in words."""
+
+    import math
+
+    shift = sum((a - b) ** 2 for a, b in zip(after["centre"],
+                                             before["centre"])) ** 0.5
+    said = []
+    if shift >= 0.005:
+        said.append(f"moved {shift:.2f} m")
+    # The turn between them: AFTER times BEFORE undone, as an angle about
+    # an axis, which reads as the part's own move ("100° about y").
+    x1, y1, z1, w1 = before["turn"]
+    x2, y2, z2, w2 = after["turn"]
+    x1, y1, z1 = -x1, -y1, -z1
+    w = w2 * w1 - x2 * x1 - y2 * y1 - z2 * z1
+    x = w2 * x1 + x2 * w1 + y2 * z1 - z2 * y1
+    y = w2 * y1 - x2 * z1 + y2 * w1 + z2 * x1
+    z = w2 * z1 + x2 * y1 - y2 * x1 + z2 * w1
+    if w < 0:
+        w, x, y, z = -w, -x, -y, -z
+    angle = math.degrees(2 * math.acos(max(-1.0, min(1.0, w))))
+    if angle >= 2:
+        norm = math.sqrt(x * x + y * y + z * z) or 1.0
+        axis = (x / norm, y / norm, z / norm)
+        main = max(range(3), key=lambda i: abs(axis[i]))
+        if abs(axis[main]) > 0.95:
+            sign = "-" if axis[main] < 0 else ""
+            said.append(f"turned {sign}{round(angle)}° about {'xyz'[main]}")
+        else:
+            said.append(f"turned {round(angle)}° about ("
+                        + ", ".join(f"{a:.2f}" for a in axis) + ")")
+    return ", ".join(said)
+
+
+def test_3d_model(path: str, steps: Any) -> str:
+    """Try a 3D model as the user would, in the same viewer: click its
+    parts, point at them, turn the view, let it play, and say what each
+    did, with pictures."""
+
+    model_path = Path(path).expanduser()
+    tool_line(f"Test3DModel({model_path})")
+    problem = model3d.check_model_file(model_path) if model_path.exists() \
+        else f"{model_path} does not exist"
+    if not isinstance(steps, list) or not steps:
+        problem = problem or (
+            'give steps: a list such as [{"click": "door"}]')
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return f"Error: {page_devtools.PACKAGE_HINT}"
+
+    web = Path(__file__).parent / "web" / "three"
+    page_html = model3d.preview_page(
+        model_path.read_bytes(), model_path.suffix.lower(),
+        (web / "viewer.js").read_text(encoding="utf-8"),
+        (web / "three.min.js").read_text(encoding="utf-8"), live=True,
+    )
+    global _model_count
+    _model_count += 1
+    html = Path(SCRATCH_DIR) / f"model-test-{_model_count}.html"
+    html.parent.mkdir(parents=True, exist_ok=True)
+    html.write_text(page_html, encoding="utf-8")
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    lines: list[str] = []
+    pictures = 0
+
+    def picture(page, label: str) -> None:
+        nonlocal pictures
+        if not sees or pictures >= MOST_MODEL_PICTURES:
+            return
+        pictures += 1
+        _pending_images.append(page.screenshot())
+        lines.append(f"  (picture {pictures}: {label})")
+
+    try:
+        with sync_playwright() as driver:
+            chromium = page_devtools.launch_chromium(driver)
+            try:
+                page = chromium.new_page(viewport={
+                    "width": MODEL_PREVIEW_WIDTH,
+                    "height": MODEL_PREVIEW_HEIGHT})
+                page.goto(html.resolve().as_uri(), wait_until="load")
+                page.wait_for_function(
+                    "document.title === 'ready' || document.title === "
+                    "'failed'", timeout=20000)
+                if page.title() != "ready":
+                    raise RuntimeError("the viewer could not draw it")
+                names = page.evaluate("view.probe.names()")
+                for step in steps[:MOST_MODEL_STEPS]:
+                    lines.append(_model_step(page, step, names))
+                    picture(page, lines[-1].split(":")[0])
+            finally:
+                chromium.close()
+    except (PlaywrightError, RuntimeError) as exc:
+        result = f"Error: could not try it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    if len(steps) > MOST_MODEL_STEPS:
+        lines.append(f"Only the first {MOST_MODEL_STEPS} steps were tried.")
+    result = "\n".join(lines)
+    tool_result(result, style=DIM)
+    return (
+        f"Tried {model_path.name} in the viewer, as the user would:\n"
+        f"{result}\nIf something did not do what it should, fix the parts "
+        "with make_3d_model (same path) and test again."
+    )
+
+
+def _model_step(page, step: Any, names: list) -> str:
+    """One step of test_3d_model, done in PAGE: what happened, in words."""
+
+    if not isinstance(step, dict) or len(step) != 1:
+        return f"Skipped {step!r}: a step is one of click, point, turn, wait."
+    (kind, value), = step.items()
+    if kind == "turn":
+        page.evaluate("d => view.probe.orbit(d)", float(value or 0))
+        page.wait_for_timeout(300)
+        return f"turn {value}°: the view went round"
+    if kind == "wait":
+        seconds = max(0.0, min(float(value or 0), 10.0))
+        page.wait_for_timeout(int(seconds * 1000))
+        return f"wait {seconds:g}s: it played on"
+    if kind not in ("click", "point"):
+        return f"Skipped {kind}: a step is one of click, point, turn, wait."
+    name = str(value or "")
+    where = page.evaluate("n => view.probe.where(n)", name)
+    if where is None:
+        return (f"{kind} {name}: there is no part called that. Parts: "
+                + ", ".join(names[:30]))
+    if not where["inView"]:
+        return (f"{kind} {name}: it is out of view from here; turn the "
+                "view first.")
+    x, y = where["x"], where["y"]
+    over = page.evaluate("([x, y]) => view.probe.at(x, y)", [x, y])
+    hidden = ""
+    if over and over.lower() != name.lower():
+        hidden = (f" Where {name} shows, the pointer lands on {over}: "
+                  f"{name} is behind it from here.")
+    if kind == "point":
+        page.mouse.move(x, y)
+        page.wait_for_timeout(350)
+        card = page.evaluate("view.probe.card()")
+        said = (f"the card says: {' / '.join(card.splitlines())}" if card
+                else "no card showed")
+        return f"point {name}: {said}.{hidden}"
+    before = page.evaluate("n => view.probe.state(n)", name)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(int(MODEL_CLICK_WAIT_S * 1000))
+    after = page.evaluate("n => view.probe.state(n)", name)
+    moved = _moved(before, after) if before and after else ""
+    if over and over.lower() != name.lower():
+        return (f"click {name}: the click went to {over}.{hidden}"
+                + (f" {name} {moved}." if moved else ""))
+    return (f"click {name}: it {moved}." if moved
+            else f"click {name}: nothing moved.")
+
+
+def _call_user() -> str:
+    """The user's name, as the Mac knows it, for Flash to say who it is
+    calling for."""
+
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        found = subprocess.run(  # nosec B603 B607 -- a fixed program
+            ["id", "-F"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
+            check=False).stdout.strip()
+        if found:
+            return found
+    return "the user"
+
+
+def _call_model(messages: list[dict]) -> str:
+    from . import ai  # deferred: ai imports half of Flash
+
+    answer = ai._client().chat(model=ai.Config.model, messages=messages,
+                               options=ai._chat_options())
+    return str(answer.message.content or "")
+
+
+def phone_call(action: str = "call", who: str = "", goal: str = "",
+               minutes: float = 30, via: str = "phone",
+               ready: bool = False, app: str = "") -> str:
+    """Call someone, or take their next call, and talk on it in Flash's
+    own voice towards GOAL: UltraAuto only, on a Mac."""
+
+    from . import calls
+
+    tool_line(f"PhoneCall({action} {who})".replace(" )", ")"))
+    if action == "hang_up":
+        # Only ends a call: allowed whatever the mode.
+        try:
+            done = calls.hang_up_now()
+        except (calls.CallError, computer.ComputerError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        result = done or ("No call is going on this computer, so there was "
+                          "nothing to hang up.")
+        tool_result(result, style=DIM)
+        return result
+    if not ultra_auto():
+        result = ("Error: Flash only talks on calls in UltraAuto. Tell the "
+                  "user to switch it on to let Flash make and take calls.")
+        tool_result(result, style=ERROR)
+        return result
+    who = " ".join(str(who or "").split())
+    if not who and action != "join":
+        return "Error: say who to call, or whose call to take."
+    why = calls.missing()
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    owner = getattr(_owner, "name", "")
+    since = time.time()
+    if isinstance(ready, str):
+        ready = ready.strip().lower() in ("true", "yes", "1")
+    if action == "join" and not _truthy(ready) and not calls.joins_by_itself():
+        # The call app's mic and speakers have to be the loopback
+        # devices first, and only the user can set them: ask, and wait.
+        ask = (f"Okay. Set the mic to {calls.to_call()} and speakers to "
+               f"{calls.from_call()} in {app.strip() or 'the call app'} "
+               "and tell me once it's set.")
+        result = (f"Not joined yet. Say exactly this to the user, and "
+                  f"nothing else: \"{ask}\" Then wait for them to say it "
+                  "is set, and call phone_call again with action join and "
+                  "ready true.")
+        tool_result(result, style=DIM)
+        return result
+
+    def stopping() -> bool:
+        return halted(owner, since)
+
+    user = _call_user()
+    if action == "answer":
+        # answer only picks up a call already ringing: waiting for one is
+        # wait_for's job, so it can wake Flash when the call comes.
+        if not calls.ringing():
+            event = ("call" if who.lower() in calls.ANYONE
+                     else f"call:{who}")
+            result = (f"Error: no call is ringing now, so nothing was "
+                      f"answered. answer does not wait for a call. To wait "
+                      f"for it, use wait_for with events \"{event}\" (or "
+                      "\"call\" for any caller), then use phone_call "
+                      "action answer once it wakes you.")
+            tool_result(result, style=ERROR)
+            return result
+        # Taken here, not in the background, like call and join: the
+        # turns are drawn live in the chat that answered, and the
+        # transcript comes back as this tool's result, into that chat.
+        try:
+            call = calls.take_next(who, goal, user, _call_model, minutes=1,
+                                   stopping=stopping, owner=owner)
+        except (calls.CallError, computer.ComputerError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        if call is None:
+            result = (f"Error: the call from {who} stopped ringing before "
+                      "Flash could pick it up, so nothing was answered.")
+            tool_result(result, style=ERROR)
+            return result
+        result = calls.summary(call, calls._keep(call))
+        tool_result(result, style=DIM)
+        return result
+    try:
+        if action == "join":
+            call = calls.join(goal, user, _call_model, who=who,
+                              stopping=stopping, owner=owner)
+            result = calls.summary(call, calls._keep(call))
+            tool_result(result, style=DIM)
+            return result
+        call = calls.place(who, goal, user, _call_model, stopping=stopping,
+                           via=calls.FACETIME if via == calls.FACETIME
+                           else calls.PHONE, owner=owner,
+                           tell=lambda said: tool_result(said, style=DIM))
+    except (calls.CallError, computer.ComputerError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = calls.summary(call, calls._keep(call))
+    tool_result(result, style=DIM)
+    return result
 
 
 def send_3d_model(path: str, caption: str = "") -> str:
@@ -2775,6 +5988,800 @@ def send_3d_model(path: str, caption: str = "") -> str:
         f"Sent {model_path.name} ({kilobytes} KB). {shown}\n"
         f"{_model_preview(model_path)}"
     )
+
+
+def _show_midi(midi_path: Path, label: str) -> str:
+    """Put a MIDI file in front of the user. Returns how it went."""
+
+    if tool_file(str(midi_path)):
+        tool_result(label)
+        return (
+            "It is on the user's screen beside the chat, in a player that "
+            "plays it and draws it as a piano roll, and they can download "
+            "it from there."
+        )
+
+    problem = _open_with_spinner(midi_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(midi_path)}", style=DIM)
+    )
+    if problem:
+        return (
+            f"Could not open it: {problem}. Its path is on screen; tell "
+            "the user where the file is and that the web UI (flash --web) "
+            "plays MIDI files."
+        )
+    return "It opened in the user's default player, with its path on screen."
+
+
+def _show_audio(audio_path: Path, label: str, play: bool = False) -> str:
+    """Put a sound file in front of the user: a player in the chat in
+    the browser, the default player in the terminal. How it went."""
+
+    if tool_audio(str(audio_path), play):
+        tool_result(label)
+        return ("It is in the chat in a player: " + (
+            "it started playing as it arrived, and they can pause it, move "
+            "through it, speed it up and download it." if play else
+            "they can play it, move through it, speed it up and download it."))
+    problem = _open_with_spinner(audio_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(audio_path)}", style=DIM)
+    )
+    if problem:
+        return (f"Could not open it: {problem}. Its path is on screen; "
+                "tell the user where the file is.")
+    return "It opened in the user's default player, with its path on screen."
+
+
+def send_audio(path: str, caption: str = "", play: Any = False) -> str:
+    """Play the user a sound file that already exists."""
+
+    from .workspace import AUDIO_TYPES, MAX_SHOWN_BYTES
+
+    tool_line(f"SendAudio({path})")
+    audio_path = Path(path).expanduser()
+    problem = (
+        f"no file at {audio_path}" if not audio_path.is_file()
+        else f"{audio_path.suffix or 'that'} is not a sound file this can "
+             f"play: use {', '.join(AUDIO_TYPES)}"
+        if audio_path.suffix.lower() not in AUDIO_TYPES
+        else f"{audio_path.name} is over 50 MB"
+        if audio_path.stat().st_size > MAX_SHOWN_BYTES else ""
+    )
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+    size = audio_path.stat().st_size
+    note = str(caption or "").strip()
+    label = f"{audio_path.name} ({max(1, round(size / 1024))} KB)" + (
+        f": {note}" if note else "")
+    return f"Sent {audio_path.name}.\n" + _show_audio(
+        audio_path, label, _truthy(play))
+
+
+SMART_HOME_VERBS = {
+    "turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Switch",
+    "set": "Change", "activate": "Run", "lock": "Lock", "unlock": "Unlock",
+    "open": "Open", "close": "Close", "stop": "Stop",
+}
+
+
+def smart_home(action: str = "list", device: str = "", brightness: Any = None,
+               color: str = "", temperature: Any = None, mode: str = "",
+               position: Any = None, percentage: Any = None,
+               volume: Any = None) -> str:
+    """Read and control the user's smart home, through Home Assistant."""
+
+    from . import smarthome
+
+    action = str(action or "list").strip().lower()
+    device = str(device or "").strip()
+    tool_line(f"SmartHome({action}{' ' + device if device else ''})")
+    try:
+        if action == "list":
+            said = smarthome.listing(device)
+            tool_result(f"{len(said.splitlines())} device"
+                        f"{plural(len(said.splitlines()))}")
+            return said
+        if not device:
+            raise smarthome.HomeError("say which device")
+        found = smarthome.find(device)
+        if not found:
+            raise smarthome.HomeError(
+                f"no device called {device!r}; list them with action list")
+        if action == "state":
+            said = "\n".join(smarthome.describe(e) for e in found[:10])
+            tool_result(said.splitlines()[0])
+            return said
+        entity = found[0]
+        value = {k: v for k, v in (
+            ("brightness", brightness), ("color", color),
+            ("temperature", temperature), ("mode", mode),
+            ("position", position), ("percentage", percentage),
+            ("volume", volume)) if v not in (None, "")}
+        smarthome.service_for(entity, action, value)  # checked before asking
+        name = entity.get("attributes", {}).get("friendly_name") or \
+            entity["entity_id"]
+        guarded = smarthome.guarded(entity, action)
+        if (guarded and not ultra_auto()) or (
+                not guarded and not NO_COMMAND_CONFIRMATION):
+            details = ", ".join(f"{k} {v}" for k, v in value.items())
+            question = (f"{SMART_HOME_VERBS.get(action, action)} {name}"
+                        + (f" ({details})" if details else "") + "?")
+            if not _user_allows(question, ask_why=True):
+                why = denial_why()
+                return ("The user said no" + (f': "{why}"' if why else "")
+                        + ". Leave it as it is.")
+        said = smarthome.run(entity, action, value)
+    except (smarthome.HomeError, ValueError, TypeError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(said)
+    others = [e["entity_id"] for e in found[1:4]]
+    return said + (f"\n(Also matched, left alone: {', '.join(others)}.)"
+                   if others else "")
+
+
+def verify(commands: Any = None, folder: str = "") -> str:
+    """Run the project's own checks (tests, linter, type checker) and
+    say what failed, down to the files and lines to look at."""
+
+    from . import verify as checking
+
+    root, found = checking.detect(folder)
+    if isinstance(commands, str):
+        commands = [c.strip() for c in commands.split("\n") if c.strip()]
+    given = [str(c).strip() for c in commands or [] if str(c).strip()]
+    checks = given or found
+    tool_line(f"Verify({', '.join(checks) or root.name})")
+    if not checks:
+        result = (f"No checks found in {root}: no tests or linter set up in "
+                  "pyproject.toml, package.json, Cargo.toml, go.mod or a "
+                  "Makefile. Give the commands to run, or say so plainly "
+                  "in your answer.")
+        tool_result(result, style=WARN)
+        return result
+    # The ones found are the project's own; ones the model wrote are
+    # commands like any other, so asked about like shell's.
+    if not NO_COMMAND_CONFIRMATION:
+        listed = "\n".join(checks)
+        if not _user_allows(f"Run these checks in {root}?\n{listed}",
+                            ask_why=True):
+            why = denial_why()
+            return ("The user said no to running the checks"
+                    + (f': "{why}"' if why else "") + ".")
+    results = []
+    for command in checks:
+        ran = checking.run_one(command, root)
+        results.append(ran)
+        tool_result(f"{'✓' if ran.ok else '✗'} {command} "
+                    f"({ran.seconds:.1f}s)", style=DIM if ran.ok else ERROR)
+    return checking.report(root, results)
+
+
+def learn_from_recording(path: str) -> str:
+    """Watch a screen recording of the user doing a task: its stills,
+    with what they said over each, to save the task as a skill."""
+
+    from . import demo, voice
+
+    tool_line(f"LearnFromRecording({path})")
+    video = Path(path).expanduser()
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (f"Error: the active model ({MODEL_NAME}) cannot see "
+                  "images, so it cannot watch a recording. Tell the user "
+                  "to switch to a vision-capable model with /model.")
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        stills, unheard = demo.read(video, voice.transcribe)
+    except (demo.DemoError, OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: could not read the recording: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    for still in stills:
+        _pending_images.append(still["jpeg"])
+    spoken = sum(1 for s in stills if s["said"])
+    tool_result(f"{len(stills)} still{plural(len(stills))}"
+                + (f", words over {spoken}" if spoken else ""))
+    said = demo.note(str(video), stills)
+    if unheard:
+        said += f"\n(The user's words could not be heard: {unheard}.)"
+    return said
+
+
+def check_office_file(path: str) -> str:
+    """Open a spreadsheet, deck or document as the user will, and say
+    what is wrong with it before it is handed over."""
+
+    from . import officecheck
+
+    tool_line(f"CheckFile({path})")
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    try:
+        report = officecheck.check(Path(path), images=sees)
+    except (officecheck.CheckError, OSError, zipfile.BadZipFile,
+            subprocess.SubprocessError) as exc:
+        result = f"Error: could not check it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    _pending_images.extend(report.images)
+    found = len(report.findings)
+    tool_result(f"{report.pages} page{plural(report.pages)}, "
+                + (f"{found} problem{plural(found)}" if found
+                   else "nothing found"),
+                style=WARN if found else DIM)
+    return report.text()
+
+
+CHESS_PIECES = dict(zip("KQRBNPkqrbnp", "♔♕♖♗♘♙♚♛♜♝♞♟"))
+
+
+def _chess_board(fen: str, flip: bool, last=None) -> Text:
+    """The position drawn in the terminal, the last move's squares
+    marked."""
+
+    from . import chess
+
+    board = chess.Position.from_fen(fen).board
+    marked = set(last or ())
+    out = Text()
+    ranks = range(8) if flip else range(7, -1, -1)
+    files = list(range(7, -1, -1) if flip else range(8))
+    for rank in ranks:
+        out.append(f"{' ' * RESULT_INDENT}{rank + 1} ", style=DIM)
+        for file in files:
+            sq = rank * 8 + file
+            piece = board[sq]
+            light = (rank + file) % 2 == 1
+            back = "#a9a95a" if sq in marked else (
+                "#d9c4a0" if light else "#a07850")
+            out.append(f" {CHESS_PIECES[piece] if piece else ' '} ",
+                       style=f"bold black on {back}")
+        out.append("\n")
+    out.append(" " * (RESULT_INDENT + 2) + "".join(
+        f" {chess.FILES[f]} " for f in files), style=DIM)
+    return out
+
+
+def _chess_in_terminal(lesson: dict) -> str:
+    """Play LESSON here: each step's board and words, Flash's moves made
+    on Enter, and the user's typed in and checked. What happened, for
+    the model."""
+
+    from . import chess
+
+    flip = lesson["side"] == "black"
+    interactive = sys.stdin.isatty() and not capturing()
+    found, asked, last = 0, 0, None
+    for n, step in enumerate(lesson["steps"], start=1):
+        pos = chess.Position.from_fen(step["fen"])
+        console.print(Text(f"{' ' * RESULT_INDENT}Step {n} of "
+                           f"{len(lesson['steps'])}", style=DIM))
+        if step.get("ask"):
+            asked += 1
+            console.print(_chess_board(step["fen"], flip, last))
+            if step["say"]:
+                console.print(Text(f"{' ' * RESULT_INDENT}{step['say']}"))
+            who = "White" if step["turn"] == "w" else "Black"
+            tries, right = 0, False
+            while interactive:
+                said = console.input(Text(
+                    f"{' ' * RESULT_INDENT}{who} to play. Your move "
+                    "(? for a hint, Enter to see it, q to stop): ",
+                    style=DIM)).strip()
+                if said.lower() == "q":
+                    return (f"The user stopped at step {n} of "
+                            f"{len(lesson['steps'])}, having found "
+                            f"{found} of {asked - 1} moves.")
+                if said == "?":
+                    console.print(Text(f"{' ' * RESULT_INDENT}"
+                                       f"{step['hint'] or 'No hint here.'}",
+                                       style=DIM))
+                    continue
+                if not said:
+                    break
+                tries += 1
+                try:
+                    move = pos.uci(pos.find(said))
+                except chess.ChessError:
+                    console.print(Text(f"{' ' * RESULT_INDENT}{said} is not "
+                                       "a legal move here.", style=WARN))
+                    continue
+                if move in step["answers"]:
+                    right = True
+                    found += tries == 1
+                    break
+                console.print(Text(f"{' ' * RESULT_INDENT}"
+                                   f"{step['legal'][move]} is legal, but not "
+                                   "the move here.", style=WARN))
+            first = step["answer_san"][0]
+            console.print(Text(f"{' ' * RESULT_INDENT}"
+                               + (f"Right: {first}." if right
+                                  else f"The move was {first}.")
+                               + (f" {('White', 'Black')[step['turn'] == 'w']}"
+                                  f" answers {step['reply_san']}."
+                                  if step.get("reply") else ""),
+                               style=ACCENT if right else DIM))
+            played = step.get("reply") or step["answers"][0]
+            last = (chess.square(played[:2]), chess.square(played[2:4]))
+            continue
+        if step.get("move"):
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['san']}",
+                               style=f"bold {ACCENT}"))
+            last = (chess.square(step["move"][:2]),
+                    chess.square(step["move"][2:4]))
+        console.print(_chess_board(step["after"], flip, last))
+        if step["say"]:
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['say']}"))
+        if step["end"]:
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['end'].title()}.",
+                               style=f"bold {ACCENT}"))
+        if interactive and n < len(lesson["steps"]):
+            said = console.input(Text(f"{' ' * RESULT_INDENT}Enter for the "
+                                      "next step, q to stop: ", style=DIM))
+            if said.strip().lower() == "q":
+                return (f"The user stopped at step {n} of "
+                        f"{len(lesson['steps'])}.")
+    if not interactive:
+        return ("Shown in the terminal, every step at once, since nobody "
+                "is at it to play the moves.\n" + chess.summary(lesson))
+    return (f"The user went through the whole lesson and found {found} of "
+            f"{asked} moves on the first try.\n" + chess.summary(lesson))
+
+
+def teach_chess(title: str = "", steps: Any = None, start: str = "",
+                side: str = "white") -> str:
+    """Teach chess a move at a time: a lesson the user steps through on
+    a board, every move checked against the rules first."""
+
+    from . import chess
+
+    tool_line(f"ChessLesson({title or 'chess'})")
+    try:
+        if isinstance(steps, str):
+            steps = json.loads(steps)
+        lesson = chess.build_lesson(title, steps, start, side)
+    except (chess.ChessError, ValueError) as exc:
+        result = (f"Error: {exc}. Nothing was shown: fix it and call "
+                  "teach_chess again with the whole lesson.")
+        tool_result(result, style=ERROR)
+        return result
+    asks = sum(1 for s in lesson["steps"] if s.get("ask"))
+    label = (f"{len(lesson['steps'])} step{plural(len(lesson['steps']))}, "
+             f"{asks} move{plural(asks)} to find")
+    if tool_chess(lesson):
+        tool_result(label)
+        return ("It is in the chat as a board the user steps through: "
+                "your moves play themselves, and the moves they find are "
+                "marked there at once. Do not repeat the lesson in your "
+                "reply; say in a line what it covers.\n"
+                + chess.summary(lesson))
+    tool_result(label)
+    return _chess_in_terminal(lesson)
+
+
+def play_chess(game: str = "", move: str = "", side: str = "white",
+               start: str = "") -> str:
+    """Play chess against the user, no lesson: start a game on a board
+    in the chat, or play Flash's move in one, checked against the
+    rules."""
+
+    import uuid
+
+    from . import chess
+
+    tool_line(f"ChessGame({game or 'new'}{', ' + move if move else ''})")
+    if game:
+        played = tool_chess_move(game, move)
+        if played is None:
+            result = ("Error: games are played on a board in the browser; "
+                      "there is none here.")
+        elif played.get("error"):
+            result = (f"Error: {played['error']}. Nothing was played: "
+                      "call play_chess again with a legal move.")
+        else:
+            last = played["moves"][-1]["san"]
+            tool_result(last)
+            return f"You played {last}.\n" + chess.game_summary(played)
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        made = chess.new_game(uuid.uuid4().hex[:12], side, start)
+        if move:
+            made = chess.play_move(made, move, "flash")
+    except (chess.ChessError, ValueError) as exc:
+        result = f"Error: {exc}. No game was started."
+        tool_result(result, style=ERROR)
+        return result
+    if not tool_chess(made):
+        result = ("Error: games are played on a board in the browser; "
+                  "there is none here. Play in text instead if they want.")
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"the user plays {made['side']}")
+    return ("It is in the chat as a board the user moves pieces on; each "
+            "of their moves comes to you as a message with the game id. "
+            "Say in a line that the game is on.\n"
+            + chess.game_summary(made))
+
+
+CANVAS_ACTIONS = ("show", "patch", "run", "read", "look")
+CANVAS_HOWS = ("inner", "outer", "append", "prepend", "text", "remove",
+               "attr", "value")
+# The most a canvas sends back to the model from a read or a run.
+CANVAS_ANSWER_CHARS = 20_000
+
+
+def canvas(content: str = "", title: str = "", format: str = "html",
+           id: str = "", action: str = "show", patches: Any = None,
+           script: str = "") -> str:
+    """Show or update a canvas: a live card in the web chat that holds
+    HTML, Markdown or SVG, redrawn in place each time it is called with
+    the same id. On a live HTML canvas, ACTION also changes parts of it
+    in place (patch), runs code in it (run), reads what is in it now
+    (read) or looks at it (look)."""
+
+    import uuid
+
+    doing = (action or "show").strip().lower()
+    if doing not in CANVAS_ACTIONS:
+        return "Error: action is show, patch, run, read or look."
+    if doing != "show":
+        return _canvas_act(doing, str(id or "").strip(), patches,
+                           str(script or ""))
+    kind = (format or "html").strip().lower()
+    if kind not in ("html", "markdown", "svg"):
+        return "Error: format is html, markdown or svg."
+    if not str(content or "").strip():
+        return "Error: give the canvas's whole content."
+    if len(content) > 500_000:
+        return "Error: over 500,000 characters: make it smaller."
+    made = not id
+    cid = str(id or uuid.uuid4().hex[:12])
+    tool_line(f"Canvas({title or cid})")
+    state = {"id": cid, "title": str(title or "Canvas"), "format": kind,
+             "content": str(content)}
+    if tool_canvas(state):
+        tool_result("Shown" if made else "Updated")
+        live = (" To change part of it, call canvas with action patch; to "
+                "see what the user did in it, action read; to see it, "
+                "action look." if kind == "html" else "")
+        return (f"The canvas is {'in' if made else 'updated in'} the chat "
+                f"(id {cid}). To redraw it, call canvas again with id "
+                f"{cid} and the whole new content.{live} Do not repeat it "
+                "in your reply.")
+    tool_result("No page to show it on")
+    return ("Error: the canvas needs Flash's web app; nothing was shown. "
+            "Give the content in your reply instead.")
+
+
+def _canvas_patches(patches: Any) -> tuple[list[dict], str]:
+    """The changes asked for, checked: (patches, "") or ([], why not)."""
+
+    if isinstance(patches, str):
+        try:
+            patches = json.loads(patches) if patches.strip() else []
+        except ValueError:
+            return [], "patches is a JSON list of changes."
+    if isinstance(patches, dict):
+        patches = [patches]
+    if not isinstance(patches, list) or not patches:
+        return [], ("give patches: a list of {selector, how, html}, how "
+                    "being " + ", ".join(CANVAS_HOWS) + ".")
+    if len(patches) > 50:
+        return [], "at most 50 patches at a time."
+    out = []
+    for n, one in enumerate(patches, 1):
+        if not isinstance(one, dict) or not str(one.get("selector") or
+                                                "").strip():
+            return [], f"patch {n} has no selector."
+        how = str(one.get("how") or "inner").strip().lower()
+        if how not in CANVAS_HOWS:
+            return [], (f"patch {n}: how is one of "
+                        + ", ".join(CANVAS_HOWS) + ".")
+        if how == "attr" and not str(one.get("name") or "").strip():
+            return [], f"patch {n}: an attr patch needs the attribute's name."
+        out.append({"selector": str(one["selector"]), "how": how,
+                    "html": str(one.get("html") or ""),
+                    "name": str(one.get("name") or ""),
+                    "all": _truthy(one.get("all"))})
+    if sum(len(p["html"]) for p in out) > 200_000:
+        return [], "over 200,000 characters of patches: make them smaller."
+    return out, ""
+
+
+def _canvas_act(doing: str, cid: str, patches: Any, script: str) -> str:
+    """A patch, run, read or look on the live canvas CID, through the
+    page that shows it."""
+
+    if not cid:
+        return "Error: give the id of the canvas, from when it was shown."
+    tool_line(f"Canvas({doing} {cid})")
+    asked: dict[str, Any] = {"id": cid, "op": doing}
+    if doing == "patch":
+        asked["patches"], why = _canvas_patches(patches)
+        if why:
+            tool_result(why, style=ERROR)
+            return f"Error: {why}"
+    if doing == "run":
+        if not script.strip():
+            return "Error: give script, JavaScript run in the canvas."
+        if len(script) > 100_000:
+            return "Error: the script is over 100,000 characters."
+        asked["script"] = script
+    if doing == "look" and not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (f"Error: the active model ({MODEL_NAME}) cannot see "
+                  "images; use action read to get the canvas's text and "
+                  "values instead.")
+        tool_result(result, style=ERROR)
+        return result
+    got = tool_canvas_op(asked)
+    if got is None:
+        tool_result("No page to show it on")
+        return ("Error: the canvas needs Flash's web app; there is no "
+                "canvas here.")
+    if not isinstance(got, dict):
+        got = {"error": str(got)}
+    if got.get("error"):
+        tool_result(str(got["error"]), style=ERROR)
+        return f"Error: {got['error']}"
+    if doing == "patch":
+        missed = [str(m) for m in got.get("missed") or []]
+        if got.get("later"):
+            tool_result("Saved, shown when the chat is opened")
+            return ("No page has the chat open right now: the changes are "
+                    "kept and made when the canvas is next shown.")
+        tool_result(f"Changed {got.get('changed', 0)}")
+        said = f"Changed {got.get('changed', 0)} element(s) in place."
+        if missed:
+            said += (" Nothing matched: " + ", ".join(missed[:10])
+                     + ". Read the canvas to see what is there.")
+        return said
+    if doing == "look":
+        return _canvas_look(cid, str(got.get("html") or ""),
+                            int(got.get("width") or 0),
+                            int(got.get("height") or 0))
+    answer = got.get("result") if doing == "run" else {
+        k: got.get(k) for k in ("values", "state", "text")}
+    shown = answer if isinstance(answer, str) else json.dumps(
+        answer, ensure_ascii=False, indent=1)
+    if len(shown) > CANVAS_ANSWER_CHARS:
+        shown = shown[:CANVAS_ANSWER_CHARS] + "\n[cut short]"
+    tool_result("Ran" if doing == "run" else "Read")
+    if doing == "run":
+        return f"The script ran in canvas {cid}. It returned:\n{shown}"
+    return (f"Canvas {cid} as it is now in the user's page (values are "
+            "its inputs, state is what its code put in flash.state, text "
+            f"is what it shows):\n{shown}")
+
+
+def _canvas_look(cid: str, html: str, width: int, height: int) -> str:
+    """A picture of the canvas, drawn from what the page showed, attached
+    for the model to see."""
+
+    global _screenshot_count
+
+    if not html.strip():
+        return "Error: the page sent nothing to draw."
+    view_width = _clamp(width, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                        DEFAULT_SCREENSHOT_WIDTH)
+    view_height = _clamp(height, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                         DEFAULT_SCREENSHOT_HEIGHT)
+    _screenshot_count += 1
+    page = Path(SCRATCH_DIR) / f"canvas-{cid}.html"
+    out = Path(SCRATCH_DIR) / f"canvas-{_screenshot_count}.png"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(html, encoding="utf-8")
+    _problems, why = capture(page.resolve().as_uri(), out, width=view_width,
+                             height=view_height, full_page=False, wait_ms=200,
+                             cursor=False)
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    data = out.read_bytes()
+    _pending_images.append(data)
+    tool_result(f"{view_width}x{view_height} ({max(1, len(data) // 1024)} "
+                f"KB) {out.name}")
+    return (f"A picture of canvas {cid} as the user sees it now, at "
+            f"{view_width}x{view_height}, is attached. Judge it from what "
+            "you can see.")
+
+
+def read_aloud(text: str = "", url: str = "", path: str = "",
+               out: str = "") -> str:
+    """Read an article, a document or some text aloud in Flash's voice:
+    straight away in the terminal, as a player in the chat in the
+    browser."""
+
+    from . import readaloud
+
+    shown = str(text or "")
+    what = url or path or (shown[:40] + ("…" if len(shown) > 40 else ""))
+    tool_line(f"ReadAloud({what})")
+    title = ""
+    try:
+        if url:
+            address = url.strip()
+            if not address.lower().startswith(FETCH_SCHEMES):
+                raise readaloud.ReadError("only http:// and https:// pages")
+            request = urllib.request.Request(
+                address, headers={"User-Agent": FETCH_USER_AGENT})
+            with urllib.request.urlopen(  # nosec B310 -- scheme checked
+                    request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+                charset = response.headers.get("Content-Type", "")
+                body = response.read(FETCH_MAX_BYTES)
+            kind = charset or "text/html"
+            page = body.decode("utf-8", "replace")
+            if "html" in kind:
+                title, _, _ = _readable(body, kind)
+                body = readaloud.article(page).encode("utf-8")
+                kind = "text/html; charset=utf-8"
+            _, _, words = _readable(body, kind)
+        elif path:
+            source = Path(path).expanduser()
+            if not source.is_file():
+                raise readaloud.ReadError(f"no file at {source}")
+            title = source.stem
+            if source.suffix.lower() in (".pdf", ".docx"):
+                words, reason = extract_document_text(source)
+                if words is None:
+                    raise readaloud.ReadError(reason)
+            else:
+                words = source.read_text(encoding="utf-8", errors="replace")
+        else:
+            words = str(text or "")
+        said, cut = readaloud.prepare(words)
+    except (readaloud.ReadError, urllib.error.URLError, OSError,
+            ValueError) as exc:
+        result = f"Error: could not read it aloud: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    count = readaloud.words(said)
+    minutes = max(1, round(count / 160))
+    left = (" The rest was too long to read: it stops about an hour in."
+            if cut else "")
+    heading = f"{title}. " if title and not said.startswith(title) else ""
+
+    if drawn_elsewhere() and not out:
+        target = Path(SCRATCH_DIR) / readaloud.default_name(title or "reading")
+    elif out:
+        target = Path(out).expanduser()
+    else:
+        target = None
+
+    if target is None:
+        # The terminal: read it now, through the speakers.
+        tool_result(f"{count} words, about {minutes} min. Ctrl+C stops it.")
+        try:
+            read, stopped = readaloud.speak(heading + said, doing=tool_result)
+        except readaloud.ReadError as exc:
+            result = f"Error: could not read it aloud: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        if stopped:
+            return (f"The user stopped the reading after part {read} of "
+                    f"{len(readaloud.pieces(said))}. Do not read it again "
+                    "unless they ask." + left)
+        return (f"Read aloud: {count} words, about {minutes} minutes. It "
+                "has been heard; do not repeat it as text." + left)
+
+    try:
+        made = readaloud.record(heading + said, target, doing=tool_result)
+    except (readaloud.ReadError, OSError,
+            subprocess.TimeoutExpired) as exc:
+        result = f"Error: could not read it aloud: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    seconds = made["seconds"]
+    label = (f"{title or 'Reading'} ({int(seconds // 60)}:"
+             f"{int(seconds % 60):02d} read aloud)")
+    shown = _show_audio(made["path"], label, play=not out)
+    return (f"Read aloud into {made['path']}: {count} words, "
+            f"{int(seconds // 60)} min {int(seconds % 60)} s. {shown} Do "
+            "not repeat the text in your reply; say a line about what it "
+            "is." + left)
+
+
+def make_midi(
+    path: str, tracks: Any, tempo: Any = 120, time_signature: str = "4/4",
+    title: str = "", caption: str = "",
+) -> str:
+    """Write a piece of music as a MIDI file from its tracks of notes,
+    and play it to the user."""
+
+    midi_path = Path(path).expanduser()
+    if midi_path.suffix.lower() not in midi.MIDI_SUFFIXES:
+        midi_path = midi_path.with_name(midi_path.name + ".mid")
+    tool_line(f"MakeMIDI({midi_path})")
+
+    problem = ""
+    if midi_path.is_dir():
+        problem = f"{midi_path} is a directory, not a file"
+    elif midi_path.exists():
+        try:
+            with open(midi_path, "rb") as handle:
+                if not midi.is_midi(handle.read(4)):
+                    problem = (
+                        f"{midi_path.name} already exists and is not a MIDI "
+                        "file, so it was left alone; pick another path"
+                    )
+        except OSError as exc:
+            problem = f"could not read {midi_path}: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        built = midi.build_tracks(tracks)
+        data = midi.to_midi(built, tempo, time_signature,
+                            str(title or "").strip())
+    except midi.MidiError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+
+    checkpoint.record(midi_path)
+    try:
+        midi_path.parent.mkdir(parents=True, exist_ok=True)
+        midi_path.write_bytes(data)
+    except OSError as exc:
+        result = f"Error: could not write {midi_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    count = len(built)
+    label = (
+        f"{midi_path.name} ({count} track{plural(count)}, {kilobytes} KB)"
+        + (f": {note}" if note else "")
+    )
+    shown = _show_midi(midi_path, label)
+    return (
+        f"Saved {midi_path} ({kilobytes} KB).\n{midi.describe(data)}\n"
+        f"{shown}\nTo change it, call make_midi again with all the tracks, "
+        "changed, and the same path."
+    )
+
+
+def send_midi(path: str, caption: str = "") -> str:
+    """Play the user a MIDI file that already exists, such as one a
+    script wrote."""
+
+    tool_line(f"SendMIDI({path})")
+
+    midi_path = Path(path).expanduser()
+    problem = (
+        midi.check_midi_file(midi_path) if midi_path.is_file()
+        else f"no file at {midi_path}"
+    )
+    summary = ""
+    if not problem:
+        try:
+            data = midi_path.read_bytes()
+            summary = midi.describe(data)
+        except (OSError, midi.MidiError, IndexError, ValueError) as exc:
+            problem = f"{midi_path.name} could not be read as MIDI: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    label = f"{midi_path.name} ({kilobytes} KB)" + (
+        f": {note}" if note else ""
+    )
+    shown = _show_midi(midi_path, label)
+    return f"Sent {midi_path.name} ({kilobytes} KB).\n{summary}\n{shown}"
 
 
 DEFAULT_SCREENSHOT_WIDTH = 1280
@@ -2847,7 +6854,7 @@ def screenshot(
                          MAX_SCREENSHOT_SIDE, DEFAULT_SCREENSHOT_HEIGHT)
     settle_ms = _clamp(wait_ms, 0, MAX_SCREENSHOT_WAIT_MS,
                        DEFAULT_SCREENSHOT_WAIT_MS)
-    whole_page = bool(full_page)
+    whole_page = _truthy(full_page)
 
     shape = f"{view_width}x{view_height}"
     if whole_page:
@@ -2949,7 +6956,7 @@ def _page_report(
     if sees or capturing():
         _screenshot_count += 1
         out = Path(SCRATCH_DIR) / f"page-{_screenshot_count}.png"
-        why = page_snapshot(out, full_page=bool(full_page))
+        why = page_snapshot(out, full_page=_truthy(full_page))
         if not why:
             _show_browser(out, url, title, step or headline.split("\n")[0])
 
@@ -3019,6 +7026,15 @@ def open_page(
     shape = f"{view_width}x{view_height}"
     tool_line(f"OpenPage({target}, {shape})")
 
+    # The demo game that ships with Flash, by name.
+    if str(target).strip().lower() in GAMES:
+        target = str(GAMES[str(target).strip().lower()])
+    # Tether: a game the user and Flash play together, in one arena run here.
+    if str(target).strip().lower() in ("tether", "flash-tether"):
+        from . import tether
+
+        target = tether.start() + "?as=flash"
+
     url, why = resolve_target(target)
     if url is None:
         result = f"Error: {why}"
@@ -3038,16 +7054,34 @@ def open_page(
         return result
 
     _new_browser_run()
+    headline = (
+        f"Opened {url} at {shape}. The browser stays open, so use the "
+        "interact tool to click, type, or run JavaScript on this page, "
+        "and close it when you are done."
+    )
+    # A game made for playing with Flash says so in its page: how to play
+    # it, where the user joins, and a reflex to start from.
+    card = page_devtools.game_card()
+    if card.get("invite"):
+        from .theme import tool_say
+
+        link = card["invite"]
+        tool_say(f"The game is ready. Open [{link}]({link}) to play with "
+                 "Flash.")
+        headline += (f"\nThe user has been shown their link to join: "
+                     f"{link} . Say it again in a line, then play.")
+    if card.get("about"):
+        headline += "\nThis page is a game made for playing with you:\n" \
+            + card["about"]
+    if card.get("reflex"):
+        headline += ("\nIts reflex to start from (play_realtime's policy; "
+                     "change it as you like):\n" + card["reflex"])
     return _page_report(
         step=(
             f"Opened {Path(urllib.parse.urlparse(url).path).name or url} "
             f"at {shape}"
         ),
-        headline=(
-            f"Opened {url} at {shape}. The browser stays open, so use the "
-            "interact tool to click, type, or run JavaScript on this page, "
-            "and close it when you are done."
-        ),
+        headline=headline,
     )
 
 
@@ -3095,10 +7129,834 @@ def interact(
         tool_result(why, style=ERROR)
         return result
 
-    return _page_report(note, full_page=bool(full_page))
+    return _page_report(note, full_page=_truthy(full_page))
 
 
-# Tool schema expected by Ollama function calling (OpenAI-style).
+GAMES = {
+    "flash-dash": Path(__file__).parent / "games" / "dash.html",
+    # The same level with secrets in it: glitches that help, found by play.
+    "flash-dash-glitched": Path(__file__).parent / "games" / "dash-glitched.html",
+}
+
+
+def play_realtime(policy: str = "", seconds: Any = 20, until: str = "",
+                  canvas: str = "", start_keys: Any = None,
+                  attempts: Any = 1, died: str = "",
+                  restart_keys: Any = None, progress: str = "",
+                  look_every: Any = None, plan: Any = None, say: str = "",
+                  stop: Any = False) -> str:
+    """Run a reflex the model wrote, every frame, in the open page: for a
+    game that moves faster than a turn can look and think. Live (with
+    look_every, or while a live run is going), the reflex plays on between
+    calls and the model looks in, decides and talks."""
+
+    policy = str(policy or "")
+    if look_every not in (None, "") or _truthy(stop) or (
+            plan is not None or say) or page_devtools.live_running():
+        return _play_live(policy, seconds, until, canvas, start_keys,
+                          look_every, plan, say, stop)
+    tool_line(f"PlayRealtime({_clamp(seconds, 1, 120, 20)}s, "
+              f"{len(policy)} chars)")
+    if not policy.strip():
+        result = "Error: give the policy, JavaScript run every frame."
+        tool_result(result, style=ERROR)
+        return result
+
+    def keys_of(given: Any) -> list:
+        return given if isinstance(given, list) else [
+            k for k in str(given or "").split(",") if k]
+
+    keys = keys_of(start_keys)
+    said, why = page_devtools.play(
+        policy, seconds=_clamp(seconds, 1, 120, 20), until=str(until or ""),
+        canvas=str(canvas or ""), start_keys=keys,
+        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"),
+        attempts=_clamp(attempts, 1, 50, 1), died=str(died or ""),
+        restart_keys=keys_of(restart_keys) or keys,
+        progress=str(progress or ""))
+    if why:
+        result = _page_report(f"That did not run: {why}")
+        tool_result(why, style=ERROR)
+        return result
+    tool_result(said.splitlines()[0])
+    # The user gets the playthrough to watch, beside the chat.
+    for line in said.splitlines():
+        if line.startswith("Recording: "):
+            film = line[len("Recording: "):]
+            if tool_file(film):
+                said += "\nThe recording was sent to the user's screen."
+            else:
+                tool_result(f"Playthrough saved to {film}")
+    return _page_report(said)
+
+
+def _play_live(policy: str, seconds: Any, until: str, canvas: str,
+               start_keys: Any, look_every: Any, plan: Any, say: str,
+               stop: Any) -> str:
+    """A live run: the reflex in the page plays every frame; each call is
+    the model looking in, deciding a plan and talking."""
+
+    if isinstance(plan, str):
+        text = plan.strip()
+        try:
+            plan = json.loads(text) if text else None
+        except ValueError:
+            plan = {"note": text}
+    try:
+        every = float(look_every) if look_every not in (None, "") else 4.0
+    except (TypeError, ValueError):
+        every = 4.0
+    every = min(max(every, 0.0), 30.0)
+    going = page_devtools.live_running()
+    tool_line("PlayRealtime(live"
+              + (", stop" if _truthy(stop) else
+                 f", {'new reflex, ' if policy.strip() else ''}"
+                 f"looks in {every:g}s")
+              + (f", says {say[:40]!r}" if say else "") + ")")
+    keys = start_keys if isinstance(start_keys, list) else [
+        k for k in str(start_keys or "").split(",") if k]
+    said, why = page_devtools.play_live(
+        policy, seconds=_clamp(seconds, 1, 600, 120) if not going else 120,
+        until=str(until or ""), canvas=str(canvas or ""), start_keys=keys,
+        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"),
+        look_every=every, plan=plan, say=str(say or ""), stop=_truthy(stop))
+    if why:
+        tool_result(why, style=ERROR)
+        return _page_report(f"That did not run: {why}")
+    tool_result(said.splitlines()[0])
+    for line in said.splitlines():
+        if line.startswith("Said in the chat: "):
+            from .theme import tool_say
+
+            tool_say(line[len("Said in the chat: "):])
+        if line.startswith("Recording: "):
+            film = line[len("Recording: "):]
+            if tool_file(film):
+                said += "\nThe recording was sent to the user's screen."
+    return _page_report(said)
+
+
+DEVTOOLS_ACTIONS = ("network", "request", "console", "run", "inspect")
+
+
+def devtools(
+    action: str, target: Any = "", value: Any = "", failed_only: Any = False,
+    level: str = "", properties: Any = "",
+) -> str:
+    """A browser's developer tools, for the page open_page has open."""
+
+    action = str(action or "").strip().lower()
+    target = "" if target is None else str(target).strip()
+    value = "" if value is None else str(value)
+    label = {
+        "network": f"network{f' {target}' if target else ''}",
+        "request": f"request #{target.lstrip('#')}",
+        "console": f"console{f' {level}' if level else ''}",
+        "run": f"run {' '.join(value.split())[:60]}",
+        "inspect": f"inspect {target}",
+    }.get(action, action)
+    tool_line(f"Devtools({label})")
+
+    if action not in DEVTOOLS_ACTIONS:
+        result = (
+            f"Error: unknown action {action!r}. Use one of: "
+            + ", ".join(DEVTOOLS_ACTIONS) + "."
+        )
+        tool_result(result, style=ERROR)
+        return result
+    if action == "network":
+        lines, why = page_devtools.network(
+            target or value, _truthy(failed_only),
+        )
+        text = "\n".join(lines)
+    elif action == "request":
+        number = target.lstrip("#") or value.strip().lstrip("#")
+        if not number.isdigit():
+            text, why = "", "request needs a request's number, as target."
+        else:
+            text, why = page_devtools.request(int(number))
+    elif action == "console":
+        lines, why = page_devtools.console(str(level or value or ""))
+        text = "\n".join(lines)
+    elif action == "run":
+        text, why = page_devtools.run_script(value or target)
+    else:
+        wanted = properties if isinstance(properties, list) else [
+            p for p in str(properties or "").split(",") if p.strip()
+        ]
+        text, why = page_devtools.inspect(target or value, wanted)
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    first = text.splitlines()[0] if text else "(nothing)"
+    tool_result(first[:200])
+    return text or "(nothing)"
+
+
+MAX_NOTIFY_TITLE = 80
+MAX_NOTIFY_MESSAGE = 300
+
+
+def _wait_words(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    minutes = -(-seconds // 60)
+    return f"{minutes} minute{'' if minutes == 1 else 's'}"
+
+
+def notify_user(message: str, title: str = "") -> str:
+    """Tap the user on the shoulder: a notification, wherever they are
+    looking, a few at a time at most."""
+
+    message = " ".join(tidy(str(message or "")).split())
+    title = " ".join(tidy(str(title or "")).split()) or "Flash"
+    tool_line(f"Notify({title}: {message[:60]})")
+
+    if not message:
+        result = "Error: notify_user needs a message."
+        tool_result(result, style=ERROR)
+        return result
+    if len(message) > MAX_NOTIFY_MESSAGE:
+        message = message[:MAX_NOTIFY_MESSAGE - 1].rstrip() + "…"
+    title = title[:MAX_NOTIFY_TITLE]
+
+    if not notify_limits()[0]:
+        result = (
+            "Error: not sent. The user has turned notifications from you "
+            "off. Say it in your reply instead."
+        )
+        tool_result(result, style=WARN)
+        return result
+    wait = take_notify_turn()
+    if wait:
+        result = (
+            f"Error: not sent. Notifications are limited, and the next "
+            f"can go in {_wait_words(wait)}. Say it in your reply instead, "
+            "or send it then if it still matters."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    if not tool_notify(title, message):
+        desktop_notify(title, message)
+    # And in the briefing, for when it was missed.
+    from . import briefing
+
+    with contextlib.suppress(Exception):
+        briefing.notice("notify", title, message)
+    tool_result(f"Sent: {message}")
+    return "Sent. The user has been notified."
+
+
+def play_music(query: str = "", service: str = "youtube",
+               action: str = "play", value: Any = 0, device: str = "") -> str:
+    """Play a song by name without a browser tab, a radio station on a
+    speaker, or pause, resume, stop, move or turn down what plays."""
+
+    from . import computer, media, music
+
+    action = str(action or "play").strip().lower()
+    service = str(service or "youtube").strip().lower().replace(" ", "_")
+    device = str(device or "").strip()
+    where = f" on {device}" if device else ""
+    tool_line(f"Music({action} {query or ''}{where})".replace(" )", ")"))
+    try:
+        if action == "speakers":
+            names = media.speaker_names()
+            result = ("Speakers: " + ", ".join(names)) if names else (
+                "No speakers found: connect Home Assistant, or on a Mac "
+                "turn on AirPlay speakers.")
+        elif action == "move":
+            result = media.move(device or str(query or ""))
+        elif action == "play" and (
+                service in ("radio", "apple_music_radio")
+                or (service in ("apple_music", "apple", "music")
+                    and (device or sys.platform == "darwin"))):
+            if not str(query or "").strip():
+                raise music.MusicError("Name the station or song.")
+            kind = ("apple_music" if service in ("apple", "music")
+                    else service)
+            result = media.play(query, device, kind)
+        elif action == "play" and device and media.ha_ready():
+            raise music.MusicError(
+                "Songs on Home Assistant speakers come from radio "
+                "stations here: say which station, or use Apple Music on "
+                "the Mac with AirPlay.")
+        elif action == "play":
+            if not str(query or "").strip():
+                raise music.MusicError("Name the song, or give its link.")
+            if service == "spotify":
+                result = music.play_spotify(query)
+            elif service in ("apple_music", "apple", "music"):
+                result = music.play_apple_music(query)
+            else:
+                found = music.find_youtube(query)
+                said = tool_music({"action": "play", **found})
+                if said is not None:
+                    result = said
+                elif music.terminal_can_play():
+                    result = music.terminal_play(found)
+                    if not music.wait_until_started():
+                        raise music.MusicError(
+                            f"mpv could not play {found['url']}.")
+                else:
+                    raise music.MusicError(
+                        "Here in the terminal it plays through mpv and "
+                        "yt-dlp, which are not installed; or ask in the web "
+                        "UI, which plays it itself.")
+        elif (action in ("pause", "resume", "stop", "next", "volume")
+              and device and media.ha_ready()):
+            level = int(_clamp(value, 0, 100, 50))
+            from . import smarthome
+            sp = media.find_speaker(device)
+            svc = {"pause": "media_pause", "resume": "media_play",
+                   "stop": "media_stop", "next": "media_next_track",
+                   "volume": "volume_set"}[action]
+            data = {"entity_id": sp["entity_id"]}
+            if action == "volume":
+                data["volume_level"] = level / 100
+            smarthome._call("POST", f"/api/services/media_player/{svc}",
+                            data)
+            did = action if action != "volume" else f"volume {level}"
+            result = f"{smarthome._name(sp)}: {did}."
+        elif action in ("pause", "resume", "stop", "next", "volume"):
+            level = int(_clamp(value, 0, 100, 50))
+            said = tool_music({"action": action, "value": level})
+            if said is not None:
+                result = said
+            elif music.playing_here():
+                result = music.terminal_control(action, level)
+            else:
+                # An app's music: the computer's own controls.
+                result = computer.do({
+                    "pause": "pause", "resume": "play", "stop": "pause",
+                    "next": "next_track", "volume": "set_volume",
+                }[action], str(level))
+        else:
+            raise music.MusicError("action is one of "
+                                   + ", ".join(music.ACTIONS) + ".")
+    except Exception as exc:  # noqa: BLE001 (any failure is said)
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result)
+    return result
+
+
+CALENDAR_ACTIONS = ("list", "add", "update", "delete", "calendars", "find_time", "invite")
+
+
+def calendar_tool(action: str = "list", start: str = "", end: str = "",
+                  query: str = "", title: str = "", where: str = "",
+                  notes: str = "", all_day: Any = False, id: str = "",
+                  calendar: str = "", minutes: Any = 30, attendees: Any = None,
+                  busy: Any = None, their_calendars: Any = None,
+                  day_start: str = "09:00", day_end: str = "18:00",
+                  weekends: Any = False) -> str:
+    """Read the user's calendars, and change them."""
+
+    from . import calendars
+
+    action = str(action or "list").strip().lower()
+    tool_line(f"Calendar({action} {title or query or id or start}".strip()
+              + ")")
+    try:
+        if action == "list":
+            problems: list[str] = []
+            found = calendars.events(start, end, query, problems)
+            lines = [calendars.describe(e) for e in found] or [
+                "Nothing on then."]
+            lines += [f"(Could not read: {p})" for p in problems]
+            result = "\n".join(lines)
+        elif action == "calendars":
+            names = ["flash (Flash's own)"] + [
+                f"feed:{n} (read-only)" for n in calendars.feeds()]
+            if calendars.google_connected():
+                names += [f"google:{c['id']} ({c['name']}"
+                          + (", main" if c["primary"] else "")
+                          + ("" if c["writable"] else ", read-only") + ")"
+                          for c in calendars.google_calendars()]
+            else:
+                names.append("Google Calendar is not connected.")
+            if calendars.apple_connected():
+                names += [f"apple:{c['name']}"
+                          + ("" if c["writable"] else " (read-only)")
+                          for c in calendars.apple_calendars()]
+            elif calendars.apple_available():
+                names.append("Apple Calendar is not switched on.")
+            result = "\n".join(names)
+        elif action == "add":
+            # Apple Calendar's is the user's own, synced to every device:
+            # asked every time, as an email is, UltraAuto aside.
+            apple = calendars._where_to(  # pylint: disable=W0212
+                calendar).startswith("apple:")
+            if apple and not ultra_auto() and not _user_allows(
+                    f"Add {title!r} at {start} to Apple Calendar?"):
+                return "The user said no to adding it."
+            if not apple and not NO_COMMAND_CONFIRMATION and not _user_allows(
+                    f"Add {title!r} at {start} to your calendar?"):
+                return "The user said no to adding it."
+            made = calendars.add(title, start, end, _truthy(all_day), where,
+                                 notes, calendar)
+            result = "Added: " + calendars.describe(made)
+        elif action == "find_time":
+            problems = []
+            slots = calendars.free_slots(minutes, start, end, day_start or "09:00", day_end or "18:00",
+                                         _truthy(weekends), busy, their_calendars, problems=problems)
+            if not slots:
+                result = "No free time that long in those hours. Try a longer stretch, other hours, or a shorter meeting."
+            else:
+                said = [f"{a:%a %b %d, %H:%M}-{b:%H:%M}" for a, b in slots]
+                result = ("Free in every calendar given:\n" + "\n".join(f"- {s} (start {a.isoformat()})" for s, (a, _) in zip(said, slots))
+                          + "\n\nOffer them as a choices block (the user's click answers you), then invite with the one picked:\n```ui\n"
+                          + json.dumps({"type": "choices", "prompt": f"Which time for {title or 'it'}?", "options": [f"Book {s}" for s in said[:5]]})
+                          + "\n```")
+            result += "".join(f"\n(Could not read: {p})" for p in problems)
+        elif action == "invite":
+            people = attendees if isinstance(attendees, list) else [a for a in str(attendees or "").split(",") if a.strip()]
+            if not ultra_auto() and not _user_allows(
+                    f"Add {title!r} at {start} and invite {', '.join(map(str, people)) or 'no one'}?"):
+                return "The user said no to sending the invitation."
+            made, how = calendars.invite(title, start, end, people, where, notes, calendar)
+            result = "Booked: " + calendars.describe(made) + "\n" + how
+        elif action == "update":
+            made = calendars.update(
+                id, title=title, start=start, end=end, where=where,
+                notes=notes,
+                **({"all_day": _truthy(all_day)} if all_day else {}))
+            result = "Changed: " + calendars.describe(made)
+        elif action == "delete":
+            if not ultra_auto() and not _user_allows(
+                    f"Delete the calendar event {id}?"):
+                return "The user said no to deleting it."
+            calendars.delete(id)
+            result = f"Deleted {id}."
+        else:
+            result = ("Error: action is one of "
+                      + ", ".join(CALENDAR_ACTIONS) + ".")
+    except calendars.CalendarError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0][:120])
+    return result
+
+
+TUTOR_ACTIONS = ("add", "measure", "check", "plan", "graph", "subjects",
+                 "forget")
+
+
+def listen_to_audio(path: str) -> str:
+    """An audio file, measured: loudness, silence, pitch, tone, tempo."""
+
+    from . import sound
+
+    tool_line(f"ListenToAudio({path})")
+    try:
+        result = sound.describe(sound.listen(path))
+    except (sound.SoundError, OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0])
+    return result
+
+
+def make_sound(notes: str, out: str = "sound.wav", wave: str = "sine",
+               bpm: Any = 120, volume: Any = 0.5) -> str:
+    """A WAV played from a short score."""
+
+    from . import sound
+
+    tool_line(f"MakeSound({notes[:40]})")
+    try:
+        made = sound.make(notes, Path(out or "sound.wav"), wave,
+                          float(bpm or 120),
+                          float(volume if volume is not None else 0.5))
+    except (sound.SoundError, ValueError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = f"Made {made['path']}: {made['seconds']:g} s."
+    if tool_audio(str(made["path"])):
+        tool_result(result)
+        return result + " It is in the chat in a player."
+    tool_result(result)
+    return result
+
+
+def make_video(html: str = "", out: str = "video.mp4", seconds: Any = 0,
+               fps: Any = 0, width: Any = 0, height: Any = 0) -> str:
+    """An HTML composition, rendered frame by frame to an MP4."""
+
+    from . import video
+
+    target = Path(out or "video.mp4").expanduser()
+    if target.suffix.lower() != ".mp4":
+        target = target.with_suffix(".mp4")
+    tool_line(f"MakeVideo({target})")
+    try:
+        length = float(seconds or 0)
+    except (TypeError, ValueError):
+        length = 0.0
+    try:
+        made = video.render(str(html or ""), target, length,
+                            float(_clamp(fps, 0, video.MOST_FPS, 0)),
+                            _clamp(width, 0, video.MOST_SIDE, 0),
+                            _clamp(height, 0, video.MOST_SIDE, 0))
+    except (video.VideoError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = (f"Made {made['path']}: {made['seconds']:g} s, "
+              f"{made['width']}x{made['height']} at {made['fps']} fps.")
+    tool_result(result)
+    return result
+
+
+def _exercise_line(task: Optional[dict]) -> str:
+    if not task:
+        return ""
+    return (f"\n  exercise ({task['language']}): {task['task']}"
+            + (f"\n  starter:\n{task['starter']}" if task["starter"] else ""))
+
+
+def _checked(said: dict) -> str:
+    """A run of the learner's answer, for the model to explain."""
+
+    parts = ["Right." if said["right"] else "Not yet."]
+    if not said["built"]:
+        parts.append("It did not compile:\n" + said["stderr"])
+    elif said["timed_out"]:
+        parts.append("It ran too long and was stopped (a loop that never "
+                     "ends, or it waits for input).")
+    else:
+        if said.get("answer_output") is not None and \
+                said["answer_output"] != said["stdout"]:
+            parts.append("Their answer printed:\n"
+                         + (said["answer_output"] or "(nothing)"))
+            parts.append("The check printed:\n"
+                         + (said["stdout"] or "(nothing)"))
+        else:
+            parts.append("It printed:\n" + (said["stdout"] or "(nothing)"))
+        if said["exit"]:
+            parts.append(f"It exited with {said['exit']}.")
+        if said["stderr"].strip():
+            parts.append("Errors and warnings:\n" + said["stderr"])
+        if not said["right"]:
+            parts.append(f"A right answer prints ({said['match']}):\n"
+                         + said["expected"])
+    measured = said["measured"]
+    parts.append(f"{measured['id']}: now {measured['known']:.0%} known; "
+                 f"review in {measured['review_in_days']} days.")
+    return "\n".join(parts)
+
+
+def tutor(action: str = "plan", subject: str = "",
+          propositions: Optional[list] = None, id: str = "",
+          right: Any = None, answer: str = "", limit: Any = 5) -> str:
+    """What the user is learning, as a graph of propositions: teach and
+    test them in order, and keep track of what they know."""
+
+    from . import tutor as graph
+
+    action = str(action or "plan").strip().lower()
+    tool_line(f"Tutor({action} {subject} {id}".strip() + ")")
+    try:
+        if action == "add":
+            added = graph.add(subject, propositions or [])
+            result = f"Added {len(added)}: " + ", ".join(added) + "."
+        elif action == "measure":
+            if right is None or str(right).strip() == "":
+                raise graph.TutorError(
+                    "Say whether they got it right (right: true or false). "
+                    "Only measure an answer they gave.")
+            said = graph.measure(subject, id, _truthy(right))
+            result = (f"{said['id']}: now {said['known']:.0%} known"
+                      + (", known" if said["is_known"] else "")
+                      + f"; review in {said['review_in_days']} days.")
+        elif action == "check":
+            task = graph.exercise(subject, id)
+            if not NO_COMMAND_CONFIRMATION and not ultra_auto() and \
+                    not _user_allows(
+                        f"Run your {task['language']} answer to "
+                        f"{graph._key(id)} on this computer, to check it?"):
+                return "The user said no to running it."
+            result = _checked(graph.check(subject, id, answer))
+        elif action == "plan":
+            steps = graph.plan(subject, _clamp(limit, 1, 20, 5))
+            result = "\n".join(
+                f"{s['do']} {s['id']} ({s['known']:.0%}): {s['text']}"
+                + _exercise_line(s["exercise"])
+                for s in steps) or "Everything is known, and no review " \
+                "is due: add what comes next."
+        elif action == "graph":
+            held = graph.describe(subject)
+            result = "\n".join(
+                [f"{held['subject']}: {held['known']} of {held['of']} known."]
+                + [f"{p['id']} ({p['known']:.0%})"
+                   + (f" needs {', '.join(p['needs'])}" if p["needs"] else "")
+                   + (f" [{p['exercise']['language']} exercise]"
+                      if p["exercise"] else "")
+                   + f": {p['text']}" for p in held["propositions"]])
+        elif action == "subjects":
+            result = ", ".join(graph.subjects()) or "Nothing yet."
+        elif action == "forget":
+            graph.forget(subject)
+            result = f"Forgot {subject}."
+        else:
+            result = "Error: action is one of " + ", ".join(TUTOR_ACTIONS) \
+                + "."
+    except graph.TutorError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    if action in ("add", "plan", "measure", "check", "graph") and \
+            tool_course(subject):
+        result += ("\n\nThe course is on the page as a card the user works "
+                   "through: each lesson, its question or exercise, and "
+                   "marking are there. Do not repeat a lesson or ask its "
+                   "question in your reply: say a sentence or two, and "
+                   "help when they ask.")
+    tool_result(result.splitlines()[0][:120])
+    return result
+
+
+def make_project(name: str = "", path: str = "",
+                 instructions: str = "") -> str:
+    """Make a project of the work in this chat, and move the chat in."""
+
+    from . import workspace
+
+    name = " ".join(str(name or "").split())[:80]
+    tool_line(f"MakeProject({name or path})")
+    if not name and not path:
+        result = "Error: give the project a name, and the folder it is in."
+        tool_result(result, style=ERROR)
+        return result
+    asked = {"name": name, "path": str(path or os.getcwd()),
+             "instructions": str(instructions or "")[:4000]}
+    try:
+        said = tool_project(asked)
+        if said is None:
+            made = workspace.create_project(**asked)
+            said = {"id": made.id, "name": made.name, "path": made.path}
+            where = "It is in the web UI's Projects."
+        else:
+            where = "This chat is in it now."
+    except (workspace.WorkspaceError, OSError, ValueError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = f"Made the project {said['name']}, at {said['path']}. {where}"
+    tool_result(result)
+    return result
+
+
+def request_connector(name: str, target: str, why: str = "",
+                      start: str = "") -> str:
+    """Ask the user to add an MCP server; in UltraAuto, add it."""
+
+    from . import connectors
+
+    tool_line(f"RequestConnector({name}: {target})")
+    try:
+        spec = connectors.spec_from(target, None, start)
+        connectors.check_name(name)
+    except connectors.ConnectorError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    shown = target + (f" (started with {start})" if start else "")
+    if name in connectors.read_config():
+        result = f"Error: there is a connector called {name} already."
+        tool_result(result, style=ERROR)
+        return result
+    if not ultra_auto() and not _user_allows(
+        f"Add the MCP server {name}, {shown}?"
+        + (f" Flash says: {why}" if why else "")
+        + " Its tools join Flash's; a command runs on this computer."
+    ):
+        why_not = denial_why()
+        return ("The user said no to adding it"
+                + (f': "{why_not}"' if why_not else "") + ".")
+    found = connectors.read_config()
+    found[name] = spec
+    connectors.write_config(found)
+    servers = connectors.refresh()
+    server = next((s for s in servers if s.name == name), None)
+    state = server.state if server else "unknown"
+    if state == connectors.READY:
+        result = (f"Added {name}: its tools are "
+                  + ", ".join(connectors.tool_name(name, t["name"])
+                              for t in server.tools) + ".")
+    else:
+        result = (f"Added {name}, but it is {state}"
+                  + (f": {server.why}" if server and server.why else ".")
+                  + " The user can fix it in Settings > Connectors.")
+    tool_result(result.split(":")[0])
+    return result
+
+
+def search_files(query: str, folder: str = ".", limit: int = 8) -> str:
+    """The passages in a folder that best answer QUERY, numbered for
+    citing."""
+
+    from . import ai, filesearch, providers
+
+    tool_line(f"SearchFiles({query})"
+              + (f" in {folder}" if folder not in ("", ".") else ""))
+    try:
+        client = providers.client(ai.Config.host)
+    except Exception:  # noqa: BLE001  (words alone, then)
+        client = None
+    try:
+        hits, how = filesearch.search(query, folder or ".",
+                                      _clamp(limit, 1, 20, 8), client)
+    except (ValueError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"{len(hits)} passages, by {how}")
+    if not hits:
+        return filesearch.cited(hits, folder)
+    return ("Cite these as [e1], [e2]... where the answer uses them.\n\n"
+            + filesearch.cited(hits, folder or "."))
+
+
+def request_extension(source: str, why: str = "") -> str:
+    """Ask the user to install a Flash extension; in UltraAuto, install
+    it."""
+
+    tool_line(f"RequestExtension({source})")
+    try:
+        spec = extensions.canonical(source)
+        checkout = extensions.fetch(source)
+    except (extensions.ExtensionError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        try:
+            ext = extensions.load(checkout)
+        except extensions.ExtensionError as exc:
+            result = f"Error: {spec} is not a Flash extension: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        clash = extensions.clashes(ext, frozenset(), frozenset(FUNCTIONS))
+        if clash:
+            result = f"Error: it cannot be installed: {'; '.join(clash)}."
+            tool_result(result, style=ERROR)
+            return result
+        adds = "; ".join(ext.contents()) or "nothing Flash would use"
+        if not ultra_auto() and not _user_allows(
+            f"Install the extension {ext.name} from {spec}? It adds "
+            f"{adds}." + (f" Flash says: {why}" if why else "")
+            + " Extensions run programs on this computer as you."
+        ):
+            why_not = denial_why()
+            return ("The user said no to installing it"
+                    + (f': "{why_not}"' if why_not else "") + ".")
+        installed = extensions.install(checkout, source)
+    except (extensions.ExtensionError, OSError) as exc:
+        result = f"Error: could not install it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    finally:
+        extensions.discard(checkout)
+    extensions.reload()
+    result = (f"Installed {installed.name}: {adds}. Its tools are offered "
+              "from the next message.")
+    tool_result(f"Installed {installed.name}")
+    return result
+
+
+def debate_tool(question: str = "", context: str = "", rounds: Any = 2,
+                sides: Any = None, until_settled: Any = False) -> str:
+    """Have two sides argue QUESTION out (debate.py), and say what came
+    of it: the summary, for the model to go on from. The user watches it
+    in the web UI as it is argued, and can stop it there."""
+
+    import uuid
+
+    from . import debate as argue
+    from . import learning, providers
+    from .theme import tool_debate, tool_debate_poll
+
+    question = " ".join(str(question or "").split())
+    tool_line(f"Debate({question[:120]})")
+    if not question:
+        return "Error: say what the question is."
+    models = [str(m).strip() for m in sides if str(m).strip()][:2] \
+        if isinstance(sides, list) else []
+    try:
+        rounds = max(1, min(int(rounds or argue.ROUNDS), argue.MOST_ROUNDS))
+    except (TypeError, ValueError):
+        rounds = argue.ROUNDS
+    debate_id = uuid.uuid4().hex[:8]
+    history = [{"role": "user", "content": str(context).strip()}] \
+        if str(context or "").strip() else []
+    shown = tool_debate({"id": debate_id, "question": question,
+                         "sides": list(argue.SIDES), "turns": [],
+                         "by": "flash"})
+    heard: dict = {}
+
+    def say(event: dict) -> None:
+        if "turn" in event:
+            had = heard.setdefault(event["turn"],
+                                   {"side": event["side"], "text": ""})
+            had["text"] += event.get("text", "")
+        if shown:
+            tool_debate({"id": debate_id, **event})
+
+    stopped = [False]
+
+    def stopping() -> bool:
+        stopped[0] = stopped[0] or bool(
+            tool_debate_poll(debate_id).get("stopped"))
+        return stopped[0]
+
+    def steers() -> list:
+        return list(tool_debate_poll(debate_id, take=True).get("steers")
+                    or [])
+
+    try:
+        done = argue.run(question, providers.client(OLLAMA_HOST), models,
+                         MODEL_NAME, history=history, rounds=rounds,
+                         options=learning.chat_options(), say=say,
+                         stopped=stopping, steers=steers,
+                         until=str(until_settled).lower() in ("true", "1"))
+    except KeyboardInterrupt:
+        done = {"question": question, "sides": list(argue.SIDES),
+                "models": models, "summary": "", "stopped": True,
+                "turns": [heard[n] for n in sorted(heard)
+                          if heard[n]["text"].strip()]}
+    except Exception as exc:  # noqa: BLE001
+        if shown:
+            tool_debate({"id": debate_id, "done": True,
+                         "error": f"{exc.__class__.__name__}: {exc}"})
+        result = f"Error: the debate could not run: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    if shown:
+        tool_debate({"id": debate_id, "done": True, "kept": done,
+                     "stopped": done["stopped"],
+                     "empty": not done["turns"]})
+    if done["summary"]:
+        result = (f"The debate is shown to the user. Its summary:\n\n"
+                  f"{done['summary']}")
+    elif done["turns"]:
+        said = argue._transcript(done["turns"], done["sides"])
+        result = ("The user stopped the debate before its summary. What "
+                  f"was said:\n\n{said}")
+    else:
+        result = "The user stopped the debate before it began."
+    tool_result(result if not shown else
+                (done["summary"].splitlines() or ["Stopped."])[0])
+    return result
+
+
+# Tool schema expected by Ollama function calling.
 tools: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -3112,6 +7970,16 @@ tools: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Command.",
                     },
+                    "sandbox": {
+                        "type": "boolean",
+                        "description": (
+                            "True runs it in the OS sandbox: it can read, "
+                            "but write only in the working folder and temp "
+                            "folders, and cannot see keys or passwords. "
+                            "Use it for a script or command you do not "
+                            "fully trust, even with full access."
+                        ),
+                    },
                     "timeout": {
                         "type": "integer",
                         "description": (
@@ -3124,8 +7992,53 @@ tools: list[dict[str, Any]] = [
                         "minimum": 1,
                         "maximum": MAX_SHELL_TIMEOUT,
                     },
+                    "background": {
+                        "type": "boolean",
+                        "description": (
+                            "True runs it in the background: you get a task "
+                            "id at once and carry on, and are told when it "
+                            "ends. For anything long or that keeps running: "
+                            "a dev server, a watcher, a long build or test "
+                            "run, a download. Read its output with "
+                            "task_output, end it with task_stop. No timeout."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "With background: a few words for what it is (\"dev server\", \"full test run\").",
+                    },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_output",
+            "description": (
+                "Read a background task's output: what it printed since you "
+                "last read it, and whether it is still running, finished or "
+                "failed. With no task_id, lists your background tasks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The id shell gave when it started it."},
+                    "everything": {"type": "boolean", "description": "All of it (its last 4000 characters), not only what is new."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_stop",
+            "description": "End a background task, and all it started.",
+            "parameters": {
+                "type": "object",
+                "properties": {"task_id": {"type": "string", "description": "The task's id."}},
+                "required": ["task_id"],
             },
         },
     },
@@ -3211,7 +8124,9 @@ tools: list[dict[str, Any]] = [
                 "legacy .doc file needs converting to .docx first. "
                 "Returns at most "
                 f"{DEFAULT_READ_LINES} lines per call, so use offset to "
-                "page through a longer file."
+                "page through a longer file. For a file too long to page "
+                "through (a book-length PDF, a huge log), digest it first "
+                "and read the parts it points to."
             ),
             "parameters": {
                 "type": "object",
@@ -3514,10 +8429,17 @@ tools: list[dict[str, Any]] = [
                 "to the user: a report, plan, README, or notes you wrote. "
                 "In the web UI it opens beside the chat, rendered, where "
                 "they can edit it and comment on passages; their comments "
-                "reach you as a message quoting each one. Write the file "
-                "first; this only shows it. To flag something for them in "
+                "reach you as a message quoting each one. Your edits to "
+                "the file (edit, write) show in it as they land, so once "
+                "it is open, change it in place rather than sending it "
+                "again. Write the file first; this only shows it. To flag "
+                "something for them in "
                 "it (unfinished work, a gap to fill, an open question, an "
-                "assumption to check), add comments pinned to passages."
+                "assumption to check), add comments pinned to passages. "
+                "It draws ```mermaid blocks as diagrams. For a slide deck, "
+                "put marp: true in front matter at the top and --- on a "
+                "line of its own between slides: it shows as slides the "
+                "user can present full screen."
             ),
             "parameters": {
                 "type": "object",
@@ -3576,8 +8498,18 @@ tools: list[dict[str, Any]] = [
                 "so a part rests on it when its position's y is half its "
                 "height. Every shape is centred on its position. Build "
                 "the object from many parts, sized in proportion to the "
-                "real thing and coloured like it. Anything with words on "
+                "real thing and coloured like it. Give a surface a "
+                "texture where the real thing has one: wood grain on a "
+                "table, brick on a wall, grass on a lawn, a picture on a "
+                "poster or a screen. Anything with words on "
                 "it (a logo, a sign, a title) gets a text part for them. "
+                "Make it move when the user asks for animation, or when "
+                "the real thing moves (a fan, a clock's hands, a "
+                "windmill, a bouncing ball): give those parts animate. "
+                "Make it interactive when the user wants to explore it, "
+                "or the real thing has parts that open: give parts info "
+                "(shown when pointed at) and on_click (a door opens, a "
+                "drawer slides out, a lid lifts). "
                 "The result gives the model's overall size, "
                 "and a picture of it when you can see images: check both "
                 "and fix what is off. To revise, call again with the "
@@ -3725,6 +8657,30 @@ tools: list[dict[str, Any]] = [
                                         "common name."
                                     ),
                                 },
+                                "texture": {
+                                    "description": (
+                                        "What its surface is painted "
+                                        "with, over its colour. A "
+                                        "pattern's name, drawn in the "
+                                        "part's color: "
+                                        + ", ".join(textures.PATTERNS)
+                                        + " (noise for stone, concrete, "
+                                        "sand or rust). Or the full path "
+                                        "of a .png or .jpg, fitted once "
+                                        "across the part's largest face "
+                                        "(a poster, a screen, a label; "
+                                        "on a sphere, a world map makes "
+                                        "a globe). Or an object: pattern "
+                                        "or image, color2 for a "
+                                        "pattern's second colour (the "
+                                        "mortar, the grain, the other "
+                                        "square), and scale, the metres "
+                                        "one repeat of it covers."
+                                    ),
+                                    # A name or a path, or an object
+                                    # with the fields named above.
+                                    "type": ["string", "object"],
+                                },
                                 "metalness": {
                                     "type": "number",
                                     "description": "0 (default) to 1.",
@@ -3750,6 +8706,69 @@ tools: list[dict[str, Any]] = [
                                         "and screens."
                                     ),
                                 },
+                                "animate": {
+                                    "type": "object",
+                                    "description": (
+                                        "How the part moves, looping "
+                                        "for ever, measured from where "
+                                        "it rests. Any of: spin "
+                                        "{axis: x|y|z, seconds per "
+                                        "turn (4), reverse}; swing "
+                                        "{axis (z), degrees each way "
+                                        "(20), seconds (2)}; bob "
+                                        "{axis (y), distance (0.1), "
+                                        "seconds (2)}; pulse {amount "
+                                        "it grows, 0.1, seconds (1)}; "
+                                        "keyframes [{time in seconds, "
+                                        "move [x,y,z] from rest, turn "
+                                        "[x,y,z] degrees, scale}], the "
+                                        "last the same as the first "
+                                        "for a smooth loop; ease "
+                                        "(smooth, linear or step); "
+                                        "delay in seconds, to set "
+                                        "parts out of step (a walk's "
+                                        "legs); pivot [x,y,z] from the "
+                                        "part's centre, the point it "
+                                        "turns about (a door's hinge, "
+                                        "a pendulum's top; a sun's "
+                                        "centre for a planet that "
+                                        "spins round it). Axes are "
+                                        "the model's own. Parts that "
+                                        "move together each get the "
+                                        "same animate."
+                                    ),
+                                },
+                                "info": {
+                                    "type": "string",
+                                    "description": (
+                                        "What this part is, shown when "
+                                        "the user points at it or taps "
+                                        "it in the viewer, with its "
+                                        "name: a sentence or two (\"The "
+                                        "left ventricle pumps blood to "
+                                        "the body\"). Give every part "
+                                        "worth knowing about one when "
+                                        "the model is for learning or "
+                                        "exploring."
+                                    ),
+                                },
+                                "on_click": {
+                                    "type": "object",
+                                    "description": (
+                                        "What the part does when the "
+                                        "user clicks it, undone by the "
+                                        "next click: move [x,y,z] "
+                                        "metres from rest, turn [x,y,z] "
+                                        "degrees, pivot [x,y,z] the "
+                                        "point in the model it turns "
+                                        "about (a door's hinge edge; "
+                                        "its own centre if left out), "
+                                        "seconds it takes (0.6). Doors "
+                                        "open, drawers slide out, lids "
+                                        "lift, buttons press in. Not "
+                                        "with animate on the same part."
+                                    ),
+                                },
                             },
                             "required": ["shape"],
                         },
@@ -3772,6 +8791,112 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "test_3d_model",
+            "description": (
+                "Try a 3D model you made the way the user will, in the "
+                "same viewer: click its parts, point at them, turn the "
+                "view, let it play. Each step says what happened (a door "
+                "turned 100° about y, a drawer moved 0.40 m, the card a "
+                "part shows, a click that landed on another part in "
+                "front of it), with pictures. Use it after make_3d_model "
+                "for anything interactive or animated, before telling "
+                "the user it works."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The .glb to try."},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order, up to 12, each one of: "
+                            "{\"click\": part name}, {\"point\": part "
+                            "name}, {\"turn\": degrees around}, "
+                            "{\"wait\": seconds}."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                },
+                "required": ["path", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "design_pcb",
+            "description": (
+                "Design a printed circuit board and show it to the user: "
+                "give the board's outline and layers and every part, each "
+                "with its package and the net each pin is on, and it "
+                "places the parts (any you leave without x, y), routes "
+                "every net on all its layers with vias, puts ground on a "
+                "plane (4+ layers) or a pour, checks the design rules on "
+                "the real copper, and writes Gerbers, drill files, a BOM, "
+                "a pick-and-place list (zipped, ready for a board house), "
+                "a KiCad board, and a 3D model. Use it for any "
+                "electronics the user wants built, from a breakout to a "
+                "product (earbuds, a MIDI controller, a wearable): first "
+                "work out the circuit (each chip's real pinout from its "
+                "datasheet, decoupling caps on every supply pin, pull-ups, "
+                "crystals and their load caps, ESD on connectors), then "
+                "lay it out here. Name nets plainly (GND, 3V3, VBUS, SDA). "
+                "The result says what was routed and every rule broken: "
+                "fix what it says (more room, more layers, parts moved "
+                "nearer what they connect to) and call again. Packages: "
+                + pcb.PACKAGE_HELP + ". For any other part, give its own "
+                "pads instead of a package."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Full path to save it at, ending in .fpcb: in "
+                            "the user's Downloads folder unless they named "
+                            "another place. The fab zip and the KiCad "
+                            "board are written beside it."
+                        ),
+                    },
+                    "design": {
+                        "type": "object",
+                        "description": (
+                            "The board: {\"name\", \"board\": {\"shape\": "
+                            "rect|rounded|stadium|circle|polygon, \"width\", "
+                            "\"height\" (or \"diameter\", or \"points\": [[x, "
+                            "y], ...] in mm), \"layers\": 1|2|4|6, "
+                            "\"thickness\", \"color\": black|green|blue|red|"
+                            "white|purple|yellow}, \"parts\": [{\"ref\": "
+                            "\"U1\", \"package\": \"QFN-56-7x7\", \"value\": "
+                            "\"RP2040\", \"pins\": {\"1\": \"3V3\", \"EP\": "
+                            "\"GND\"} or a list of nets in pin order, and "
+                            "maybe \"x\", \"y\" (mm from the bottom left), "
+                            "\"rotation\" (0, 90, 180, 270), \"side\": "
+                            "top|bottom, \"edge\": true for a connector "
+                            "that overhangs the edge, or \"pads\": "
+                            "[{\"name\", \"x\", \"y\", \"w\", \"h\", "
+                            "\"shape\", \"drill\"}] "
+                            "and \"body\": [w, l, height] for a part with "
+                            "no package}], and maybe \"nets\": {\"VBUS\": "
+                            "{\"width\": 0.4}}, \"rules\": {\"trace\", "
+                            "\"clearance\", \"via\", \"drill\", \"edge\"} in "
+                            "mm, \"ground\": the ground net's name."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "A few words on what it is.",
+                    },
+                },
+                "required": ["path", "design"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_3d_model",
             "description": (
                 "Show a 3D model file that already exists (.glb, .stl, or "
@@ -3786,6 +8911,504 @@ tools: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": "Path to the .glb, .stl, or .obj.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_midi",
+            "description": (
+                "Write music as a MIDI file and play it to the user: a "
+                "tune, a chord progression, a drum beat, a backing track, "
+                "a ringtone. In the web UI it opens beside the chat in a "
+                "player that plays it and draws it as a piano roll. Times "
+                "are in beats at the tempo, so 0, 1, 2, 3 are the four "
+                "beats of a 4/4 bar and 4 starts the next. Give each part "
+                "its own track: melody, chords, bass, drums. The result "
+                "gives each track's note count, range, and the length; "
+                "check them against what you meant. To revise, call again "
+                "with all the tracks and the same path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Full path to save it at, ending in .mid: in "
+                            "the user's Downloads folder unless they named "
+                            "another place."
+                        ),
+                    },
+                    "tracks": {
+                        "type": "array",
+                        "description": "The tracks, one per instrument.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Like 'melody' or 'bass'.",
+                                },
+                                "instrument": {
+                                    "type": ["string", "integer"],
+                                    "description": (
+                                        "drums for a drum kit, or a name: "
+                                        "piano, electric piano, organ, "
+                                        "guitar, electric guitar, bass, "
+                                        "synth bass, violin, cello, "
+                                        "strings, choir, trumpet, brass, "
+                                        "sax, clarinet, flute, harp, "
+                                        "marimba, vibraphone, music box, "
+                                        "lead, pad, and more; or a General "
+                                        "MIDI program number 0 to 127. "
+                                        "Piano when left out."
+                                    ),
+                                },
+                                "notes": {
+                                    "type": "array",
+                                    "description": (
+                                        "Each note as [pitch, start, "
+                                        "duration] or [pitch, start, "
+                                        "duration, velocity], start and "
+                                        "duration in beats, velocity 1 to "
+                                        "127 (90 if left out). A pitch is "
+                                        "a name like C4 (middle C), F#3 or "
+                                        "Bb2, or a MIDI number; a list of "
+                                        "pitches is a chord, like "
+                                        "[[\"C4\", \"E4\", \"G4\"], 0, 4]. "
+                                        "On a drums track a pitch is a "
+                                        "sound: kick, snare, clap, hihat, "
+                                        "open hihat, crash, ride, low tom, "
+                                        "mid tom, high tom, tambourine, "
+                                        "cowbell, shaker."
+                                    ),
+                                    "items": {"type": "array"},
+                                },
+                                "volume": {
+                                    "type": "number",
+                                    "description": (
+                                        "0 to 1, the track's level in the "
+                                        "mix; 1 if left out."
+                                    ),
+                                },
+                            },
+                            "required": ["notes"],
+                        },
+                    },
+                    "tempo": {
+                        "type": "number",
+                        "description": "Beats a minute, 20 to 400; 120.",
+                    },
+                    "time_signature": {
+                        "type": "string",
+                        "description": "Like 4/4 (default), 3/4 or 6/8.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional name for the piece.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path", "tracks"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "smart_home",
+            "description": (
+                "The user's smart home, through Home Assistant: lights, "
+                "plugs, thermostats, blinds, locks, fans, speakers, "
+                "scenes and sensors. list shows the devices and how each "
+                "is (device narrows it, like \"kitchen\" or "
+                "\"temperature\"); state reads one; turn_on, turn_off "
+                "and toggle switch one; set changes a light's brightness "
+                "(0-100) or color, a thermostat's temperature or mode, "
+                "blinds' position, a fan's percentage or a speaker's "
+                "volume; activate runs a scene or script; lock, unlock, "
+                "open, close and stop. Name devices as the user does; a "
+                "change may ask the user first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": [
+                        "list", "state", "turn_on", "turn_off", "toggle",
+                        "set", "activate", "lock", "unlock", "open",
+                        "close", "stop"]},
+                    "device": {"type": "string", "description": (
+                        "Its name in Home Assistant (\"living room "
+                        "lamp\"), or its entity id.")},
+                    "brightness": {"type": "number",
+                                   "description": "For set: 0 to 100."},
+                    "color": {"type": "string", "description": (
+                        "For set: a colour name (warm white, blue...) or "
+                        "a hex code.")},
+                    "temperature": {"type": "number", "description": (
+                        "For set: a thermostat's target.")},
+                    "mode": {"type": "string", "description": (
+                        "For set: heat, cool, auto or off.")},
+                    "position": {"type": "number", "description": (
+                        "For set: blinds, 0 shut to 100 open.")},
+                    "percentage": {"type": "number",
+                                   "description": "For set: a fan's speed."},
+                    "volume": {"type": "number",
+                               "description": "For set: 0 to 100."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_office_file",
+            "description": (
+                "Check a spreadsheet, deck or document you made (xlsx, "
+                "pptx, docx, their OpenDocument kinds, or pdf) before "
+                "handing it over: it is opened as the user will open "
+                "it, every formula recalculated, and you get what is "
+                "wrong (formulas ending in #REF! or #DIV/0!, blank "
+                "pages, empty slides, placeholder text left in) and the "
+                "pages as pictures, to look for text running out of its "
+                "box or a table cut off. Fix and check again until it "
+                "is clean."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The file to check."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "learn_from_recording",
+            "description": (
+                "Watch a screen recording of the user doing a task (a "
+                "video file: mp4, mov, webm, mkv), to learn it: you see "
+                "stills caught each time the screen changed, with what "
+                "they said over each. Then save the procedure as a skill "
+                "with skill_manage, so you can do it for them with "
+                "computer_use next time. Use it when they say \"watch "
+                "how I do this\" or give you a recording to learn from."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The recording's path."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify",
+            "description": (
+                "Run the project's own checks after changing code: its "
+                "tests, linter and type checker, found in pyproject.toml, "
+                "package.json, Cargo.toml, go.mod or a Makefile, or the "
+                "commands you give. Says which passed, and for a failure "
+                "the failing tests, the files and lines it points at, and "
+                "the end of its output. Use it after every change to "
+                "code, then fix what fails and verify again until it "
+                "passes. A change is done when its checks pass."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: the checks to run, like a narrower "
+                            "test (python -m pytest -q tests/test_x.py). "
+                            "The project's own are found when left out."),
+                    },
+                    "folder": {"type": "string", "description": (
+                        "Optional: a folder in the project. The current "
+                        "one when left out.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "teach_chess",
+            "description": (
+                "Teach chess move by move: an opening, a tactic, an "
+                "endgame, a famous game, or a mistake from the user's "
+                "own game. The lesson is a list of steps on one board, "
+                "from the start or from a FEN position: a step plays a "
+                "move and says why, or asks the user to find the move "
+                "(answer), with a hint, and can play the other side's "
+                "reply. In the browser it is a board in the chat they "
+                "step through and move pieces on, their moves marked at "
+                "once; in the terminal it plays there. Every move is "
+                "checked against the rules first: an illegal one comes "
+                "back as an error naming the step and the legal moves, "
+                "so fix it and send the whole lesson again. Moves are "
+                "written as usual (e4, Nf3, exd5, O-O, e8=Q) or as "
+                "squares (e2e4)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": (
+                        "What the lesson is, like \"The Italian Game\" "
+                        "or \"Knight forks\".")},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order, each from where the last left "
+                            "off. Short steps: one move and a sentence "
+                            "or two each. Ask the user to find the key "
+                            "moves, not every move."),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "say": {"type": "string", "description": (
+                                    "What to tell them at this step: "
+                                    "why the move is played, or what to "
+                                    "look for. Markdown.")},
+                                "move": {"type": "string", "description": (
+                                    "A move to play and show them.")},
+                                "answer": {"type": "string", "description": (
+                                    "Instead of move: the move they must "
+                                    "find, or several good ones comma "
+                                    "separated (the first is played).")},
+                                "hint": {"type": "string", "description": (
+                                    "With answer: a nudge, without "
+                                    "giving the move away.")},
+                                "reply": {"type": "string", "description": (
+                                    "With answer: the other side's move "
+                                    "after theirs.")},
+                                "arrows": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "Arrows to draw, as square pairs "
+                                        "like e2e4: after the step's "
+                                        "move, or while they think on an "
+                                        "answer step (so never the "
+                                        "answer itself)."),
+                                },
+                                "highlight": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Squares to mark, like f7.",
+                                },
+                            },
+                        },
+                    },
+                    "start": {"type": "string", "description": (
+                        "Optional: the position to start from, as FEN. "
+                        "The usual starting position when left out.")},
+                    "side": {"type": "string", "enum": ["white", "black"],
+                             "description": (
+                                 "Whose side the board is seen from: the "
+                                 "side the user plays. White when left "
+                                 "out.")},
+                },
+                "required": ["title", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "canvas",
+            "description": (
+                "Show visual content live in the web chat as a canvas card: "
+                "a page, chart, diagram, table, form or mock-up you build "
+                "and keep updating as you work. The first call makes a "
+                "canvas and returns its id; call again with that id and "
+                "the whole new content to redraw it. An HTML canvas is "
+                "live: action patch changes parts of it in place by CSS "
+                "selector (keeping what the user typed), run runs "
+                "JavaScript in it and returns the result, read returns "
+                "its inputs' values, flash.state and text, look attaches "
+                "a picture of it. Its buttons can message you with "
+                "flash.send(text). HTML runs in a sandbox (no access to "
+                "Flash). Web app only."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": (
+                        "The canvas's whole content, in the format given.")},
+                    "title": {"type": "string", "description": (
+                        "A few words shown above it.")},
+                    "format": {"type": "string",
+                               "enum": ["html", "markdown", "svg"],
+                               "description": "html unless set."},
+                    "id": {"type": "string", "description": (
+                        "To update a canvas: its id from the first call. "
+                        "Left out, a new canvas.")},
+                    "action": {"type": "string", "enum": list(
+                        CANVAS_ACTIONS), "description": (
+                        "show (default) draws content; patch, run, read "
+                        "and look act on the live canvas with this id.")},
+                    "patches": {"type": "array", "description": (
+                        "For patch: the changes, in order."), "items": {
+                        "type": "object", "properties": {
+                            "selector": {"type": "string"},
+                            "how": {"type": "string",
+                                    "enum": list(CANVAS_HOWS),
+                                    "description": (
+                                        "inner (default) replaces its "
+                                        "content, outer the element, "
+                                        "append/prepend add html, text "
+                                        "sets plain text, remove, attr "
+                                        "sets attribute name to html, "
+                                        "value sets an input's value.")},
+                            "html": {"type": "string"},
+                            "name": {"type": "string", "description": (
+                                "For attr: the attribute.")},
+                            "all": {"type": "boolean", "description": (
+                                "Every match, not just the first.")},
+                        }, "required": ["selector"]}},
+                    "script": {"type": "string", "description": (
+                        "For run: the body of an async function run in "
+                        "the canvas; what it returns comes back.")},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_chess",
+            "description": (
+                "Play a game of chess against the user, no lesson: for "
+                "\"play chess with me\", \"let's play a game\". Without "
+                "game, starts one: a board in the chat they move pieces "
+                "on, their moves checked there and sent to you. With "
+                "game and move, plays your move in that game. Every move "
+                "is checked against the rules: an illegal one comes back "
+                "as an error with the legal moves. Play to win, at the "
+                "strength they ask for; keep your reply to a line or "
+                "none, the board shows the move. Moves are written as "
+                "usual (e5, Nf6, O-O) or as squares (e7e5)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": (
+                        "The game's id, from the user's message or the "
+                        "last play_chess result. Leave out to start a "
+                        "new game.")},
+                    "move": {"type": "string", "description": (
+                        "Your move. On a new game, only when the user "
+                        "plays black: your first move as white.")},
+                    "side": {"type": "string", "enum": ["white", "black"],
+                             "description": (
+                                 "On a new game, the side the user plays "
+                                 "(white unless they ask).")},
+                    "start": {"type": "string", "description": (
+                        "On a new game, a FEN to start from instead of "
+                        "the usual first position.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_aloud",
+            "description": (
+                "Read something aloud in Flash's voice: an article from "
+                "its url (the article itself, not the page's menus), a "
+                "document or text file from its path (PDF and Word too), "
+                "or text you give. Use it when the user asks to hear "
+                "something (\"read me this article\", \"read this "
+                "aloud\"), instead of writing it out. In the browser it "
+                "becomes a player in the chat that starts playing; in "
+                "the terminal it plays through the speakers. Give one of "
+                "url, path or text, as written, not summarised, unless "
+                "they asked for a summary read aloud."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string",
+                            "description": "A web page to read."},
+                    "path": {"type": "string",
+                             "description": "A file to read."},
+                    "text": {"type": "string",
+                             "description": "The words to read."},
+                    "out": {"type": "string", "description": (
+                        "Optional: where to save the recording (.m4a, "
+                        ".mp3 or .wav), when the user wants a file.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_audio",
+            "description": (
+                "Play the user a sound file that already exists (mp3, "
+                "wav, ogg, opus, m4a, aac or flac): a player in the chat "
+                "in the browser, their default player in the terminal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The sound file."},
+                    "caption": {"type": "string", "description": (
+                        "Optional single line shown with it.")},
+                    "play": {"type": "boolean", "description": (
+                        "Start playing as it arrives, when they asked to "
+                        "hear it now.")},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_midi",
+            "description": (
+                "Play the user a MIDI file (.mid or .midi) that already "
+                "exists, such as one a script wrote or the user has, in "
+                "the same player. For music you write yourself, use "
+                "make_midi, which plays it too."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .mid or .midi file.",
                     },
                     "caption": {
                         "type": "string",
@@ -3822,6 +9445,36 @@ tools: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "watch_youtube",
+            "description": (
+                "Watch a YouTube video or Short from its link: returns "
+                "the title, channel, length, description and timed "
+                "captions, and attaches frames (YouTube's storyboard "
+                "grids, about one frame a second) when the model can "
+                "see images. Use it instead of fetch for any YouTube link."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "A youtube.com/watch, youtu.be, /shorts/ or "
+                            "/live/ link, or an 11-character video id."
+                        ),
+                    },
+                    "frames": {
+                        "type": "boolean",
+                        "description": "Attach frames. Default true.",
+                    },
+                },
+                "required": ["url"],
             },
         },
     },
@@ -4048,6 +9701,664 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "notify_user",
+            "description": (
+                "Send the user a notification: a pop-up in Flash's web "
+                "page, or on their desktop. For news they would want to "
+                "hear the moment it happens, such as a long job finished, "
+                "something you were watching for turned up, or you are "
+                "stuck and need them. Not for anything they will read in "
+                "your reply anyway. Limited to a few in a while; one "
+                "refused says when the next can go."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": (
+                            "What to tell them, in a sentence: "
+                            f"{MAX_NOTIFY_MESSAGE} characters at most."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "A few words to head it.",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_music",
+            "description": (
+                "Play a song, an album or a video's sound by name, with no "
+                "browser tab: on YouTube (the default) it plays in Flash's "
+                "own small player, or in the terminal through mpv; on "
+                "Spotify or Apple Music, in that app on a Mac. Then pause, "
+                "resume, stop or set the volume (0-100) of whatever plays, "
+                "Flash's player or an app's. The user can also say \"Hey "
+                "Flash, pause the music\" without you. "
+                "Radio: service 'radio' plays a station by name or call "
+                "sign (\"WBUR\", \"KEXP\", \"BBC Radio 6 Music\"); with "
+                "device it plays on that speaker (a Home Assistant media "
+                "player, e.g. \"kitchen\", or an AirPlay speaker on a Mac). "
+                "'apple_music_radio' plays Apple Music 1, Hits or Country "
+                "on a Mac; 'apple_music' plays any song from the Apple Music "
+                "catalogue on a Mac. action 'move' with device moves what is "
+                "playing to that speaker (\"switch the media to the "
+                "bedroom\"); 'speakers' lists them. pause/resume/stop/"
+                "volume with device control that speaker."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": (
+                        "What to play: a song and artist, or a link.")},
+                    "service": {"type": "string",
+                                "enum": ["youtube", "spotify",
+                                         "apple_music", "apple_music_radio",
+                                         "radio"]},
+                    "action": {"type": "string",
+                               "enum": ["play", "pause", "resume", "stop",
+                                        "next", "volume", "move",
+                                        "speakers"]},
+                    "device": {"type": "string", "description": (
+                        "The speaker: a Home Assistant media player's name, "
+                        "or an AirPlay speaker on a Mac. Empty: the default "
+                        "speaker, else here.")},
+                    "value": {"type": "integer",
+                              "description": "The volume, 0-100."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calendar",
+            "description": (
+                "The user's calendars: Flash's own, any iCal feeds they "
+                "added (read-only), Google Calendar when connected, and "
+                "Apple Calendar on a Mac when switched on, read together. "
+                "'list' what is on (today to a week on, "
+                "unless start and end say), or find something with query; "
+                "'add' an event (to Google's main calendar when connected, "
+                "else Apple Calendar's when on, else Flash's own, or the "
+                "calendar named; the user is asked first); 'update' or "
+                "'delete' one by the id list gives in [brackets] (Apple "
+                "Calendar events can be deleted, not updated); "
+                "'calendars' names them; 'find_time' finds times free in "
+                "every calendar (the user's, others' busy times or calendar "
+                "addresses), to offer as choices; 'invite' books one and "
+                "invites people by email (Google sends it when connected, "
+                "else an invitation with accept and decline goes from the "
+                "user's mail). Times are ISO 8601, local unless "
+                "they say a zone: work out dates like 'next Tuesday' from "
+                "today's date first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(CALENDAR_ACTIONS)},
+                    "start": {"type": "string", "description": (
+                        "ISO 8601: when it starts, or where a list starts.")},
+                    "end": {"type": "string", "description": (
+                        "ISO 8601: when it ends (an hour on, if left out), "
+                        "or where a list ends.")},
+                    "query": {"type": "string",
+                              "description": "Words to find, for list."},
+                    "title": {"type": "string"},
+                    "where": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "all_day": {"type": "boolean"},
+                    "id": {"type": "string", "description": (
+                        "The event's id, for update and delete.")},
+                    "calendar": {"type": "string", "description": (
+                        "Where to add it: flash, google, "
+                        "google:<calendar id>, apple, or "
+                        "apple:<calendar name>.")},
+                    "minutes": {"type": "integer", "description": "find_time: how long the meeting is (default 30)."},
+                    "attendees": {"type": "array", "items": {"type": "string"},
+                                  "description": "invite: the email addresses to invite."},
+                    "busy": {"type": "array", "items": {"type": "string"}, "description": (
+                        "find_time: times others said they are busy, each 'start/end' in ISO 8601.")},
+                    "their_calendars": {"type": "array", "items": {"type": "string"}, "description": (
+                        "find_time: others' calendar or free/busy addresses (iCal), to find a time free for them too.")},
+                    "day_start": {"type": "string", "description": "find_time: earliest time of day, HH:MM (default 09:00)."},
+                    "day_end": {"type": "string", "description": "find_time: latest end, HH:MM (default 18:00)."},
+                    "weekends": {"type": "boolean", "description": "find_time: weekends count too."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "listen_to_audio",
+            "description": (
+                "Hear an audio file (wav, mp3, m4a, ogg, flac, or a "
+                "video's sound) as measurements: length, loudness, "
+                "clipping, silence and where the sound is, its pitch as a "
+                "note, how bright it sounds, and its tempo. For speech, "
+                "transcribe it instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_sound",
+            "description": (
+                "Make a WAV from a score: notes like C4, F#3 or Eb5 (or a "
+                "number of Hz) separated by spaces; C4+E4+G4 is a chord; "
+                ":2 after one holds it two beats; rest is silence. "
+                "\"C4 E4 G4 C5:2\" is a rising arpeggio. For alerts, "
+                "jingles, tones and test signals."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notes": {"type": "string"},
+                    "out": {"type": "string", "description": (
+                        "Where to save the .wav (sound.wav here).")},
+                    "wave": {"type": "string", "enum": [
+                        "sine", "square", "saw", "triangle", "noise"]},
+                    "bpm": {"type": "number",
+                            "description": "Beats a minute (120)."},
+                    "volume": {"type": "number",
+                               "description": "0 to 1 (0.5)."},
+                },
+                "required": ["notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_video",
+            "description": (
+                "Make an MP4 from an HTML composition: write a page that "
+                "animates with CSS animations, the Web Animations API, "
+                "requestAnimationFrame or a canvas, and it is rendered "
+                "frame by frame on an exact clock, so heavy pages come out "
+                "smooth. A page may define window.flashSeek(seconds) to "
+                "draw any moment itself. Give the page as HTML, or the path "
+                "of an .html file. Its <html data-duration data-width "
+                "data-height data-fps> can set the rest. Needs ffmpeg."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "html": {"type": "string", "description": (
+                        "The page's HTML, or a path to an .html file.")},
+                    "out": {"type": "string", "description": (
+                        "Where to save the .mp4 (video.mp4 here).")},
+                    "seconds": {"type": "number",
+                                "description": "Its length (5)."},
+                    "fps": {"type": "integer",
+                            "description": "Frames a second (30)."},
+                    "width": {"type": "integer",
+                              "description": "Pixels (1280)."},
+                    "height": {"type": "integer",
+                               "description": "Pixels (720)."},
+                },
+                "required": ["html"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tutor",
+            "description": (
+                "Teach the user a subject and track what they know. 'add' "
+                "cuts it into propositions, each one checkable claim with "
+                "an id and the ids it needs first. 'plan' says what to do "
+                "next: teach (new), practice (shaky) or review (due). Teach "
+                "one, then ask one question on it, and 'measure' whether "
+                "they got it right; never tell them the answer before they "
+                "try. Give each one a short title, a lesson (a few short "
+                "Markdown paragraphs that teach it, with an example), and "
+                "something to answer, mixing the kinds through a unit: a "
+                "quiz (2 to 6 choices and the answer's place, from 0), a "
+                "blank (a sentence with ___ to type into, and the answers "
+                "that count), an order (3 to 8 items, given in the right "
+                "order, that the user puts back in order), for a spoken "
+                "language a say (a phrase they say aloud, scored by its "
+                "sound word by word, so pronunciation is learned and "
+                "tracked like the rest) or, for a "
+                "programming language or the command line, an exercise. "
+                "Only a unit's first step, with no needs, may be just a "
+                "lesson. Six to twelve small ones "
+                "make a good first unit. On the web page the subject shows "
+                "as an interactive course the user works through on their "
+                "own. For a programming language or the command line (C, "
+                "Python, Linux, git...), give propositions an exercise: a "
+                "small task, its language (shell for Linux), and the exact "
+                "output a right answer prints. The user writes the answer "
+                "themselves; pass it word for word to 'check', which runs "
+                "it and measures it, then explain what its output or "
+                "compiler errors mean. Never write their answer for them. "
+                "'graph' shows it all; 'subjects' lists them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(TUTOR_ACTIONS)},
+                    "subject": {"type": "string"},
+                    "propositions": {
+                        "type": "array",
+                        "description": "For add.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "text": {"type": "string", "description": (
+                                    "The claim, in one sentence.")},
+                                "title": {"type": "string", "description": (
+                                    "A few words, for the path.")},
+                                "lesson": {"type": "string", "description": (
+                                    "Markdown that teaches it, with an "
+                                    "example.")},
+                                "quiz": {
+                                    "type": "object",
+                                    "properties": {
+                                        "question": {"type": "string"},
+                                        "choices": {"type": "array",
+                                                    "items": {
+                                                        "type": "string"}},
+                                        "answer": {"type": "integer",
+                                                   "description": (
+                                                       "The right choice's "
+                                                       "place, from 0.")},
+                                        "explain": {"type": "string",
+                                                    "description": (
+                                                        "Why, shown after.")},
+                                    },
+                                    "required": ["question", "choices",
+                                                 "answer"]},
+                                "blank": {
+                                    "type": "object",
+                                    "description": (
+                                        "Type the answer: a sentence with "
+                                        "___ where it goes."),
+                                    "properties": {
+                                        "prompt": {"type": "string"},
+                                        "accept": {"type": "array",
+                                                   "items": {
+                                                       "type": "string"},
+                                                   "description": (
+                                                       "Answers that "
+                                                       "count, any case.")},
+                                        "explain": {"type": "string"},
+                                    },
+                                    "required": ["prompt", "accept"]},
+                                "say": {
+                                    "type": "object",
+                                    "description": (
+                                        "For a language: a phrase to say "
+                                        "aloud, judged by how it sounds."),
+                                    "properties": {
+                                        "text": {"type": "string"},
+                                        "lang": {"type": "string", "description": "BCP 47, like fr-FR."},
+                                        "translation": {"type": "string"},
+                                        "hint": {"type": "string", "description": "The sound that trips learners up."},
+                                    },
+                                    "required": ["text", "lang"]},
+                                "order": {
+                                    "type": "object",
+                                    "description": (
+                                        "Put in order: steps, a sequence, "
+                                        "words of a line of code."),
+                                    "properties": {
+                                        "prompt": {"type": "string"},
+                                        "items": {"type": "array",
+                                                  "items": {
+                                                      "type": "string"},
+                                                  "description": (
+                                                      "In the right order: "
+                                                      "they are shown "
+                                                      "shuffled.")},
+                                        "explain": {"type": "string"},
+                                    },
+                                    "required": ["prompt", "items"]},
+                                "needs": {"type": "array",
+                                          "items": {"type": "string"}},
+                                "exercise": {
+                                    "type": "object",
+                                    "description": (
+                                        "For subjects learned by doing."),
+                                    "properties": {
+                                        "task": {"type": "string"},
+                                        "language": {"type": "string",
+                                                     "enum": [
+                                                         "c", "cpp",
+                                                         "python",
+                                                         "javascript",
+                                                         "rust", "go",
+                                                         "java", "shell"]},
+                                        "expect": {
+                                            "type": "string",
+                                            "description": (
+                                                "What a right answer "
+                                                "prints.")},
+                                        "match": {
+                                            "type": "string",
+                                            "enum": ["exact", "contains",
+                                                     "regex"]},
+                                        "stdin": {"type": "string"},
+                                        "starter": {
+                                            "type": "string",
+                                            "description": (
+                                                "Code to start from.")},
+                                        "files": {
+                                            "type": "object",
+                                            "description": (
+                                                "Files the task starts "
+                                                "with: {name: content}.")},
+                                        "verify": {
+                                            "type": "string",
+                                            "description": (
+                                                "A shell script run after "
+                                                "the answer; its output is "
+                                                "checked instead, for tasks "
+                                                "that change files.")},
+                                    },
+                                    "required": ["task", "language"]}},
+                            "required": ["id", "text"]}},
+                    "id": {"type": "string", "description": (
+                        "The proposition, for measure and check.")},
+                    "answer": {"type": "string", "description": (
+                        "For check: the user's code or commands, exactly "
+                        "as they wrote them.")},
+                    "right": {"type": "boolean",
+                              "description": "Whether they got it right."},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_project",
+            "description": (
+                "Make the work in this chat a project, and move the chat "
+                "into it: when an experiment turns into something the user "
+                "is actually building or shipping, or they ask to keep it "
+                "together. A project has a folder, and instructions every "
+                "chat in it gets. Say so when you do."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "A short name for it."},
+                    "path": {"type": "string", "description": (
+                        "The folder the work is in. Where Flash runs, if "
+                        "left out.")},
+                    "instructions": {"type": "string", "description": (
+                        "What every chat in it should know: the stack, "
+                        "conventions, the goal. Optional.")},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_connector",
+            "description": (
+                "Ask the user to add an MCP server, when a task needs a "
+                "tool Flash does not have and a server offers it (GitHub, "
+                "a database, a calendar). They are asked, unless "
+                "UltraAuto is on; its tools are yours from the next step. "
+                "Never put a secret in target: say what key it needs, and "
+                "the user adds it in Settings > Connectors."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": (
+                        "Its name: letters, digits, - and _.")},
+                    "target": {"type": "string", "description": (
+                        "The command that runs it (npx -y "
+                        "@modelcontextprotocol/server-github), or its URL.")},
+                    "start": {"type": "string", "description": (
+                        "With a URL: a command to run first, that serves "
+                        "it.")},
+                    "why": {"type": "string",
+                            "description": "Why, in a sentence."},
+                },
+                "required": ["name", "target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": (
+                "Find the passages in a folder of files (notes, documents, "
+                "PDFs, code) that answer a question, by its words and its "
+                "meaning, rather than an exact pattern as grep does. Each "
+                "comes numbered [eN] with its file and lines: cite them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "The question, in words."},
+                    "folder": {"type": "string",
+                               "description": "The folder (default: here)."},
+                    "limit": {"type": "integer",
+                              "description": "How many passages (8)."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_extension",
+            "description": (
+                "Ask the user to install a Flash extension, as "
+                "github@owner/repo (#branch for another branch), "
+                "git@<url>, or path@/folder. They see what it adds and are "
+                "asked, unless UltraAuto is on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string",
+                               "description": "Where it comes from."},
+                    "why": {"type": "string",
+                            "description": "Why, in a sentence."},
+                },
+                "required": ["source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_realtime",
+            "description": (
+                "Play a real-time game, or drive anything too fast to take "
+                "a turn per move, in the page open_page opened. You cannot "
+                "look and think once a frame, so write a reflex: "
+                "JavaScript the page runs every frame, reading the canvas's "
+                "pixels and pressing keys or clicking, then see how the run "
+                "went (frames, actions, what it logged, the page's title, "
+                "a screenshot) and improve it. The policy gets `api`: "
+                "api.px(x, y) -> [r, g, b]; api.find(colour, y, x0, x1, "
+                "tol) -> first x of that colour on row y, or -1; "
+                "api.runs(colour, y, x0, x1, tol) -> [[x0, x1], ...] every "
+                "run of it; api.findDown(colour, x, y0, y1, tol) -> first "
+                "y down column x; api.tap(key), api.press(key), "
+                "api.release(key), api.click(x, y), api.move(x, y) in the "
+                "canvas's pixels; api.memory, kept across frames; api.t "
+                "seconds and api.frame; api.log(...) to see later; "
+                "api.width and api.height. Colours as \"#rrggbb\". "
+                "api.blobs(colour, x0, y0, x1, y1) -> [{x, y, w, h, cx, cy, "
+                "n}] every patch of it; api.speed(y0, y1) -> how fast the "
+                "picture scrolls, pixels a second; api.down(x, y) and "
+                "api.up() hold and let go of the mouse (a ship, a jetpack); "
+                "api.later(ms, fn) for timing finer than a frame; api.dt, "
+                "api.attempt and api.deaths. A WebGL canvas is read too. "
+                "Look at a screenshot first to learn the colours and where "
+                "things are. To beat a hard level, give attempts with died "
+                "(and restart_keys): it retries, keeping api.memory, so the "
+                "policy can learn where it died. open_page('flash-dash') "
+                "opens a practice level like a rhythm runner: spikes, "
+                "blocks, pads, rings and a ship. open_page('flash-dash-glitched') "
+                "opens the same level with secrets hidden in it that make it easier. "
+                "Live, you play with your head as well as your hands: "
+                "give look_every and the reflex plays on in the page "
+                "between your calls instead of stopping. Each call is you "
+                "looking in (a screenshot, api.memory, what it logged) "
+                "and deciding: plan sets api.plan, which the reflex reads "
+                "every frame, a new policy swaps in without a pause, say "
+                "talks to whoever you play with (in the game when the page "
+                "defines window.flashSay, else in the chat), stop ends it. "
+                "Keep calling until the game is over. So the reflex does "
+                "what's too fast to think about and you make the calls. "
+                "open_page('tether') starts Tether, a co-op game you play "
+                "WITH the user, live. Any page can be a game made for "
+                "playing with you the same way: a <meta name=\"flash-game\"> "
+                "telling you how, a <meta name=\"flash-invite\"> with the "
+                "user's link, and a <script type=\"text/flash-reflex\"> to "
+                "start from; open_page shows you all three."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "policy": {"type": "string", "description": (
+                        "The body of a function of api, run every frame. "
+                        "Needed to start; live, give it only to swap the "
+                        "reflex.")},
+                    "look_every": {"type": "number", "description": (
+                        "Play live: seconds to let it play before you look "
+                        "again, 0 to 30. The reflex keeps going between "
+                        "calls; a live run lasts up to seconds (600 at "
+                        "most) or until until.")},
+                    "plan": {"type": "object", "description": (
+                        "Live: your decisions, put in api.plan for the "
+                        "reflex to carry out, such as {\"go\": [400, 200]}"
+                        ". Replaces the last plan.")},
+                    "say": {"type": "string", "description": (
+                        "Live: a short line to whoever you play with.")},
+                    "stop": {"type": "boolean", "description": (
+                        "Live: end the run and get its report.")},
+                    "seconds": {"type": "integer", "description": (
+                        "How long to run it, at most 120. Default 20.")},
+                    "until": {"type": "string", "description": (
+                        "A JavaScript expression of api that ends the run "
+                        "when true, such as document.title.includes('won')"
+                        " or the game over.")},
+                    "canvas": {"type": "string", "description": (
+                        "A selector for the canvas to read, when there is "
+                        "more than one. The first by default.")},
+                    "start_keys": {"type": "string", "description": (
+                        "Keys tapped once before it starts, comma "
+                        "separated, such as r to restart.")},
+                    "attempts": {"type": "integer", "description": (
+                        "How many tries, at most 50: each time died is "
+                        "true it restarts and plays again, api.memory "
+                        "kept. Default 1. The seconds are for them all.")},
+                    "died": {"type": "string", "description": (
+                        "A JavaScript expression of api true when the try "
+                        "is over and lost, such as "
+                        "document.title.includes('crashed').")},
+                    "restart_keys": {"type": "string", "description": (
+                        "Keys tapped to start a new try. start_keys if "
+                        "not given.")},
+                    "progress": {"type": "string", "description": (
+                        "A JavaScript expression of api giving how far a "
+                        "try got, 0 to 100, to say and to keep the best "
+                        "try's film, such as +document.title.match(/\\d+/)"
+                        "?.[0].")},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "devtools",
+            "description": (
+                "A browser's developer tools, for the page open_page has "
+                "open. network: the requests it has made since it opened "
+                "(target filters by address or type, failed_only for errors "
+                "and 4xx/5xx). request: one of them in full, its headers and "
+                "response body, by number as target. console: everything it "
+                "logged, warnings and errors too (level narrows it). run: "
+                "JavaScript in the page, as in the console, its value and "
+                "what it logged coming back; await works. inspect: one "
+                "element closely, its attributes, box, computed style and "
+                "HTML (target: an element number, a CSS selector or its "
+                "text; properties: CSS properties to read instead)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(DEVTOOLS_ACTIONS),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "network: words to filter by. request: its "
+                            "number. inspect: the element."
+                        ),
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "run: the JavaScript.",
+                    },
+                    "failed_only": {
+                        "type": "boolean",
+                        "description": "network: only those that failed.",
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": (
+                            "console: log, info, warning or error only."
+                        ),
+                    },
+                    "properties": {
+                        "type": "string",
+                        "description": (
+                            "inspect: CSS properties to read, comma "
+                            "separated, e.g. color, z-index."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web and return summarized results.",
             "parameters": {
@@ -4105,6 +10416,63 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "debate",
+            "description": (
+                "Have two sides argue a question out in front of the "
+                "user: one argues the answer it finds strongest, the other "
+                "the best case against, each answering the other, then a "
+                "summary of where they agree, where they do not, what held "
+                "up and what it turns on. Use it when the user faces a real "
+                "decision with trade-offs, or asks you to weigh options or "
+                "steelman both sides: not for facts you can look up, and "
+                "not more than once a turn. It takes a while. The user "
+                "watches it, can steer or stop it, and you get the summary "
+                "to answer from: do not repeat it, say what you make of it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question, as one line.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": (
+                            "What the sides need to know that the question "
+                            "does not say: the user's situation, "
+                            "constraints, what you have found. They see "
+                            "nothing else of the conversation."
+                        ),
+                    },
+                    "rounds": {
+                        "type": "integer",
+                        "description": "Turns each side gets, 1 to 4. "
+                        "Default 2.",
+                    },
+                    "until_settled": {
+                        "type": "boolean",
+                        "description": (
+                            "Go on past rounds until the sides agree or "
+                            "one wins (checked after each round, up to a "
+                            "dozen rounds). For when the user wants it "
+                            "argued to a conclusion."),
+                    },
+                    "sides": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": (
+                            "Optional: a model for each side, when the "
+                            "user asked for particular ones."
+                        ),
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "reason",
             "description": (
                 "Share a short line of reasoning or a plan with the user "
@@ -4125,6 +10493,137 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "read_briefing",
+            "description": (
+                "The user's briefing: what came in while they were away "
+                "(spark reports, unread email and iMessages, chats that "
+                "answered, waits that finished, calendar, connected apps, "
+                "notifications). Reading it marks it read, as opening the "
+                "Briefing page does. Use it when they ask for their "
+                "briefing, what they missed, or to be caught up. Then brief "
+                "them: what needs them first, the rest grouped and short, "
+                "with the next step for each that has one, and say where "
+                "each came from. Every number cites its source beside it: "
+                "the email, report, file, sheet or link it was read in."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "flash_icons",
+            "description": (
+                "Flash Icons: Flash's own animated icon set, for every website "
+                "and app you build. Use these, never emoji, an icon font or an "
+                "icon CDN, unless the user asks for something else. "
+                "action \"get\" gives the icons named (as inline SVG with the "
+                "one stylesheet they need, or a React module); paste them into "
+                "the page. action \"list\" shows every icon by kind. Each moves "
+                "a little when pointed at (an arrow nudges, a bell rings, a "
+                "check draws itself). action \"style\" reads or changes the "
+                "user's icon style, which every icon you make follows: when they "
+                "ask for thicker, rounder, filled, bigger, calmer, bouncier, "
+                "faster or still icons, set it, then action \"preview\" to show "
+                "them all in it, and update the pages you made with the new "
+                "stylesheet. action \"reset\" goes back to Flash's own style."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["get", "list", "style", "preview", "reset"]},
+                    "names": {"type": "string", "description": "For get and preview: icon names, comma-separated (home, search, arrow-right, bell, heart, ...). Common names work too (x, cog, trash-can)."},
+                    "format": {"type": "string", "enum": ["html", "react", "css"], "description": "For get: html (default), react, or css (the stylesheet alone)."},
+                    "stroke": {"type": "number", "description": "For style: line width at 24 px, 0.5 to 4 (default 1.75)."},
+                    "corners": {"type": "string", "enum": ["round", "square"]},
+                    "variant": {"type": "string", "enum": ["line", "duotone"], "description": "duotone puts a soft fill behind the lines."},
+                    "size": {"type": "string", "description": "Any CSS length, like 1.5em (default) or 24px."},
+                    "color": {"type": "string", "description": "A CSS colour, or currentColor (default) to follow the text."},
+                    "motion": {"type": "string", "enum": ["lively", "subtle", "none"]},
+                    "trigger": {"type": "string", "enum": ["hover", "load", "loop"], "description": "When they move: hover (pointed at or focused; default), load (once, as they appear) or loop (all the time)."},
+                    "speed": {"type": "integer", "description": "Milliseconds for one motion, 100 to 5000 (default 600)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "checkin_preferences",
+            "description": (
+                "What the user wants to hear about from Flash's check-ins "
+                "and sparks, how often, and their quiet hours. Every "
+                "spark's shift reads it; during quiet hours nothing "
+                "notifies, pings or calls them. Call it with no arguments "
+                "to read it. When the user says something like \"tell me "
+                "about X every morning\", \"stop telling me about Y\" or "
+                "\"don't ping me after 10pm\", read it, then write it back "
+                "whole with their change folded in, in their own plain "
+                "words."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "interests": {
+                        "type": "string",
+                        "description": (
+                            "The whole setting, replacing what was there: "
+                            "what to tell them about and how often, and "
+                            "what to leave out. Empty clears it."
+                        ),
+                    },
+                    "quiet_hours": {
+                        "type": "string",
+                        "description": (
+                            "A span like \"10pm-7am\" or \"22:00 to "
+                            "07:00\", in this computer's time, or \"off\"."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "more_output",
+            "description": (
+                "Tool results are cut to a few thousand characters, the "
+                "middle taken out. When what was cut matters (a long test "
+                "or build log, a big file listing), call this: it raises "
+                "the limit for the rest of this task and shows the last "
+                "cut result again, whole up to the new limit, without "
+                "running anything again. chars is the new limit (default: "
+                "four times the current one; at most 200,000)."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "chars": {"type": "integer",
+                          "description": "The new limit, in characters."},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refresh_tools",
+            "description": (
+                "Refresh the tools from the user's connected MCP servers: "
+                "start any that are not running (one just added, one that "
+                "failed), and have each list its tools again. Use it when "
+                "a tool you expect from a connected app is missing, then "
+                "use the new ones on your next step. It reads Flash's own "
+                "tools again too (an extension added or changed, email or "
+                "the computer set up). It says which servers are up and "
+                "what tools each has, then which of Flash's tools were "
+                "added, removed or updated, if any."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_date",
             "description": (
                 "Return the current date in YYYY-MM-DD format using the "
@@ -4133,6 +10632,34 @@ tools: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_code",
+            "description": (
+                "Review a code change for bugs, from git: the "
+                "uncommitted changes by default, or what a branch has "
+                "that another does not, or a range of commits. It reads "
+                "the change, lists what might be wrong, checks each on "
+                "its own, and reports only what holds up, at its file "
+                "and line. Use it when the user asks for a review, or "
+                "before you call a big change of your own done."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Empty for the uncommitted changes; a branch "
+                            "or commit (e.g. main) for what this branch "
+                            "adds to it; or a range like abc123..HEAD."
+                        ),
+                    },
+                },
             },
         },
     },
@@ -4167,6 +10694,44 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "notes",
+            "description": (
+                "Your own working notes for this chat, for a long task: "
+                "what you found (paths, names, numbers, causes), what you "
+                "decided and why, what is done and what is left. When the "
+                "chat grows too long its older turns are squeezed into a "
+                "short summary, but your notes are kept word for word, "
+                "every time. Write a line the moment you learn something "
+                "you would hate to rediscover; keep them short. Call it "
+                "with nothing to read them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "add": {
+                        "type": "string",
+                        "description": (
+                            "Lines to add at the end, one per line."),
+                    },
+                    "rewrite": {
+                        "type": "string",
+                        "description": (
+                            "All the notes, in place of the old ones: to "
+                            "tidy them up or mark things done. An empty "
+                            "string clears them."
+                        ),
+                    },
+                    "drop": {
+                        "type": "string",
+                        "description": "Take out the lines with this in them.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_step",
             "description": (
                 "Tick one step of the current plan, by its 1-based number, "
@@ -4194,7 +10759,11 @@ tools: list[dict[str, Any]] = [
                 "Save a fact or user preference to persistent memory so it "
                 "is available in future sessions. Use it when the user "
                 "tells you something worth remembering long-term, not for "
-                "details only relevant to the current conversation."
+                "details only relevant to the current conversation. In a "
+                "project chat, set project for what belongs to the "
+                "project (its conventions, decisions, commands, where "
+                "things are): every chat in the project sees it. Leave it "
+                "out for what is about the user."
             ),
             "parameters": {
                 "type": "object",
@@ -4202,7 +10771,14 @@ tools: list[dict[str, Any]] = [
                     "entry": {
                         "type": "string",
                         "description": "The fact to remember, one sentence.",
-                    }
+                    },
+                    "project": {
+                        "type": "boolean",
+                        "description": (
+                            "Save it to this project's memory instead of "
+                            "the user's. Only in a project chat."
+                        ),
+                    },
                 },
                 "required": ["entry"],
             },
@@ -4229,6 +10805,87 @@ tools: list[dict[str, Any]] = [
                     }
                 },
                 "required": ["phrase"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_user_model",
+            "description": (
+                "Rewrite one section of the user's profile: your picture "
+                "of who they are, how they work and how they like replies, "
+                "which every chat starts with. Use it when you learn "
+                "something lasting about the user that the profile under "
+                "=== About the user === misses or gets wrong, sending the "
+                "whole section, merged with what it already says, in short "
+                "lines. Single facts go to remember instead. The user's "
+                "own notes are theirs and cannot be changed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {
+                        "type": "string",
+                        "enum": ["who", "work", "replies", "knows", "now",
+                                 "goals"],
+                        "description": (
+                            "who: who they are; work: how they work; "
+                            "replies: how they like replies; knows: what "
+                            "they know; now: what they are working on; "
+                            "goals: where they are headed."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The whole section as it should read, a few "
+                            "short lines. Empty clears it."
+                        ),
+                    },
+                },
+                "required": ["section", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_chats",
+            "description": (
+                "Search the user's past conversations with you, on the "
+                "web page and in the terminal, for what was said in them: "
+                "decisions, plans, things the user told you. Returns the "
+                "best matching chats, each with its id, title, date and "
+                "what was said where the words came up. Call it again "
+                "with a chat_id to read that conversation (with query, "
+                "the part about it), then sum up what you found. Use it "
+                "when the user refers to an earlier conversation or asks "
+                "what was decided before. Only what the user and you "
+                "said is searched, not tool output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Words the conversation would contain, e.g. "
+                            "'logo colours' or 'Lisbon trip budget'."
+                        ),
+                    },
+                    "chat_id": {
+                        "type": "string",
+                        "description": (
+                            "A chat's id from a search, to read that "
+                            "conversation back."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many chats, 1 to 10 (5).",
+                    },
+                },
             },
         },
     },
@@ -4304,6 +10961,154 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_spark",
+            "description": (
+                "Make a spark: an agent that keeps working on a standing "
+                "goal on a schedule, for as long as Flash runs, and "
+                "reports back to the user. Use it only when the user "
+                "asks for something ongoing or recurring (watch this, "
+                "check that every morning, keep an eye on), never for a "
+                "task that can be done now. The user is asked first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "A short, friendly name, one or two words, "
+                            "e.g. Scout or Price Watch."
+                        ),
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "The standing goal, written so the spark "
+                            "needs nothing else: what to check or do, "
+                            "where, and what counts as worth reporting."
+                        ),
+                    },
+                    "every": {
+                        "type": "string",
+                        "description": (
+                            "How often it works, e.g. 30m, 2h, daily "
+                            f"(at least {sparks.MIN_EVERY_MINUTES}m), or at "
+                            "set times, e.g. 9am weekdays, mon 8:30, the "
+                            "1st at 9am, or a cron line. Or \"on call\" "
+                            "for no schedule: it works only when the user "
+                            "or another spark calls on it."
+                        ),
+                    },
+                    "boundaries": {
+                        "type": "string",
+                        "description": (
+                            "What it must never do, from what the user "
+                            "said, e.g. never push, only read."
+                        ),
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Optional: the name of the user's project it "
+                            "works on, when the chat is about one. Several, "
+                            "separated by commas, when it works on more "
+                            "than one; the first is its main one."
+                        ),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "The model it runs on, when the user named "
+                            "one. Leave it out for the one they set for "
+                            "new sparks, or else the one you run on."
+                        ),
+                    },
+                    "paused": {
+                        "type": "boolean",
+                        "description": (
+                            "True to make it without starting it, when "
+                            "the user wants it set up now and started "
+                            "later. It runs once they resume it."
+                        ),
+                    },
+                    "events": {
+                        "type": "string",
+                        "description": (
+                            "Optional: what starts a shift the moment it "
+                            "comes in, space-separated: email (a new "
+                            "email), imessage (a new iMessage, on a Mac), "
+                            "mcp:<server> (a change in a connected MCP "
+                            "server, like mcp:notes for a new note). Use it "
+                            "for \"when I get an email...\" or \"when I "
+                            "add a note...\", with every \"on call\" so "
+                            "it spends nothing in between. Needs events "
+                            "on in the user's settings."
+                        ),
+                    },
+                },
+                "required": ["name", "goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_spark",
+            "description": (
+                "Ask one of the user's sparks something and get its answer "
+                "now: what it has found, what it last reported, whether it "
+                "has seen something. It answers from what it knows, "
+                "without running anything. Use it when the user asks what "
+                "a spark found or thinks, or when its work bears on theirs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spark": {
+                        "type": "string",
+                        "description": "Its name or handle.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "What to ask, on its own.",
+                    },
+                },
+                "required": ["spark", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "give_spark",
+            "description": (
+                "Give one of the user's sparks a job, when the user asks "
+                "for it to do something or the work is its job: a shift "
+                "of its own starts now, in the background, with all its "
+                "tools, and its report comes back to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spark": {
+                        "type": "string",
+                        "description": "Its name or handle.",
+                    },
+                    "job": {
+                        "type": "string",
+                        "description": (
+                            "The job, in full, as the shift will need it: "
+                            "what to do, where, and what to report."
+                        ),
+                    },
+                },
+                "required": ["spark", "job"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "skill_view",
             "description": (
                 "Read one of your saved skills: the procedure for a kind "
@@ -4332,21 +11137,215 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "image",
+            "description": (
+                "Pictures on this computer. create: a picture from a prompt with an image model in Ollama (a full "
+                "description works best: subject, setting, light, style, camera); edit: change a picture at path as "
+                "the prompt says (make it night, change the outfit, the same character in a new pose), for keeping a "
+                "character the same across pictures; remove_background: the subject cut out as a transparent PNG; "
+                "upscale: twice to four times bigger. Each is shown to the user and saved under ~/.flash/images."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "edit", "remove_background", "upscale"]},
+                    "prompt": {"type": "string", "description": "create and edit: what to make, or what to change."},
+                    "path": {"type": "string", "description": "edit, remove_background, upscale: the picture."},
+                    "size": {"type": "string", "description": "square, portrait, landscape, wide, story, banner, or WIDTHxHEIGHT."},
+                    "steps": {"type": "integer", "description": "Diffusion steps: fewer is faster, more is finer."},
+                    "count": {"type": "integer", "description": "create: how many to pick from (1 to 4)."},
+                    "model": {"type": "string", "description": "An image model in Ollama, if not the usual one."},
+                    "factor": {"type": "integer", "description": "upscale: 2, 3 or 4."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "meetings",
+            "description": (
+                "The meetings recorded in Flash: newest first, or with query, the ones that talked about it, with the "
+                "lines that did and where each transcript is. Use it for questions about a past meeting (what was "
+                "decided, who said they would do what, when something came up), then read the transcript."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words the meeting talked about; empty for the latest."},
+                    "limit": {"type": "integer", "description": "How many meetings, 10 if not given."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "digest",
+            "description": (
+                "Read something too big to read at once, all of it: a long PDF or Word file, a big text or log file, "
+                "a whole folder or repository, a long YouTube video, or an audio or video recording. It is read in "
+                "parts, each summed up with where it is (pages, lines, files, times), then mapped: an overview, where "
+                "everything is, and with question, what it says about that and where. Use it first for anything over "
+                "a few hundred lines or a long video, then read the exact parts it points to before quoting. Kept, so "
+                "asking again is instant; fresh=true reads it again."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "A file or folder path, or a YouTube link."},
+                    "question": {"type": "string", "description": "What the user wants from it, if anything in particular."},
+                    "fresh": {"type": "boolean", "description": "Read it again instead of using the kept digest."},
+                },
+                "required": ["source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "table",
+            "description": (
+                "Spreadsheets as tables to answer questions from. import: read a CSV, TSV, Excel .xlsx or JSON file "
+                "(sheet for one sheet of a workbook), find its header under any title rows, tidy it (trim, drop empty "
+                "rows and columns and duplicates) and type each column (numbers, money, percents, dates, yes/no, "
+                "text), kept under name; the file is not changed. Say what was imported and tidied. query: SQLite "
+                "SQL over the kept tables, read-only (SELECT; sums, group by, joins across tables); answer from the "
+                "rows it gives, never estimate. list: the tables kept, with their columns. export: a table written "
+                "out as a clean CSV at path. remove: forget a table (the file stays). For a question about a "
+                "spreadsheet the user gives, import it first, then query it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["import", "query", "list", "export", "remove"]},
+                    "path": {"type": "string", "description": "For import, the file; for export, where to write the CSV."},
+                    "name": {"type": "string", "description": "The table's name (import names it after the file if not given)."},
+                    "sheet": {"type": "string", "description": "For import from a workbook: which sheet (the first by default)."},
+                    "sql": {"type": "string", "description": "For query: one SELECT statement."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "maps",
+            "description": (
+                "Maps, from OpenStreetMap: find (a place, an address or 'lat,lng', with its coordinates), nearby (places of a "
+                "kind, like cafe, pharmacy, ev charger, supermarket, hotel, or a name like Lidl, within radius metres of near, "
+                "closest first, with hours and phone where known), route (the way through places in order, by driving, "
+                "walking or cycling, with distance and time per leg). Each result ends with a map block to put in the reply. "
+                "Use it for anything about where things are, how far, or how long it takes to get there."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["find", "nearby", "route"]},
+                    "query": {"type": "string", "description": "find: the place or address."},
+                    "what": {"type": "string", "description": "nearby: the kind of place, or a name."},
+                    "near": {"type": "string", "description": "nearby: the place to search around."},
+                    "places": {"type": "array", "items": {"type": "string"}, "description": "route: two to twelve places, in order."},
+                    "mode": {"type": "string", "enum": ["driving", "walking", "cycling"]},
+                    "radius": {"type": "integer", "description": "nearby: metres, 100 to 20000 (default 1500)."},
+                    "limit": {"type": "integer", "description": "How many results."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "science",
+            "description": (
+                "Research databases, for science questions: the literature, trials, compounds and proteins, all with links. "
+                "Actions: papers (search PubMed, Europe PMC, preprints from bioRxiv and medRxiv, and arXiv; source all|pubmed|"
+                "europepmc|preprints|arxiv; sort relevance|date), paper (one paper by PMID, PMCID, DOI or arXiv id; full=true "
+                "for its open-access full text), related (papers most like one), cite (a citation by DOI, PMID or arXiv id; "
+                "style bibtex|apa|vancouver|...), trials (ClinicalTrials.gov; status recruiting|completed|active|...), trial (one "
+                "by NCT number: design, arms, outcomes, eligibility), compound (a drug or molecule by name, SMILES, PubChem CID "
+                "or ChEMBL id: properties, rule of five, potency on targets), protein (UniProt by gene, protein name or "
+                "accession: function, location, disease, structures; sequence=true for its FASTA). Prefer it to web_search for "
+                "anything scientific or medical; read the paper before quoting it, and say when evidence is a preprint."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["papers", "paper", "related", "cite", "trials", "trial", "compound", "protein"]},
+                    "query": {"type": "string", "description": "What to search for, or a compound or protein to look up."},
+                    "id": {"type": "string", "description": "A PMID, PMCID, DOI, arXiv id, NCT number, CID, ChEMBL id or UniProt accession."},
+                    "source": {"type": "string", "enum": ["all", "pubmed", "europepmc", "preprints", "arxiv"]},
+                    "limit": {"type": "integer", "description": "How many results (1 to 25)."},
+                    "full": {"type": "boolean", "description": "paper: include the open-access full text."},
+                    "status": {"type": "string", "description": "trials: recruiting, completed, active, not yet recruiting, terminated, withdrawn, suspended."},
+                    "style": {"type": "string", "description": "cite: bibtex (default), apa, vancouver, harvard-cite-them-right, nature, ..."},
+                    "sort": {"type": "string", "enum": ["relevance", "date"]},
+                    "sequence": {"type": "boolean", "description": "protein: include the amino-acid sequence."},
+                    "activity": {"type": "boolean", "description": "compound: include measured potency on targets (default true)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "flows",
+            "description": (
+                "Flows: work that takes several sparks in order, with the user's yes where it matters. A flow is "
+                "a trigger (a schedule like mon 9:00, daily, 9am weekdays; or none, run by hand) and steps: each "
+                "a spark and its task, or an approval (a question the user answers yes or no). A step runs when "
+                "the steps it comes after are done, and is handed their reports: steps with after [] at the start, "
+                "or after the same step, run side by side. Use it when the user wants a recurring process across "
+                "sparks (a weekly report: two collect, one writes, the user approves posting). Actions: list, "
+                "create, update, run, answer (an approval step: name, step id, yes), stop, pause, resume, delete."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "create", "update", "run", "answer", "stop",
+                                                          "pause", "resume", "delete"]},
+                    "name": {"type": "string", "description": "The flow's name."},
+                    "trigger": {"type": "string", "description": "When it runs by itself; '' for by hand."},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order. {\"spark\": name, \"task\": what to do, \"after\": [step numbers, 1 "
+                            "first]} or {\"approval\": the question}. Left out, after is the step before."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                    "step": {"type": "string", "description": "answer: the step's id, as s4."},
+                    "yes": {"type": "boolean", "description": "answer: the user's answer."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "skill_manage",
             "description": (
                 "Save or fix a skill: a procedure for a kind of task that "
                 "will come up again. create writes a new one; patch swaps "
                 "one exact passage for another (call skill_view first and "
                 "copy old_string from it); rewrite replaces the whole "
-                "procedure; delete removes it. Write steps and pitfalls, "
-                "not a story of what happened."
+                "procedure; delete removes it; share gives the skill as a "
+                "code to pass to someone; add saves a skill from a code "
+                "someone gave (the code in content; name to save it under "
+                "another name). Write steps and pitfalls, not a story of "
+                "what happened."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": list(skills.ACTIONS),
+                        "enum": [*skills.ACTIONS, "share", "add"],
                     },
                     "name": {
                         "type": "string",
@@ -4390,7 +11389,8 @@ tools: list[dict[str, Any]] = [
                 "Delete one saved memory entry by its 1-based index (the "
                 "number shown next to it in recall's results; the first "
                 "saved entry is index 1, not 0). Deletes exactly that one "
-                "entry, never all of memory."
+                "entry, never all of memory. An entry recall listed as "
+                "\"project N.\" is the project's: pass project true."
             ),
             "parameters": {
                 "type": "object",
@@ -4399,7 +11399,11 @@ tools: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "1-based index of the entry to delete.",
                         "minimum": 1,
-                    }
+                    },
+                    "project": {
+                        "type": "boolean",
+                        "description": "It is in this project's memory.",
+                    },
                 },
                 "required": ["index"],
             },
@@ -4410,6 +11414,8 @@ tools: list[dict[str, Any]] = [
 
 FUNCTIONS = {
     "shell": shell_tool,
+    "task_output": task_output_tool,
+    "task_stop": task_stop_tool,
     "glob": glob_tool,
     "grep": grep_tool,
     "read": read_tool,
@@ -4417,30 +11423,97 @@ FUNCTIONS = {
     "edit": edit_tool,
     "multi_edit": multi_edit_tool,
     "view_image": view_image,
+    "watch_youtube": watch_youtube,
     "send_image": send_image,
     "send_pdf": send_pdf,
     "send_html": send_html,
     "send_document": send_document,
     "make_3d_model": make_3d_model,
+    "design_pcb": design_pcb,
+    "xcode": xcode_tool,
+    "test_3d_model": test_3d_model,
+    "phone_call": phone_call,
     "send_3d_model": send_3d_model,
+    "make_midi": make_midi,
+    "send_midi": send_midi,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
+    "devtools": devtools,
+    "play_realtime": play_realtime,
+    "make_project": make_project,
+    "calendar": calendar_tool,
+    "tutor": tutor,
+    "make_video": make_video,
+    "listen_to_audio": listen_to_audio,
+    "make_sound": make_sound,
+    "play_music": play_music,
+    "request_connector": request_connector,
+    "request_extension": request_extension,
+    "search_files": search_files,
     "web_search": web_search,
     "fetch": fetch,
     "get_os": get_os,
     "reason": reason,
+    "think_harder": think_harder_tool,
     "get_date": get_date,
+    "refresh_tools": refresh_tools,
+    "more_output": more_output,
+    "read_briefing": lambda **_: read_briefing_tool(),
+    "flash_icons": lambda **kw: flash_icons_tool(**kw),
+    "checkin_preferences": lambda interests=None, quiet_hours=None, **_:
+        checkin_preferences_tool(interests, quiet_hours),
+    "review_code": review_code,
+    "read_aloud": read_aloud,
+    "teach_chess": teach_chess,
+    "play_chess": play_chess,
+    "canvas": canvas,
+    "verify": verify,
+    "learn_from_recording": learn_from_recording,
+    "check_office_file": check_office_file,
+    "smart_home": smart_home,
+    "send_audio": send_audio,
     "plan": plan_tool,
     "check_step": check_step,
+    "notes": notes_tool,
     "remember": remember,
+    "search_chats": search_chats,
+    "update_user_model": update_user_model,
     "recall": recall,
     "forget": forget,
     "skill_view": skill_view,
     "skill_manage": skill_manage_tool,
+    "flows": flows_tool,
+    "science": science_tool,
+    "maps": maps_tool,
+    "digest": digest_tool,
+    "table": table_tool,
+    "meetings": meetings_tool,
+    "image": image_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
+    "make_spark": make_spark,
+    "ask_spark": ask_spark,
+    "give_spark": give_spark,
+    "check_inbox": check_inbox,
+    "read_email": read_email,
+    "send_email": send_email,
+    "notify_user": notify_user,
+    "computer": computer_tool,
+    "computer_use": computer_use_tool,
+    "send_imessage": send_imessage,
+    "print": print_tool,
+    "list_printers": list_printers,
+    "reminders": reminders_tool,
+    "user_location": user_location_tool,
+    "remind_me": remind_me_tool,
+    "clock": clock_tool,
+    "devices": devices_tool,
+    "read_imessages": read_imessages,
+    "debate": debate_tool,
+    "mark_imessages_read": mark_imessages_read,
     "open_in_editor": open_in_editor,
+    "ask_system_one": ask_system_one,
 }
 
 # Tools a sub-agent (flash/agent.py) is allowed to call: read/search/shell
@@ -4450,25 +11523,250 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "maps", "digest", "table", "meetings", "get_os", "get_date", "reason",
+    "check_inbox", "read_email", "notify_user", "read_imessages",
+    "refresh_tools", "more_output",
 )
+
+# A spark's tools: a sub-agent's, and sending email or an iMessage, which
+# it asks the user about in its window, as it does any step that asks.
+SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
+                                          "debate", "phone_call",
+                                          "watch_youtube", "view_image",
+                                          "print", "list_printers",
+                                          "remind_me", "clock", "devices")
+
+# Tools that ask every time, autonomous mode or not: UltraAuto aside.
+ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage", "print")
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.
 CONFIRMED_TOOL_NAMES = ("shell", "write", "edit", "multi_edit")
+
+# What a model writes when it has not filled something in yet: the whole
+# value only, so real text that mentions one is never caught. In
+# brackets, only words for a gap, so "<div>" is still markup.
+_GAP_WORDS = (
+    r"(?:your|recipient|their|insert|email|name|address|subject|body"
+    r"|message|company|date|placeholder)[a-z _-]*"
+)
+_PLACEHOLDER = re.compile(
+    r"\s*(?:x+|placeholders?|todo|tbd|tbc|lorem ipsum\b.*|\.{3}|\u2026"
+    rf"|<{_GAP_WORDS}>|\[{_GAP_WORDS}\]|\{{{_GAP_WORDS}\}}"
+    r"|(?:your|insert) [a-z ]+? here)\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+# A template's gap left in an email: "Best, [Your Name]".
+_TEMPLATE_GAP = re.compile(
+    r"\[(?:your|recipient|their|insert|name|company|date)\b[^\]\n]{0,40}\]",
+    re.IGNORECASE,
+)
+
+
+def unfinished(name: str, args: dict) -> str:
+    """Why a step that asks the user first is not ready to be asked: a
+    value the model left as a placeholder, or an email that could not go
+    as written. Said back to the model, which fixes it, rather than put
+    to the user. "" when it is ready."""
+
+    args = args if isinstance(args, dict) else {}
+    for key, value in args.items():
+        # A command is the shell's syntax, brackets and all.
+        if key == "command" or not isinstance(value, str):
+            continue
+        if _PLACEHOLDER.fullmatch(value):
+            return (
+                f"Error: {key} is {value!r}, a placeholder, so the user "
+                "was not asked. Fill in the real one, or leave this step "
+                "out if you do not have it."
+            )
+    if name != "send_email":
+        return ""
+    to = str(args.get("to") or "").strip()
+    try:
+        for field in (to, str(args.get("cc") or "").strip()):
+            if field:
+                mail._addresses(field)
+    except mail.MailError as exc:
+        return f"Error: {exc} The user was not asked. Use a real address."
+    body = str(args.get("body") or "")
+    if not body.strip():
+        return "Error: the email has nothing in it, so the user was not asked."
+    gap = _TEMPLATE_GAP.search(body) or _TEMPLATE_GAP.search(
+        str(args.get("subject") or ""))
+    if gap:
+        return (
+            f"Error: the email still has {gap.group(0)} in it, a gap from a "
+            "template, so the user was not asked. Write it in, or leave it "
+            "out."
+        )
+    return ""
+
+
+# Tools System One looks over before they run in autonomous mode: every
+# one that would otherwise have stopped for the user's yes. Sending
+# email or an iMessage is not among them, since each asks the user every
+# time anyway.
+REVIEWED_TOOL_NAMES = CONFIRMED_TOOL_NAMES + ("make_spark",)
+
+_REVIEW_LABELS = {
+    "shell": ("Bash", "command"),
+    "write": ("Write", "path"),
+    "edit": ("Edit", "path"),
+    "multi_edit": ("MultiEdit", "path"),
+    "make_spark": ("Spark", "name"),
+}
+
+
+def _reviewed(name: str) -> bool:
+    """Whether a call to NAME is one System One looks over first."""
+
+    if name in REVIEWED_TOOL_NAMES:
+        return True
+    if name in FUNCTIONS:
+        return False
+    connected = connectors.find(name)
+    if connected is not None:
+        return not connectors.read_only(connected[1])
+    found = extensions.find_tool(name, frozenset(FUNCTIONS))
+    return found is not None and bool(found[1].confirm)
+
+
+def _review(name: str, args: dict) -> Optional[str]:
+    """Have System One look over a call. None means go ahead; otherwise
+    what the model is told instead of the call's output."""
+
+    if not _reviewed(name) or not systemone.active():
+        return None
+
+    try:
+        verdict = systemone.review(OLLAMA_HOST, name, args)
+    except systemone.SystemOneError as exc:
+        why = str(exc)
+        verdict = None
+    else:
+        if verdict.allowed:
+            return None
+        why = verdict.reason
+
+    label, key = _REVIEW_LABELS.get(name, (name, ""))
+    shown = str(args.get(key, "")) if key else ""
+    tool_line(f"{label}({shown})" if shown else label)
+
+    if verdict is None:
+        tool_result(f"System One could not review this: {why}", style=ERROR)
+        return (
+            f"Not run: System One reviews this kind of call in autonomous "
+            f"mode, and it could not: {why} Tell the user; they can fix "
+            "that, or turn System One off with /systemone off."
+        )
+
+    tool_result(f"Stopped by System One: {why}", style=WARN)
+    return (
+        f"Not run: System One ({verdict.model}), which reviews calls in "
+        f"autonomous mode, judged that this call {why}. Do not retry it "
+        "as it is. Take a safer way that does what the user asked, or "
+        "stop and ask the user whether to go ahead."
+    )
 
 
 def run_tool(call):
     """Run a tool with arguments"""
 
     name, args = call
+    # Every argument as the user's settings ask for it: no em dashes,
+    # no emojis, before anyone reviews or runs it.
+    args = tidy_args(args)
 
+    # A call missing what it needs is told so first: there is nothing
+    # yet for System One to review, or for the user to say yes to.
     func = FUNCTIONS.get(name)
+    missing = _missing_arguments(func, args) if func else []
+    if missing:
+        return _missing_note(name, missing, args)
+
+    stopped = _review(name, args)
+    if stopped is not None:
+        return stopped
+
     if func is None:
         answered = _extension_tool(name, args)
-        return f"Unknown tool: {name}" if answered is None else answered
+        source = "an extension"
+        if answered is None:
+            answered = _connector_tool(name, args)
+            source = "a connected app"
+        if answered is None:
+            return f"Unknown tool: {name}"
+        return _from_outside(answered, source)
 
     try:
-        return func(**args)
+        return _from_outside(func(**args), OUTSIDE.get(name, ""))
     except Exception as e:  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"
+
+
+# Tools whose words come from someone other than the user: marked when
+# they read like orders to an assistant (guard.py).
+OUTSIDE = {
+    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read", "table": "the spreadsheet's cells", "meetings": "meeting transcripts",
+    "open_page": "a web page", "interact": "a web page",
+    "watch_youtube": "a YouTube video",
+    "read_email": "an email", "check_inbox": "the user's inbox",
+    "read_imessages": "messages",
+}
+
+
+def _from_outside(result: Any, source: str) -> Any:
+    """RESULT with every secret's value hidden behind its name, and, from
+    SOURCE outside, marked if it tries to give orders."""
+
+    if not isinstance(result, str):
+        return result
+    from . import guard, vault
+
+    with contextlib.suppress(Exception):
+        result = vault.scrub(result)
+    return guard.screen(result, source) if source else result
+
+
+def _missing_arguments(func, args: dict) -> list[str]:
+    """The arguments FUNC needs that ARGS does not give."""
+
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return []
+    return [
+        p.name for p in params
+        if p.default is inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+        and p.name not in args
+    ]
+
+
+# Past this much content, a call missing an argument was most likely cut
+# off at the reply's output limit rather than written without it.
+LONG_CALL_CHARS = 2000
+
+
+def _missing_note(name: str, missing: list[str], args: dict) -> str:
+    """What the model is told of a call that came without MISSING: which
+    ones, and, for a long one, that it was most likely cut off where
+    its reply ran out, so the fix is a shorter call, not the same one."""
+
+    said = ", ".join(f"`{m}`" for m in missing)
+    note = f"Error: the {name} call arrived without {said}."
+    if sum(len(str(v)) for v in args.values()) >= LONG_CALL_CHARS:
+        note += (
+            " It was long, so it was most likely cut off where your reply "
+            "hit its output limit, and what it had not reached never "
+            "arrived. Do not send the same call again: make it shorter."
+        )
+        if name == "write":
+            note += (
+                " Put path first and write the file in pieces: the first "
+                "with no append, then each next piece with append=true."
+            )
+    else:
+        note += " Call it again with every required argument."
+    return note

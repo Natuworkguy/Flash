@@ -1,0 +1,416 @@
+# pylint: disable=C0114,C0115,C0116
+
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from flash import briefing, computer, mail, sparks, waits, web
+
+NOW = time.mktime((2026, 10, 23, 9, 0, 0, 0, 0, -1))
+# The real one: every test has a stand-in (see conftest).
+NEW_WAITING = briefing.new_waiting
+
+
+@pytest.fixture(autouse=True)
+def quiet_sources(monkeypatch):
+    monkeypatch.setattr(sparks, "all_sparks", lambda: [])
+    monkeypatch.setattr(mail, "configured", lambda: False)
+    monkeypatch.setattr(computer, "allowed", lambda kind: False)
+    briefing._news.clear()
+    yield
+    briefing._news.clear()
+
+
+def spark_with(*reports):
+    return SimpleNamespace(id="s1", name="Scout", colour="#9b7bff",
+                           reports=list(reports))
+
+
+def chat(chat_id, log, updated=NOW - 60, busy=False, title="Plans"):
+    return SimpleNamespace(id=chat_id, title=title, log=log, busy=busy,
+                           updated=updated, spark="")
+
+
+def test_unread_reports_and_finished_waits_come_newest_first(monkeypatch):
+    monkeypatch.setattr(sparks, "all_sparks", lambda: [spark_with(
+        sparks.Report(at=NOW - 600, text="Found 2 new issues."),
+        sparks.Report(at=NOW - 300, text="Nothing new.", quiet=True),
+        sparks.Report(at=NOW - 200, text="Read already.", read=True),
+        sparks.Report(at=NOW - 3 * 86400, text="Too old."),
+        sparks.Report(at=NOW - 100, text="May I push?", approval=True),
+    )])
+    waits.add(waits.Wait(id="w1", chat="c1", what="the build to pass",
+                         then="tell me", status=waits.DONE,
+                         said="It passed.", ended=NOW - 400))
+    waits.add(waits.Wait(id="w2", chat="c1", what="a reply",
+                         then="sum it up", status=waits.GAVE_UP,
+                         ended=NOW - 50))
+    waits.add(waits.Wait(id="w3", chat="c1", what="still going",
+                         then="x", status=waits.WAITING))
+    session = SimpleNamespace(chats={"c1": chat("c1", [], NOW - 9e5)})
+
+    cards = briefing.cards(session, now=NOW)
+
+    assert [c["id"] for c in cards] == [  # nosec B101
+        "wait:w2", f"spark:s1:{int(NOW - 100)}", "wait:w1",
+        f"spark:s1:{int(NOW - 600)}"]
+    assert cards[0]["title"] == "Stopped waiting for a reply"  # nosec B101
+    assert cards[0]["chat_title"] == "Plans"  # nosec B101
+    assert cards[1]["title"] == "Scout needs you"  # nosec B101
+    assert cards[2]["body"] == "It passed."  # nosec B101
+
+
+def test_what_is_coming_up_goes_first_soonest_first():
+    for wait_id, hours in (("later", 5), ("soon", 1), ("far", 40)):
+        waits.add(waits.Wait(id=wait_id, chat="c1", what=wait_id,
+                             then="remind me", at=NOW + hours * 3600,
+                             status=waits.WAITING))
+    waits.add(waits.Wait(id="done", chat="c1", what="x", then="y",
+                         status=waits.DONE, ended=NOW - 10))
+
+    cards = briefing.cards(None, now=NOW)
+
+    assert [c["id"] for c in cards] == [  # nosec B101
+        "reminder:soon", "reminder:later", "wait:done"]
+    assert cards[0]["label"] == "Coming up"  # nosec B101
+
+
+def test_unread_email_and_imessages(monkeypatch):
+    monkeypatch.setattr(mail, "configured", lambda: True)
+    asked = {}
+
+    def inbox(**kw):
+        asked.update(kw)
+        return [{"uid": "7", "from": '"Ada L" <ada@example.com>',
+                 "subject": "Lunch?", "snippet": "Free at noon?",
+                 "at": NOW - 30, "account": "me@example.com", "link": ""}]
+
+    monkeypatch.setattr(mail, "inbox", inbox)
+    monkeypatch.setattr(computer, "allowed",
+                        lambda kind: kind == "imessage_read")
+    monkeypatch.setattr(computer, "read_imessages", lambda **kw: (
+        "2 messages, newest first:\n"
+        "Fri Oct 23, 08:58 · Sam (unread): on my way\n"
+        "Fri Oct 23, 08:40 · Kim in Climbing (unread): 6pm?\n"
+        "Fri Oct 23, 08:30 · You to Sam: ok"))
+
+    cards = briefing.cards(None, now=NOW)
+
+    assert asked["unread"] is True  # nosec B101
+    email, sam, kim = cards
+    assert (email["kind"], email["who"], email["title"]) == (  # nosec B101
+        "email", "Ada L", "Lunch?")
+    assert email["id"] == "email:me@example.com:7"  # nosec B101
+    assert (sam["title"], sam["body"], sam["at"]) == (  # nosec B101
+        "Sam", "on my way", NOW - 120)
+    assert (kim["title"], kim["place"]) == (  # nosec B101
+        "Kim in Climbing", "Climbing")
+    assert not sam["markable"]  # nosec B101  (not switched on)
+
+    monkeypatch.setattr(computer, "allowed", lambda kind: True)
+    sam, kim = briefing.cards(None, now=NOW)[1:]
+    # A group chat cannot be marked read.
+    assert sam["markable"] and not kim["markable"]  # nosec B101
+
+
+def test_chats_that_answered_lately_without_markdown():
+    session = SimpleNamespace(chats={
+        "a": chat("a", [{"type": "user", "text": "hi"},
+                        {"type": "assistant",
+                         "text": "## Plan\n- **Book** [it](http://x)"}]),
+        "b": chat("b", [{"type": "assistant", "text": "x"},
+                        {"type": "user", "text": "still waiting"}]),
+        "c": chat("c", [{"type": "assistant", "text": "x"}], busy=True),
+        "d": chat("d", [{"type": "assistant", "text": "x"}],
+                  updated=NOW - 2 * 86400),
+    })
+
+    cards = briefing.cards(session, now=NOW)
+
+    assert [c["chat"] for c in cards] == ["a"]  # nosec B101
+    assert cards[0]["body"] == "Plan\nBook it"  # nosec B101
+
+
+def test_dismissed_cards_stay_gone_and_old_ones_are_let_go():
+    waits.add(waits.Wait(id="w1", chat="c", what="a", then="b",
+                         status=waits.DONE, ended=NOW - 10))
+    assert len(briefing.cards(None, now=NOW)) == 1  # nosec B101
+
+    briefing.dismiss(["wait:w1"], now=NOW - 20 * 86400)
+    briefing.dismiss(["other"], now=NOW)
+    assert list(briefing.dismissed()) == ["other"]  # nosec B101
+
+    briefing.dismiss(["wait:w1"], now=NOW)
+    assert briefing.cards(None, now=NOW) == []  # nosec B101
+    briefing.undismiss("wait:w1")
+    assert len(briefing.cards(None, now=NOW)) == 1  # nosec B101
+
+
+def test_a_source_that_fails_is_named_and_the_rest_still_come(monkeypatch):
+    monkeypatch.setattr(mail, "configured", lambda: True)
+
+    def broken(**kw):
+        raise mail.MailError("no network")
+
+    monkeypatch.setattr(mail, "inbox", broken)
+    briefing.note("mcp:notes", "New in notes (from its list tool):\n- milk",
+                  now=NOW - 5)
+    problems = []
+
+    cards = briefing.cards(None, now=NOW, problems=problems)
+
+    assert problems == ["email: no network"]  # nosec B101
+    assert [(c["kind"], c["title"], c["body"]) for c in cards] == [  # nosec
+        ("news", "New in notes", "- milk")]
+
+
+def test_connector_news_is_noted_once():
+    briefing.note("mcp:notes", "same", now=NOW)
+    briefing.note("mcp:notes", "same", now=NOW + 1)
+    briefing.note("mcp:notes", "  ", now=NOW)
+    assert len(briefing._news) == 1  # nosec B101
+
+
+def test_the_page_asks_for_it_and_dismisses(monkeypatch):
+    waits.add(waits.Wait(id="w1", chat="c", what="a", then="b",
+                         status=waits.DONE, ended=time.time() - 10))
+    session = SimpleNamespace(chats={})
+
+    said = web.command(session, {"name": "briefing"})
+    assert [c["id"] for c in said["cards"]] == ["wait:w1"]  # nosec B101
+    assert said["problems"] == []  # nosec B101
+
+    web.command(session, {"name": "briefing-dismiss", "arg": "all",
+                          "cards": ["wait:w1", 5]})
+    assert web.command(session, {"name": "briefing"})["cards"] == []  # nosec
+    web.command(session, {"name": "briefing-undo", "arg": "wait:w1"})
+    said = web.command(session, {"name": "briefing"})
+    assert len(said["cards"]) == 1  # nosec B101
+
+
+def a_team(monkeypatch, members, said=()):
+    from flash import teamchat
+
+    team = SimpleNamespace(id="t1", name="Launch crew", colour="#5ab0f2")
+    monkeypatch.setattr(sparks, "teams", lambda: [team])
+    monkeypatch.setattr(sparks, "members", lambda team_id: members)
+    monkeypatch.setattr(sparks, "all_sparks", lambda: members)
+    monkeypatch.setattr(teamchat, "_read", lambda team_id: {
+        "entries": [{"kind": kind, "at": at, "text": "x"}
+                    for kind, at in said]})
+    return team
+
+
+def member(spark_id, name, *reports, status=sparks.IDLE, activity=""):
+    return SimpleNamespace(id=spark_id, name=name, colour="#9b7bff",
+                           reports=list(reports), status=status,
+                           activity=activity)
+
+
+def test_a_team_says_what_changed_since_the_last_briefing(monkeypatch):
+    since = NOW - 3600
+    a_team(monkeypatch, [
+        member("a", "Scout",
+               sparks.Report(at=NOW - 7200, text="Old news."),
+               sparks.Report(at=NOW - 600, text="## Done\n**Shipped** v2.")),
+        member("b", "Fixer", sparks.Report(at=NOW - 300, text="May I merge?",
+                                           approval=True)),
+        member("c", "Tester", status=sparks.WORKING,
+               activity="Running the tests"),
+        member("d", "Sleepy"),
+    ], said=[("spark", NOW - 200), ("user", NOW - 100),
+             ("spark", NOW - 5000)])
+
+    cards = briefing.cards(None, now=NOW, since=since)
+
+    # One card for the team, and not one for each report as well.
+    assert [c["kind"] for c in cards] == ["team"]  # nosec B101
+    team = cards[0]
+    assert team["title"] == "Launch crew"  # nosec B101
+    assert team["body"].splitlines() == [  # nosec B101
+        "Scout: Done",
+        "Fixer (needs you): May I merge?",
+        "Tester: working, running the tests",
+        "1 new message in the team chat",
+        "2 others: nothing new",
+    ]
+    assert team["at"] == NOW - 200 and team["team"] == "t1"  # nosec B101
+    assert team["colour"] == "#5ab0f2"  # nosec B101
+
+
+def test_a_team_with_nothing_new_has_no_card(monkeypatch):
+    a_team(monkeypatch, [
+        member("a", "Scout", sparks.Report(at=NOW - 7200, text="Old.",
+                                           read=True)),
+        member("b", "Tester", status=sparks.WORKING),
+    ], said=[("user", NOW - 10)])
+
+    # Only working is not news by itself, nor is the user's own message.
+    cards = briefing.cards(None, now=NOW, since=NOW - 3600)
+    assert cards == []  # nosec B101
+
+
+def test_since_is_the_briefing_before_this_one():
+    first = briefing.opened(now=NOW)
+    assert first == NOW - briefing.LOOK_BACK  # nosec B101
+    assert briefing.last_since(NOW + 60) == first  # nosec B101  (refresh)
+
+    assert briefing.opened(now=NOW + 3600) == NOW  # nosec B101
+    assert briefing.last_since(NOW + 3700) == NOW  # nosec B101
+
+    # Weeks away: a week's news at most.
+    later = NOW + 30 * 86400
+    assert briefing.opened(now=later) == later - briefing.MOST_SINCE  # nosec
+
+
+def test_new_until_the_briefing_shows_it():
+    waits.add(waits.Wait(id="w1", chat="c", what="a", then="b",
+                         status=waits.DONE, ended=time.time() - 10))
+    assert briefing.has_new() is True  # nosec B101
+
+    briefing.mark_seen(c["id"] for c in briefing.cards())
+    assert briefing.has_new() is False  # nosec B101
+
+    waits.add(waits.Wait(id="w2", chat="c", what="b", then="c",
+                         status=waits.DONE, ended=time.time() - 5))
+    assert briefing.has_new() is True  # nosec B101
+
+
+def test_marking_an_imessage_read_takes_its_cards_out(monkeypatch):
+    asked = []
+
+    def mark(who):
+        asked.append(who)
+        return "Marked read: Sam (2)." if who == "Sam" else \
+            "Still unread: Kim."
+
+    monkeypatch.setattr(computer, "mark_imessages_read", mark)
+    session = SimpleNamespace(chats={})
+
+    said = web.command(session, {
+        "name": "briefing-mark-read", "arg": "imessage:a", "with": "Sam",
+        "cards": ["imessage:a", "imessage:b"]})
+    assert said["marked"] and asked == ["Sam"]  # nosec B101
+    assert {"imessage:a", "imessage:b"} <= set(  # nosec B101
+        briefing.dismissed())
+
+    said = web.command(session, {
+        "name": "briefing-mark-read", "arg": "imessage:c", "with": "Kim"})
+    assert not said["marked"]  # nosec B101
+    assert "imessage:c" not in briefing.dismissed()  # nosec B101
+
+    def fails(who):
+        raise computer.ComputerError("Full Disk Access")
+
+    monkeypatch.setattr(computer, "mark_imessages_read", fails)
+    with pytest.raises(ValueError, match="Full Disk"):
+        web.command(session, {"name": "briefing-mark-read", "arg": "x",
+                              "with": "Sam"})
+
+
+def test_a_reply_the_user_has_read_is_not_news():
+    log = [{"type": "user", "text": "hi"},
+           {"type": "assistant", "text": "Hello"}]
+    read = chat("a", list(log))
+    read.seen = 2
+    unread = chat("b", list(log))
+    unread.seen = 1
+    session = SimpleNamespace(chats={"a": read, "b": unread})
+
+    assert [c["chat"] for c in briefing.cards(session, now=NOW)] == [  # nosec
+        "b"]
+
+
+def test_the_page_marks_a_chat_read():
+    made = web.Chat(id="c1", log=[{"type": "user", "text": "hi"},
+                                  {"type": "assistant", "text": "Hi"}])
+    session = SimpleNamespace(chats={"c1": made})
+
+    web.command(session, {"name": "chat-seen", "chat": "c1"})
+    assert made.seen == 2  # nosec B101
+    assert web.Chat.restore(made.saved()).seen == 2  # nosec B101
+
+
+def test_pings_and_notifications_come_as_cards():
+    briefing.notice("ping", "Scout mentioned you", "@user sign off?",
+                    now=NOW - 30, spark="s1", who="Scout", colour="#123456",
+                    team="t1", where="team")
+    briefing.notice("notify", "Build done", "All green.", now=NOW - 20)
+    briefing.notice("notify", "Old", "Too old.", now=NOW - 3 * 86400)
+
+    cards = briefing.cards(None, now=NOW)
+
+    assert [(c["kind"], c["title"]) for c in cards] == [  # nosec B101
+        ("notify", "Build done"), ("ping", "Scout mentioned you")]
+    ping = cards[1]
+    assert (ping["team"], ping["colour"], ping["label"]) == (  # nosec B101
+        "t1", "#123456", "Mention")
+
+    from flash import briefing_view
+
+    assert briefing_view.actions(ping)[0] == "reply"  # nosec B101
+
+
+def test_reading_something_has_the_dot_looked_at_again(monkeypatch):
+    briefing._new.update(value=True, at=time.time(), running=False)
+    looked = []
+    monkeypatch.setattr(briefing, "has_new",
+                        lambda session=None: looked.append(1) or False)
+    monkeypatch.setattr(briefing.threading, "Thread",
+                        lambda target, daemon: SimpleNamespace(
+                            start=target))
+    assert NEW_WAITING() is True and not looked  # nosec B101
+    briefing.stale()
+    NEW_WAITING()
+    assert looked and NEW_WAITING() is False  # nosec B101
+
+
+def test_flash_reads_the_briefing_out_and_marks_it_read(monkeypatch):
+    from flash import briefing, tools
+
+    fake = [{"id": "spark:1", "label": "Spark report", "title": "Repo Watch", "body": "CI is green again.", "at": 1}]
+    monkeypatch.setattr(briefing, "cards", lambda *a, **k: list(fake))
+    heard = []
+    briefing.on_seen(lambda: heard.append(True))
+
+    said = tools.FUNCTIONS["read_briefing"]()
+
+    assert "Repo Watch" in said and "CI is green again." in said
+    assert heard, "the page was not told it is read"
+    assert briefing._seen().get("ids") == ["spark:1"]
+
+
+class _Now:
+    """A thread that runs at once, so what it did can be checked."""
+
+    def __init__(self, target, args=(), daemon=None):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+def test_dismissed_emails_go_to_the_trash_only_when_switched_on(monkeypatch):
+    trashed = []
+    monkeypatch.setattr(mail, "trash", lambda uid, account="": trashed.append((account, uid)) or "Trash")
+    monkeypatch.setattr(briefing.threading, "Thread", _Now)
+    monkeypatch.delenv(briefing.TRASH_SETTING, raising=False)
+    assert briefing.trash_dismissed_email() is False  # nosec B101  (off by default)
+    briefing.dismiss(["email:me@example.com:41"], now=NOW)
+    assert trashed == []  # nosec B101
+
+    monkeypatch.setenv(briefing.TRASH_SETTING, "on")
+    briefing.dismiss(["email:me@example.com:42", "wait:w1", "email:bad"], now=NOW)
+    assert trashed == [("me@example.com", "42")]  # nosec B101
+
+
+def test_an_email_that_will_not_move_is_noted_not_raised(monkeypatch):
+    def refuse(uid, account=""):
+        raise mail.MailError("no trash folder")
+
+    monkeypatch.setattr(mail, "trash", refuse)
+    monkeypatch.setattr(briefing.threading, "Thread", _Now)
+    monkeypatch.setenv(briefing.TRASH_SETTING, "on")
+    briefing.dismiss(["email:me@example.com:43"], now=NOW)
+    assert any("trash" in str(n) for n in briefing._news)  # nosec B101

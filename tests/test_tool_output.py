@@ -13,6 +13,7 @@ def screen(monkeypatch):
     out = Console(file=io.StringIO(), width=120, force_terminal=False)
     monkeypatch.setattr(theme, "console", out)
     monkeypatch.setattr(theme, "_collapsed", [])
+    monkeypatch.setattr(theme, "_expanded_rows", 0)
     return out
 
 
@@ -167,7 +168,7 @@ class TestKeysInTheLoop:
 
         saved, _ = self.run(monkeypatch, [TOGGLE_AUTO])
 
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
 
     def test_shift_tab_redraws_the_banner_with_the_new_mode(
         self, monkeypatch
@@ -193,9 +194,10 @@ class TestKeysInTheLoop:
         # Drawn again after each press, with the mode already flipped,
         # so the banner's autonomous notice comes and goes.
         assert drawn == [True, False]
-        # EOF prints one bare newline, and nothing else: no
-        # "Autonomous mode enabled." line.
-        assert printed == [()]
+        # Leaving prints a bare newline and the goodbye, and nothing
+        # else: no "Autonomous mode enabled." line.
+        assert printed[0] == ()
+        assert [a[0].plain for a in printed[1:]] == ["\u25cf Bye."]
 
     def test_shift_tab_after_the_banner_only_toggles(self, monkeypatch):
         from flash.repl_input import TOGGLE_AUTO
@@ -216,7 +218,7 @@ class TestKeysInTheLoop:
 
         saved, _ = self.run(monkeypatch, ["hello", TOGGLE_AUTO])
 
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
         assert drawn == []
 
     def test_ctrl_o_expands(self, monkeypatch):
@@ -237,3 +239,31 @@ class TestKeysInTheLoop:
         self.run(monkeypatch, [TOGGLE_AUTO, EXPAND])
 
         assert sent == []
+
+
+class TestCtrlOAgain:
+    def test_a_second_press_cuts_it_short_again(self, monkeypatch):
+        out = Console(file=io.StringIO(), width=120, force_terminal=True, height=60)
+        monkeypatch.setattr(theme, "console", out)
+        monkeypatch.setattr(theme, "_collapsed", [("Bash(ls)", "a\nb\nc")])
+        monkeypatch.setattr(theme, "_expanded_rows", 0)
+        theme.expand_collapsed()
+        assert "Ctrl+O again" in out.file.getvalue()
+        rows = theme._expanded_rows
+        assert rows == 5
+        theme.expand_collapsed()
+        assert out.file.getvalue().endswith(f"\x1b[{rows}F\x1b[J")
+        assert theme._expanded_rows == 0
+        # Pressed a third time, the whole output again.
+        theme.expand_collapsed()
+        assert theme._expanded_rows == 5
+
+    def test_anything_printed_since_keeps_the_block(self, monkeypatch):
+        out = Console(file=io.StringIO(), width=120, force_terminal=True, height=60)
+        monkeypatch.setattr(theme, "console", out)
+        monkeypatch.setattr(theme, "_collapsed", [("Bash(ls)", "a")])
+        monkeypatch.setattr(theme, "_expanded_rows", 0)
+        theme.expand_collapsed()
+        theme.forget_expanded()
+        theme.expand_collapsed()
+        assert "\x1b[J" not in out.file.getvalue()

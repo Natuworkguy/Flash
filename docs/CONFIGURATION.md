@@ -15,7 +15,7 @@ If a variable is set in both places, the real environment variable wins.
 Example `~/.flash.env`:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://localhost:11434
 ```
 
@@ -31,33 +31,74 @@ Requirements:
 - The model named in `MODEL` must already be pulled on that server
   (`ollama pull <model>`).
 - For tool calling (shell / web search / OS info) to work, choose a model that
-  supports tools, such as `llama3.1`.
+  supports tools.
 - For `/image` and the `view_image` tool to work, the model must also be
-  vision-capable, such as `llama3.2-vision`.
+  vision-capable.
 
 ## Options
 
 | Variable | Required | Default | Minimum | Description |
 | -------- | -------- | ------- | ------- | ----------- |
-| `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `llama3.1`, `qwen2.5`, `mistral`. Must be pulled on the target server. |
+| `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `my-model:8b`. Must be pulled on the target server. |
 | `OLLAMA_HOST` | No | `http://localhost:11434` | - | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
+| `OLLAMA_API_KEY` | No | unset | - | Sent as `Authorization: Bearer <key>` to a server behind a proxy that asks for a key. A key saved with a host in the web UI's Add host form wins for that host; this covers the rest, the terminal included. |
+| `EMBED_MODEL` | No | unset | - | An Ollama embedding model (pulled with `ollama pull`) that the `search_files` tool uses to find passages by meaning as well as by their words. Left unset, it searches by words alone. |
 | `MAX_HISTORY_MESSAGES` | No | unset | `2` | Hard cap on how many messages of history are kept. Left unset, the token budget below decides, which is almost always the better answer; set it only to force a smaller history than the budget would allow. |
 | `MAX_HISTORY_CHARS` | No | unset | `1000` | Hard cap on the total characters of history kept, applied on top of the token budget. Left unset, the budget decides. |
 | `AUTO_COMPACT` | No | `0` | - | `1` has the model summarize the turns that no longer fit and keep the summary at the head of the conversation. Off by default: they are dropped instead, and the last three exchanges always stay word for word. The web UI switches it under Settings, General. `/compact` runs it by hand at any time. |
-| `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
-| `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
-| `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
+| `COMPACT_AMOUNT` | No | `0` | `0` | With `AUTO_COMPACT` on, how much of the history each summary takes at once, in percent, up to 90. `0` summarizes only what no longer fits, a little each turn once the window is full; `50` summarizes half the history in one go, so it happens less often and leaves room for the turns after. The last three exchanges always stay word for word. The web UI sets it under Settings, General, as How much to summarize. |
+| `MODEL_TITLES` | No | `1` | - | On, the model names each web UI chat in a few words after its first reply, instead of naming it after its first message. Written once, and never over a name you gave the chat yourself. The web UI switches it under Settings, General. |
+| `VERIFY_CHANGES` | No | `1` | - | `0` stops the reminder Flash gets, once a turn, to check code it changed before it finishes. The verify tool stays. |
+| `HOME_ASSISTANT_URL` | No | unset | - | Home Assistant's address, for smart home control. Its long-lived access token is kept in the vault as `HOME_ASSISTANT_TOKEN`. Set both with `/smarthome connect <address>` or in the web UI's Settings, Connectors. |
+| `VISUALS` | No | `more` | - | Rich answers: replies can mix their text with charts, side-by-side comparisons, stat tiles, steps, diagrams, calculators, buttons and forms, which the web UI draws live and the terminal shows as Markdown. `less` keeps replies to text, with one only when you ask for it or the answer needs it. The web UI sets it under Settings, General. |
+| `MAX_TOOL_ROUNDS` | No | `50` | `1` | Tool-calling rounds a request gets, in the terminal, the web UI, sub-agents and the learning review. At the limit, the steps the model last asked for still run, then it answers from what it found. |
+| `MAX_TOOL_OUTPUT_CHARS` | No | `4000` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. The model can raise it for the rest of a task with the `more_output` tool, which also shows the last cut result again in full. |
+| `MAX_OUTPUT_TOKENS` | No | `8192` | `128` | Maximum tokens the model may generate per response, tool calls included, so a file written in one call has to fit in it. Maps to Ollama's `num_predict` option, and overrides the model's own. |
 | `NUM_CTX` | No | unset | - | Context window to ask Ollama for: a token count, or `max` for the largest the model's architecture supports. Left unset, the model keeps whatever its Modelfile pins (Flash Onyx pins 65536) and Ollama's default applies to models that pin nothing. The cache is allocated when the model loads, whether or not a session fills it, so raising this costs memory up front. |
 | `SKILL_REVIEW_AFTER` | No | `10` | `0` | Once this many tool calls have built up since the last review, Flash reviews the conversation in the background after the reply and saves or fixes a skill. `0` turns this off. See [Learning](../README.md#learning). |
+| `SKILL_TRIALS` | No | `managed` | `all` | Which skills Flash rewrites on its own when their runs keep going badly: `managed` (only ones it wrote), `all`, or `off`. A rewrite is tried on the next 3 uses and kept only if it scores better. See [Learning](../README.md#learning). |
 | `MEMORY_REVIEW_EVERY` | No | `10` | `0` | Every this many messages, the same background review also saves facts worth remembering about you and your setup. `0` turns this off. |
+| `COMPUTER_ACTIONS` | No | `0` | - | `1` lets Flash do simple things on this computer when asked: control music and the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode, and on a Mac, read recent iMessages and send one (asked about every time). Usually set with `/computer on` or in the web UI's Settings. See [Your computer](GUIDE.md#your-computer). |
+| `COMPUTER_OFF` | No | empty | - | What Flash may not do on this computer even with `COMPUTER_ACTIONS` on, comma-separated, from `music`, `volume`, `apps`, `open`, `screen`, `clipboard`, `dark_mode`, `imessage_read` (reading iMessages) and `imessage` (sending them). Everything is on until switched off. Usually set with `/computer off <name>` or the switches under "Let Flash act on this computer" in Settings. |
+| `COMPUTER_USE` | No | `0` | - | `1` offers Computer Use (beta): Flash sees the screen and clicks, types and scrolls itself, only for what its tools cannot do, and asks before every reply that wants it, autonomous mode or not (UltraAuto aside). Needs `COMPUTER_ACTIONS` on too. Ctrl+Alt+Esc (Control+Option+Esc on a Mac), or moving the mouse, takes the computer back. Usually set with `/computer use on` or in Settings. See [Computer Use](GUIDE.md#computer-use-beta). |
+| `COMPUTER_USE_MOUSE_STOPS` | No | `1` | - | `0` lets you move the mouse while Computer Use works: only the stop keys take the computer back. Usually set with `/computer use mouse off` or in Settings. |
+| `COMPUTER_USE_FAST` | No | `0` | - | `1` turns on Computer Use's fast mode: several actions per step with one screenshot after them, and buttons and fields clicked by name from the accessibility tree. Usually set with `/computer use fast on` or in Settings. |
+| `SANDBOX` | No | `0` | - | `1` runs every command Flash runs in the OS sandbox (sandbox-exec on a Mac, bubblewrap on Linux): it writes only in the folder Flash works in and temp folders, and can't see keys or passwords. Usually set with `/sandbox on` or in Settings. |
+| `SANDBOX_AUTO_ALLOW` | No | `0` | - | `1` lets a sandboxed command run without asking in Ask first. Usually set with `/sandbox auto on` or in Settings. |
+| `SPARK_EVENTS` | No | `0` | - | `1` lets sparks start the moment a new email, a new iMessage, or a change in a connected MCP server comes in, for the sparks given those under "Start when". Flash looks without the model. Set with `/sparks events on` or under Settings, General, Sparks. |
+| `ULTRA_AUTO_ALLOWED` | No | `0` | - | `1` offers UltraAuto as a third mode, beside ask first and autonomous. Usually set in Settings > General > UltraAuto, or by `/auto ultra`, each after a warning. `0` leaves UltraAuto at once. See [UltraAuto](GUIDE.md#ultraauto). |
+| `ULTRA_AUTO` | No | `0` | - | `1`, with `ULTRA_AUTO_ALLOWED`, is UltraAuto: autonomous mode, and nothing else asks either (email, iMessages, hires, team chat tools, connector changes, wait commands, Computer Use). System One still reviews each step. Set by the mode button, Shift+Tab or `/auto ultra`. |
+| `SYSTEM_ONE` | No | `0` | - | `1` (with `SYSTEM_ONE_MODEL` set) puts System One to work in autonomous mode: a small model that reviews each command and edit before it runs and answers the model's quick questions. Needs Ollama v0.35 or later. Usually set with `/systemone on` or in the web UI's Settings, which check the server's version first. See [System One](../README.md#system-one). |
+| `SYSTEM_ONE_MODEL` | No | unset | - | The model System One asks: any model on the server whose capabilities include `decision`, such as `nimble`. Unset, System One stays off until one is picked; `/systemone on` picks the first such model it finds. |
+| `WEB_REMEMBER_BROWSERS` | No | `0` | - | `1` keeps browsers signed in to the web UI across restarts of Flash, so after opening the link once a browser opens Flash at its plain address. Usually set under Settings, Security. |
+| `FLASH_NO_LOADER` | No | unset | - | `1` skips the robot's face that fills the terminal while Flash starts. It only shows when starting takes longer than a moment, and goes as soon as Flash is ready. |
+| `FLASH_NO_DOCK` | No | unset | - | `1` takes the message box and status bar down while Flash works, as it was before you could steer or queue mid-turn. |
+| `PROGRESS_EMAIL` | No | `0` | - | `1` emails you a request's milestones as it goes (see the guide's Progress emails). Set with `/email progress on` or under Settings, Email. |
+| `PROGRESS_EMAIL_TO` | No | your default address | - | Where progress emails go. |
+| `PROGRESS_EMAIL_FROM` | No | your default account | - | Which connected account sends them. |
+| `PROGRESS_EMAIL_KINDS` | No | `start,plan,ask,end` | - | Which milestones are emailed. |
+| `SHOW_TIPS` | No | `1` | - | While the model is working, a one-line tip about a feature under the spinner (under the message box in the web UI), a new one every 30 seconds. `0` turns them off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
-| `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |
-| `VOICE_PIPER_VOICE` | No | `en_US-amy-medium` | - | Name of the [Piper voice](https://huggingface.co/rhasspy/piper-voices) used for speaking, as `locale-speaker-quality`. |
+| `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | The model used for listening: a [Vosk model](https://alphacephei.com/vosk/models), or a Moonshine one (`moonshine-tiny`, `moonshine-small` or `moonshine-medium`), which hears far more accurately and needs the `moonshine-voice` package. Downloaded to `~/.flash/models` on first use. |
+| `VOICE_PIPER_VOICE` | No | `en_US-amy-medium` | - | The voice used for speaking: a [Piper voice](https://huggingface.co/rhasspy/piper-voices), as `locale-speaker-quality`, a Phonon voice, as `phonon-<voice>` (`phonon-harper`, `phonon-maeve`...), the best and quickest, which needs the `ptts` package, or a Kokoro voice, as `kokoro-<voice>` (`kokoro-af_heart`, `kokoro-bf_emma`...), the second best, which needs the `kokoro-onnx` package, or on a Mac a downloaded Siri voice, as `siri-<name>` (`siri-natural.Nora`), which needs Xcode's command line tools. |
 | `VOICE_SILENCE_SECONDS` | No | `1.2` | `0.2` | How long you have to stop talking before Flash decides your turn is over. |
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
+| `VOICE_INTERRUPT` | No | `word` | `anything` | How a reply in voice mode is cut off: `word` waits for the interrupt word, `anything` stops it as soon as you talk over it and takes what you said as your next turn. Settings, General, Interrupting Flash. |
+| `CALL_INTERRUPT` | No | `anything` | `word` | The same for calls with sparks: talk over the spark (`anything`), or say the interrupt word (`word`). Settings, General, Interrupting on spark calls. |
+| `SPARK_RETRY` | No | `1` | - | `1` has a spark whose model failed try again on its next shift, on its schedule. `0` stops it until you press Try again or give it another model. Usually set with Try again every shift in Settings, Sparks. |
+| `SPARK_CALLS` | No | `1` | - | `0` stops sparks from calling you: they are not offered the call and @mention you instead. Usually set with Let sparks call me in Settings, or `/call incoming off`. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
+| `VOICE_INPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash listens on, e.g. `BlackHole 2ch` to hear through a virtual device. |
+| `VOICE_OUTPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash speaks through, e.g. `Loopback Audio` or `CABLE Input` for a virtual device. |
+| `CALL_MIC_DEVICE` | No | `BlackHole 2ch` | — | Virtual device Flash speaks into on calls: the call's microphone. |
+| `CALL_SPEAKER_DEVICE` | No | `BlackHole 16ch` | — | Virtual device the call plays into, which Flash listens on. |
+| `CALL_MONITOR` | No | `on` | — | Whether you hear calls as they happen: the other side and Flash's voice, played on your own speakers. `off` turns it off. |
+| `CALL_MONITOR_DEVICE` | No | your speakers | — | Device you hear calls on. Unset, the Mac's output from before the call (or the default output, on joined calls). Never one of the two call devices above, so the call can't feed back into itself. |
+| `VOICE_WAKE_ALWAYS` | No | `0` | - | `1` has the web server listen for "Hey Flash" on the microphone of the computer it runs on, for as long as it runs, with or without a page open, and answer out loud there. The conversation is kept as a chat. Settings, Voice, "Listen even with no page open". |
+| (service) | No | off | - | "Hey Flash" with Flash closed: Settings, Voice, "“Hey Flash” with Flash closed" registers `flash --listen` to start at login (a systemd user service or autostart entry on Linux, a launchd agent on macOS, a scheduled task on Windows), listening on this computer's microphone even after Flash is quit. Its conversations are kept as chats. Run `flash --listen` yourself to try it. Only one Flash listens at a time, and a page listening has the microphone first. |
+| `VOICE_WAKE_SENSITIVITY` | No | `50` | `0` | How readily "Hey Flash" wakes Flash, 0 to 100. From 80 up it wakes mid phrase; below, only once the words are said in full and the listening model is sure enough of them, surer the lower it is. Lower it if a video sets it off. Settings, Voice. |
 | `VOICE_MAX_CHARS` | No | `700` | `80` | Longest reply spoken aloud. Past this the voice stops at a sentence and says the rest is on screen. |
 
 ### How much conversation is kept
@@ -99,6 +140,21 @@ summarizes it on demand.
 - The models live in `~/.flash/models`. Deleting that directory frees the
   space; the next `/voice on` downloads them again.
 
+### Letting Flash talk on a call you are on (Google Meet)
+
+In UltraAuto, on a Mac with the loopback devices installed
+(`brew install blackhole-2ch blackhole-16ch switchaudio-osx`):
+
+1. Join the call yourself, then in Meet's settings (Audio) set
+   **Microphone** to `BlackHole 2ch` and **Speakers** to `BlackHole 16ch`
+   (or whatever `CALL_MIC_DEVICE` and `CALL_SPEAKER_DEVICE` name).
+2. Tell Flash "talk to my friend", with what you want said.
+3. Flash says it is an automated assistant, then listens and answers until
+   you tell it to stop, the call goes quiet, or ten minutes pass. It never
+   hangs up your call. Switch Meet back to your own mic and speakers after.
+
+While Meet uses those devices you will not hear the call or be heard on it.
+
 ### Notes on the numeric options
 
 - All numeric options are clamped to their listed **Minimum**. For example,
@@ -114,7 +170,7 @@ The backend is switched purely with `OLLAMA_HOST`.
 Leave `OLLAMA_HOST` unset, or set it explicitly:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://localhost:11434
 ```
 
@@ -123,14 +179,14 @@ OLLAMA_HOST=http://localhost:11434
 Point FLASH at another machine running Ollama:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://192.168.1.50:11434
 ```
 
 Or a server behind a hostname / reverse proxy:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=https://ollama.example.com
 ```
 
