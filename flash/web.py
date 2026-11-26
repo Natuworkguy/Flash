@@ -5949,17 +5949,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return clock.state()
 
     if name == "clock-act":
-        # arg: timer, alarm, cancel, stop, snooze, pause, resume, add_time,
-        # on, off; the rest from the body ("length", "at", "days",
+        # arg: cancel, stop, snooze, pause, resume, add_time, on, off; the
+        # rest from the body ("length", "at", "days",
         # "label", "id", "minutes").
         from . import clock
 
+        # Only Flash sets a timer or an alarm (its clock tool, when asked):
+        # the page and devices change and stop the ones it set.
+        if arg in ("timer", "alarm"):
+            raise ValueError("Ask Flash to set it: “set a timer for 10 minutes”.")
         try:
-            if arg == "timer":
-                clock.add_timer(body.get("length"), str(body.get("label") or ""))
-            elif arg == "alarm":
-                clock.add_alarm(body.get("at"), str(body.get("label") or ""), body.get("days") or "")
-            elif arg in ("cancel", "stop", "pause", "resume"):
+            if arg in ("cancel", "stop", "pause", "resume"):
                 getattr(clock, arg)(str(body.get("id") or ""))
             elif arg == "snooze":
                 clock.snooze(str(body.get("id") or ""), float(body.get("minutes") or clock.SNOOZE_MINUTES))

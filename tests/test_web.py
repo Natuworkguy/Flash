@@ -737,6 +737,12 @@ class TestPairing:
         with pytest.raises(extensions.ExtensionError, match="web address"):
             extensions.load(folder)
 
+    def test_only_flash_sets_a_timer(self):
+        with pytest.raises(ValueError, match="Ask Flash"):
+            web.command(web.Session(), {"name": "clock-act", "arg": "timer", "length": "5m"})
+        with pytest.raises(ValueError, match="Ask Flash"):
+            web.command(web.Session(), {"name": "clock-act", "arg": "alarm", "at": "7:00"})
+
     def test_no_code_no_pairing(self, server):
         assert request(server, "POST", "/api/pair", {"code": "000000"},
                        token=False)[0] == 400

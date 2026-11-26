@@ -152,8 +152,8 @@ body.side-closed #sidebar { margin-left: -272px; }
 .side-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px 10px 18px; height: 56px; }
 /* In the Mac app the window's close, minimise and zoom buttons sit at the top left, over the page: the sidebar's
    top row starts to their right, and so does the bar above the chat when the sidebar is closed. */
-html.mac-app .side-top { padding: 8px 10px 4px 100px; height: 60px; }
-html.mac-app body.side-closed #top { padding-left: 100px; height: 60px; }
+html.mac-app .side-top { padding: 0 10px 0 92px; height: 52px; }
+html.mac-app body.side-closed #top { padding-left: 92px; height: 52px; }
 .wordmark {
   display: inline-flex; align-items: center; gap: 6px;
   font: 700 21px/1 var(--brand);
@@ -189,7 +189,7 @@ html.mac-app body.side-closed #top { padding-left: 100px; height: 60px; }
 .side-label { padding: 18px 18px 6px; font-size: 12px; color: var(--text-3); font-weight: 500; }
 #side-nav { display: contents; }
 /* Compact: one strip of icons, names in tips, badges kept small on their corner. */
-body.side-compact #side-nav { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 10px 2px; }
+body.side-compact #side-nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 2px; padding: 4px 10px 2px; justify-items: center; }
 body.side-compact #side-nav > .side-row { width: 38px; height: 38px; margin: 0; padding: 0; justify-content: center; position: relative; font-size: 0; gap: 0; flex: none; }
 body.side-compact #side-nav > .side-row.in-more { display: none; }
 body.side-compact #side-nav > #side-more.in-more { display: none; }
@@ -2314,6 +2314,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .dev-code .row { display: flex; gap: 8px; }
 .dev-warn { grid-column: 1 / -1; font-size: 13px; color: var(--warn); margin: 0; }
 .dev-group .browser-list { max-width: none; }
+.dev-intro { max-width: 680px; }
+.dev-empty { max-width: 680px; margin: 0 0 28px; padding: 22px 20px; border: 1px dashed var(--border-strong); border-radius: 14px; text-align: center; }
+.dev-empty b { display: block; font-size: 15px; margin-bottom: 4px; }
+.dev-empty p { margin: 0 auto; max-width: 460px; font-size: 13.5px; color: var(--text-3); }
+.dev-empty .btn { margin-top: 12px; }
 @media (max-width: 620px) { .dev-connect { grid-template-columns: 1fr; } .dev-code { align-items: flex-start; text-align: left; } }
 .btn.danger { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); white-space: nowrap; }
 .btn.danger:hover { background: color-mix(in srgb, var(--del) 10%, transparent); }
@@ -4475,24 +4480,20 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 /* Briefing: a full-screen feed of what came in, one card at a time.
    Scrolling or swiping snaps from card to card; the rail on the right
    says where you are. Always dark, as a video feed is. */
-#clock { position: fixed; inset: 0; z-index: 66; display: grid; place-items: center; background: color-mix(in srgb, #000 38%, transparent); animation: bf-in 0.24s var(--apple); }
-#clock[hidden], #clock-ring[hidden] { display: none; }
-#clock .ck-card { width: min(440px, calc(100vw - 32px)); max-height: min(640px, calc(100vh - 48px)); overflow: auto; background: var(--panel, var(--bg)); color: var(--fg); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); padding: 16px 18px 18px; }
-#clock .ck-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-#clock .ck-name { font-weight: 650; font-size: 17px; letter-spacing: -0.01em; }
-#clock .grow { flex: 1; }
-#clock .ck-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--fg) 7%, transparent); margin-bottom: 12px; }
-#clock .ck-tabs button { border: 0; background: none; color: inherit; font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 8px; cursor: pointer; opacity: 0.7; }
-#clock .ck-tabs button.on { background: var(--bg); opacity: 1; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
-#clock .ck-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-#clock .ck-quick button { border: 1px solid var(--line); background: none; color: inherit; font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: 999px; cursor: pointer; }
-#clock .ck-quick button:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-#clock .ck-fields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
-#clock .ck-fields input, #clock .ck-fields select { min-width: 0; font: inherit; font-size: 13.5px; color: inherit; background: color-mix(in srgb, var(--fg) 4%, transparent); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
-#clock .ck-fields select { padding-right: 28px; }
-#clock .ck-err { color: var(--danger, #d9534f); font-size: 12.5px; min-height: 16px; margin-top: 6px; }
-#clock .ck-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
-#clock .ck-empty { opacity: 0.6; font-size: 13px; padding: 14px 0 4px; text-align: center; }
+#clock-ring[hidden] { display: none; }
+/* Timers and alarms Flash set, over the message box: each counting, with its own few buttons. Only agents set them. */
+#timer-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 auto 8px; max-width: var(--col, 760px); }
+#timer-bar[hidden] { display: none; }
+#timer-bar .tb { display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); animation: rise 0.25s var(--ease) both; min-width: 0; }
+#timer-bar .tb.ringing { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+#timer-bar .tb .ck-ring { width: 26px; height: 26px; flex: none; }
+#timer-bar .tb .ck-ring circle { stroke-width: 5; }
+#timer-bar .tb .tt { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+#timer-bar .tb .tt b { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#timer-bar .tb .tt span { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+#timer-bar .tb button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 4px 7px; border-radius: 8px; cursor: pointer; }
+#timer-bar .tb button:hover { background: var(--hover); color: var(--text); }
+#timer-bar .tb.ringing button.stop { background: var(--accent); color: #fff; }
 .ck-item { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); }
 .ck-item.ringing { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: ck-pulse 1.2s ease-in-out infinite; }
 @keyframes ck-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 10%, transparent); } }
@@ -4505,8 +4506,6 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .ck-acts { display: flex; gap: 4px; }
 .ck-acts button { border: 1px solid var(--line); background: none; color: inherit; font: inherit; font-size: 12px; padding: 5px 9px; border-radius: 999px; cursor: pointer; }
 .ck-acts button:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-#clock-btn .ck-next { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.75; }
-#clock-btn.ringing .ck-next { color: var(--accent); opacity: 1; }
 #clock-ring { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 70; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); }
 #clock-ring .ck-alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px; background: #111; color: #f5f4ef; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); animation: ck-shake 0.6s ease-in-out infinite alternate; }
 @keyframes ck-shake { from { transform: rotate(-0.4deg); } to { transform: rotate(0.4deg); } }
@@ -4716,7 +4715,6 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <div id="side-nav">
     <button class="side-row" id="search-btn" data-tip="Search chats" data-keys="Alt F"></button>
     <button class="side-row" id="briefing-btn" data-tip="Briefing" data-keys="Alt B"></button>
-    <button class="side-row" id="clock-btn" data-tip="Timers and alarms"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="made-btn" data-tip="Everything Flash made, newest first"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
@@ -4820,6 +4818,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
           <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
         </div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
+        <div id="timer-bar" hidden aria-label="Timers and alarms" aria-live="polite"></div>
         <div id="music-bar" hidden aria-label="Music"><span class="music-art"><span id="music-frame"></span></span><span class="music-what"><b class="music-title"></b><small class="music-said">Flash's player</small></span><button type="button" class="icon-btn music-toggle" aria-label="Pause"></button><input type="range" class="music-volume" min="0" max="100" value="70" aria-label="Volume"><button type="button" class="icon-btn music-close" aria-label="Stop"></button></div>
         <form id="composer" autocomplete="off">
           <div id="tray" hidden aria-label="Attached"></div>
@@ -4888,7 +4887,6 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
-<div id="clock" role="dialog" aria-modal="true" aria-label="Timers and alarms" hidden><div class="ck-card"><div class="ck-top"><span class="ck-name">Clock</span><span class="grow"></span><button type="button" class="icon-btn ck-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="ck-tabs" role="tablist"><button type="button" role="tab" data-tab="timer" class="on">Timer</button><button type="button" role="tab" data-tab="alarm">Alarm</button></div><form class="ck-new" autocomplete="off"><div class="ck-quick"></div><div class="ck-fields"><input class="ck-len" placeholder="10m, 1h30m, 90s" aria-label="How long"><input class="ck-at" placeholder="7:30, 6:45pm" aria-label="What time" hidden><select class="ck-days" aria-label="Repeat" hidden><option value="">Once</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="every day">Every day</option></select><input class="ck-label" placeholder="Label (optional)" aria-label="Label"><button type="submit" class="pill ck-go">Start</button></div><div class="ck-err" role="alert"></div></form><div class="ck-list" aria-live="polite"></div></div></div>
 <div id="clock-ring" role="alertdialog" aria-label="Ringing" hidden></div>
 <div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="pill bf-brief" data-tip="Flash reads it to you in a chat, and marks it read">Brief me</button><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
 <div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><button type="button" class="icon-btn sc-mini" aria-label="Minimise" data-tip="Keep the call going in a small bar"></button><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><p class="sc-caption" aria-live="polite"></p><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button><button type="button" class="icon-btn sc-screen" aria-pressed="false" aria-label="Share your screen" data-tip="Share your screen"></button></div><div class="sc-answer" hidden><button type="button" class="icon-btn sc-decline" aria-label="Decline" data-tip="Decline"></button><button type="button" class="icon-btn sc-pick" aria-label="Answer" data-tip="Answer"></button></div><video class="sc-screen-view" muted playsinline hidden></video></section></div>
@@ -11933,12 +11931,29 @@ function redrawDevices() { if (devicesBody && devicesBody.isConnected) drawDevic
 async function drawDevices(body) {
   devicesBody = body;
   let said;
-  try { said = await command("devices"); } catch (error) { showFailure(error); return; }
+  try { said = await command("devices"); } catch (error) {
+    if (!body.isConnected) return;
+    // a page newer than the Flash serving it: Flash was updated while it ran
+    body.innerHTML = /unknown command/i.test(error.message || "")
+      ? `<div class="dev-empty"><b>Restart Flash to see your devices</b><p>Flash was updated while it was running, so this page is newer than the Flash behind it. Quit Flash and open it again.</p></div>`
+      : "";
+    if (!body.textContent) showFailure(error);
+    return;
+  }
   if (!body.isConnected) return;
   body.textContent = "";
-  body.appendChild(el("p", "settings-sub", "Each extension that brings a device has its own place here: how to connect one, a pairing code just for it, and the ones you have."));
-  if (!said.groups.length) {
-    body.appendChild(el("p", "page-empty", "No extension here brings a device yet. Flash for Apple Watch, Flash Bot and Flash for TV each add one, from the Extensions page."));
+  body.appendChild(el("p", "settings-sub dev-intro", "Things you talk to Flash through, away from this computer: a watch on your wrist, a robot on your desk, the TV. Each comes from an extension, and each has its own place here: how to connect one, a pairing code just for it (a device that pairs with it belongs to it), and the ones you have."));
+  const paired = said.groups.reduce((n, g) => n + g.devices.length, 0) + said.other.length;
+  if (!paired) {
+    body.appendChild(el("div", "dev-empty", said.groups.length
+      ? `<b>No devices yet</b><p>Connect one below: follow its steps, and type the code it shows into the device.</p>`
+      : `<b>No devices yet</b><p>A device comes with an extension: Flash for Apple Watch, Flash Bot and Flash for TV each add one. Install one from the Extensions page and it shows up here, with how to connect it.</p>`));
+    if (!said.groups.length) {
+      const go = el("button", "btn", "Open Extensions");
+      go.type = "button";
+      go.onclick = () => showPage("extensions");
+      body.querySelector(".dev-empty").appendChild(go);
+    }
   }
   for (const g of said.groups) body.appendChild(deviceGroup(g, said));
   if (said.other.length) {
@@ -26806,7 +26821,6 @@ const ACTIONS = [
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Briefing", keys: "Alt B", slash: "/briefing", run: openBriefing },
-  { label: "Timers and alarms", keys: "", slash: "/clock", run: openClock },
   { label: "Brief me: Flash reads the briefing to you", keys: "", slash: "/brief", run: () => briefMe() },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
   { label: "Made: everything Flash made", keys: "", slash: "/made", run: () => showPage("made") },
@@ -27868,7 +27882,7 @@ $("#devices-btn").innerHTML = icon("monitor") + "<span>Devices</span>";
 // Right-click a row to move it, or More > Customize sidebar for them all.
 // Kept for this browser. A spark list and the extensions' rows go with
 // the row they belong to.
-const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["clock-btn", "Clock"], ["projects-btn", "Projects"], ["made-btn", "Made"],
+const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"], ["made-btn", "Made"],
   ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"], ["devices-btn", "Devices"]];
 // Rows in the More menu until you move them out: the ones most people open now and then, not every day.
 const SIDE_TUCKED = new Set(["made-btn", "skills-btn", "extensions-btn"]);
@@ -28036,10 +28050,10 @@ function openSideCustomizer() {
 applySideLayout();
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
 // ---------------------------------------------------------------------------
-// Timers and alarms: a row in the sidebar that counts down the next one, a
-// panel to set and change them, and a banner while one rings. Flash keeps
-// them (flash/clock.py); the page counts the seconds itself between updates.
-const clockState = { items: [], skew: 0, tab: "timer" };
+// Timers and alarms: only Flash sets them (ask it). Each shows over the message box, counting, with its own few
+// buttons, and a banner comes up while one rings. Flash keeps them (flash/clock.py); the page counts the seconds
+// itself between updates.
+const clockState = { items: [], skew: 0 };
 function clockFmt(sec) {
   sec = Math.max(0, Math.round(sec));
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -28071,14 +28085,8 @@ function clockRingSvg(frac) {
 }
 function clockDraw() {
   const items = clockState.items;
-  // the sidebar row: the soonest, or what rings
-  const btn = $("#clock-btn");
   const ringing = items.filter((i) => i.ringing);
-  const next = items.find((i) => i.kind === "timer" && !i.ringing) || items.find((i) => i.kind === "alarm" && i.on && !i.ringing);
-  const tag = btn.querySelector(".ck-next");
-  btn.classList.toggle("ringing", ringing.length > 0);
-  tag.textContent = ringing.length ? "Ringing" : next ? (next.kind === "timer" ? clockFmt(clockLeft(next)) : next.time) : "";
-  // the banner
+  // the banner while one rings
   const ring = $("#clock-ring");
   ring.hidden = !ringing.length;
   ring.innerHTML = "";
@@ -28094,84 +28102,43 @@ function clockDraw() {
   }
   document.title = document.title.replace(/^⏰ /, "");
   if (ringing.length) document.title = "⏰ " + document.title;
-  // the panel's list
-  const list = $("#clock .ck-list");
-  if ($("#clock").hidden) return;
-  list.innerHTML = "";
-  if (!items.length) { list.innerHTML = `<div class="ck-empty">No timers or alarms.</div>`; return; }
-  for (const it of items) {
-    const row = document.createElement("div");
-    row.className = "ck-item" + (it.ringing ? " ringing" : "");
-    row.dataset.id = it.id;
-    const left = clockLeft(it);
-    const frac = it.kind === "timer" ? (it.ringing ? 1 : 1 - left / Math.max(1, it.length)) : (it.on ? 1 : 0);
-    const big = it.kind === "timer" ? (it.ringing ? "0:00" : clockFmt(left)) : it.time;
-    const sub = it.kind === "timer" ? (it.ringing ? `${it.title} · ringing` : it.paused ? `${it.title} · paused` : it.title)
-      : `${it.title} · ${it.ringing ? "ringing" : it.on ? it.repeat : "Off"}`;
-    row.innerHTML = `${clockRingSvg(Math.max(0, Math.min(1, frac)))}<div><div class="ck-big"></div><div class="ck-sub"></div></div><div class="ck-acts"></div>`;
-    row.querySelector(".ck-big").textContent = big;
-    row.querySelector(".ck-sub").textContent = sub;
-    const acts = row.querySelector(".ck-acts");
-    const add = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = () => fn().catch(showFailure); acts.appendChild(b); };
-    if (it.ringing) { add("Snooze", () => clockAct("snooze", { id: it.id })); add("Stop", () => clockAct("stop", { id: it.id })); }
-    else if (it.kind === "timer") {
-      add("+1 min", () => clockAct("add_time", { id: it.id, length: "1m" }));
-      add(it.paused ? "Resume" : "Pause", () => clockAct(it.paused ? "resume" : "pause", { id: it.id }));
-      add("Cancel", () => clockAct("cancel", { id: it.id }));
-    } else {
-      add(it.on ? "Turn off" : "Turn on", () => clockAct(it.on ? "off" : "on", { id: it.id }));
-      add("Delete", () => clockAct("cancel", { id: it.id }));
+  // over the message box: every timer, and the alarms that are on
+  const bar = $("#timer-bar");
+  const shown = items.filter((i) => i.kind === "timer" || i.ringing || i.on);
+  bar.hidden = !shown.length;
+  const known = new Map([...bar.children].map((c) => [c.dataset.id, c]));
+  for (const id of known.keys()) if (!shown.some((i) => i.id === id)) known.get(id).remove();
+  for (const it of shown) {
+    let chip = known.get(it.id);
+    const state = `${it.ringing}|${it.paused}|${it.on}`;
+    if (!chip || chip.dataset.state !== state) {
+      const fresh = document.createElement("div");
+      fresh.className = "tb" + (it.ringing ? " ringing" : "");
+      fresh.dataset.id = it.id;
+      fresh.dataset.state = state;
+      fresh.innerHTML = `<span class="ring"></span><span class="tt"><b></b><span></span></span>`;
+      const add = (label, action, extra = {}, cls = "") => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = label;
+        if (cls) btn.className = cls;
+        btn.onclick = () => clockAct(action, { id: it.id, ...extra }).catch(showFailure);
+        fresh.appendChild(btn);
+      };
+      if (it.ringing) { add("Snooze", "snooze"); add("Stop", "stop", {}, "stop"); }
+      else if (it.kind === "timer") { add("+1 min", "add_time", { length: "1m" }); add(it.paused ? "Resume" : "Pause", it.paused ? "resume" : "pause"); add("Cancel", "cancel"); }
+      else add("Turn off", "off");
+      if (chip) chip.replaceWith(fresh); else bar.appendChild(fresh);
+      chip = fresh;
     }
-    list.appendChild(row);
+    const left = clockLeft(it);
+    const frac = it.kind === "timer" ? (it.ringing ? 1 : 1 - left / Math.max(1, it.length)) : 1;
+    chip.querySelector(".ring").innerHTML = clockRingSvg(Math.max(0, Math.min(1, frac)));
+    chip.querySelector("b").textContent = it.kind === "timer" ? (it.ringing ? "0:00" : clockFmt(left)) : it.time;
+    chip.querySelector(".tt span").textContent = it.ringing ? `${it.title} · ringing` : it.paused ? `${it.title} · paused`
+      : it.kind === "alarm" ? `${it.title} · ${it.repeat}` : it.title;
   }
 }
-function clockTab(tab) {
-  clockState.tab = tab;
-  for (const b of document.querySelectorAll("#clock .ck-tabs button")) b.classList.toggle("on", b.dataset.tab === tab);
-  $("#clock .ck-len").hidden = tab !== "timer";
-  $("#clock .ck-at").hidden = tab !== "alarm";
-  $("#clock .ck-days").hidden = tab !== "alarm";
-  $("#clock .ck-go").textContent = tab === "timer" ? "Start" : "Set";
-  const quick = $("#clock .ck-quick");
-  quick.innerHTML = "";
-  const presets = tab === "timer" ? [["1 min", "1m"], ["5 min", "5m"], ["10 min", "10m"], ["25 min", "25m"], ["1 hour", "1h"]]
-    : [["6:30", "6:30"], ["7:00", "7:00"], ["7:30", "7:30"], ["8:00", "8:00"]];
-  for (const [label, v] of presets) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    b.onclick = () => {
-      const lbl = $("#clock .ck-label").value.trim();
-      (tab === "timer" ? clockAct("timer", { length: v, label: lbl }) : clockAct("alarm", { at: v, label: lbl, days: $("#clock .ck-days").value }))
-        .then(() => { $("#clock .ck-err").textContent = ""; }).catch((e) => { $("#clock .ck-err").textContent = e.message || String(e); });
-    };
-    quick.appendChild(b);
-  }
-}
-function openClock() {
-  $("#clock").hidden = false;
-  clockTab(clockState.tab);
-  clockRefresh();
-  setTimeout(() => (clockState.tab === "timer" ? $("#clock .ck-len") : $("#clock .ck-at")).focus(), 30);
-}
-function closeClock() { $("#clock").hidden = true; }
-$("#clock-btn").innerHTML = icon("alarmClock") + "<span>Clock</span><span class=\"ck-next\"></span>";
-$("#clock-btn").onclick = openClock;
-$("#clock .ck-close").innerHTML = icon("x");
-$("#clock .ck-close").onclick = closeClock;
-$("#clock").addEventListener("click", (e) => { if (e.target.id === "clock") closeClock(); });
-$("#clock").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeClock(); } });
-for (const b of document.querySelectorAll("#clock .ck-tabs button")) b.onclick = () => clockTab(b.dataset.tab);
-$("#clock .ck-new").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const err = $("#clock .ck-err");
-  const label = $("#clock .ck-label").value.trim();
-  const go = clockState.tab === "timer"
-    ? clockAct("timer", { length: $("#clock .ck-len").value.trim(), label })
-    : clockAct("alarm", { at: $("#clock .ck-at").value.trim(), label, days: $("#clock .ck-days").value });
-  go.then(() => { err.textContent = ""; $("#clock .ck-len").value = ""; $("#clock .ck-at").value = ""; $("#clock .ck-label").value = ""; })
-    .catch((x) => { err.textContent = x.message || String(x); });
-});
 setInterval(() => { if (clockState.items.length) clockDraw(); }, 1000);
 clockRefresh();
 
