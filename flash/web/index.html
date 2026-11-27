@@ -4620,6 +4620,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-icon svg { width: 17px; height: 17px; }
 .bf-meta { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-3); }
 .bf-meta b { font-weight: 600; color: var(--text-2); }
+.bf-meta .bf-to { min-width: 0; overflow-wrap: anywhere; }
 .bf-title { margin: 1px 0 0; font: 600 15.5px/1.35 var(--sans); color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .bf-body { margin-top: 3px; font-size: 14px; line-height: 1.5; color: var(--text-2); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .bf-body:empty { display: none; }
@@ -26450,7 +26451,7 @@ const briefEl = document.getElementById("briefing");
 const briefFeed = briefEl.querySelector(".bf-feed");
 
 function briefActions(card) {
-  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" || (card.kind === "ping" && card.team) ? "Team chat" : card.kind === "ping" ? "Spark" : "Chat";
+  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? (card.service ? `Open in ${card.service}` : "Open") : card.kind === "team" || (card.kind === "ping" && card.team) ? "Team chat" : card.kind === "ping" ? "Spark" : "Chat";
   const acts = [];
   if (["email", "imessage", "spark", "chat", "ping"].includes(card.kind)) acts.push({ act: "reply", label: "Reply", icon: "reply", key: "r" });
   if (card.kind === "imessage" && card.markable) acts.push({ act: "read", label: "Mark read", icon: "check", key: "m" });
@@ -26472,11 +26473,13 @@ function briefCard(card, i) {
   if (card.who && card.kind !== "imessage") meta.push(esc(card.who));
   if (when) meta.push(esc(when));
   if (card.chat_title) meta.push(esc(card.chat_title));
+  // With more than one account connected, the one it came to.
+  if (card.to) meta.push(`<span class="bf-to">to ${esc(card.to)}</span>`);
   const acts = briefActions(card);
   const dismiss = acts.find((a) => a.act === "dismiss");
   sec.innerHTML = `<span class="bf-icon" aria-hidden="true">${icon(BRIEF_ICON[card.kind] || "dot")}</span>
     <div class="bf-meta">${meta.join("<span aria-hidden=\"true\">·</span>")}</div><h2 class="bf-title"></h2><div class="bf-body"></div><button type="button" class="bf-more" hidden>More</button>
-    <div class="bf-actions">${acts.filter((a) => a !== dismiss).map((a, n) => `<button type="button" class="bf-act${n === 0 && a.act === "reply" ? " lead" : ""}" data-act="${a.act}" data-tip="${a.label}" data-keys="${a.key.toUpperCase()}">${icon(a.icon)}<span>${a.label}</span></button>`).join("")}</div>
+    <div class="bf-actions">${acts.filter((a) => a !== dismiss).map((a, n) => `<button type="button" class="bf-act${n === 0 && a.act === "reply" ? " lead" : ""}" data-act="${a.act}" data-tip="${esc(a.label)}" data-keys="${a.key.toUpperCase()}">${icon(a.icon)}<span>${esc(a.label)}</span></button>`).join("")}</div>
     <button type="button" class="bf-x" data-act="dismiss" aria-label="Dismiss" data-tip="Dismiss" data-keys="D">${icon("x")}</button>`;
   sec.querySelector(".bf-title").textContent = card.title;
   sec.querySelector(".bf-body").textContent = card.body;

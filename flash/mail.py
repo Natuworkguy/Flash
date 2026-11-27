@@ -463,33 +463,108 @@ def _accounts() -> list[dict]:
 
 # --- Links ---------------------------------------------------------------
 
-# Gmail opens one message from a link that searches for its Message-ID,
-# in whichever of the browser's Google accounts has this address.
-GMAIL_HOSTS = {"imap.gmail.com"}
+# Each service's web app, by its IMAP server: its name, and where it
+# opens a message. {address} is the account's address and {id} the
+# message's Message-ID; a page with no {id} is the service's inbox, for
+# a service whose web app has no way to open one message from it.
+WEB_MAIL = {
+    "imap.gmail.com": (
+        "Gmail",
+        "https://mail.google.com/mail/?authuser={address}"
+        "#search/rfc822msgid%3A{id}",
+    ),
+    "outlook.office365.com": ("Outlook", "https://outlook.office.com/mail/"),
+    "imap.mail.me.com": ("iCloud Mail", "https://www.icloud.com/mail/"),
+    "imap.mail.yahoo.com": ("Yahoo Mail", "https://mail.yahoo.com/"),
+    "imap.aol.com": ("AOL Mail", "https://mail.aol.com/"),
+    "imap.fastmail.com": ("Fastmail", "https://app.fastmail.com/mail/"),
+    "imap.zoho.com": ("Zoho Mail", "https://mail.zoho.com/zm/"),
+}
+# A personal address whose server also serves work accounts opens in the
+# personal web app: by the address's domain, before its server.
+WEB_MAIL_DOMAINS = {
+    domain: ("Outlook", "https://outlook.live.com/mail/0/")
+    for domain in ("outlook.com", "hotmail.com", "live.com", "msn.com")
+}
+# Mail at any other server opens in the computer's mail app, from a
+# message: link, as any app that registered for those links does.
+MAIL_APP = "Mail"
+
+
+def web_link(url) -> str:
+    """URL, when it is a web address a page can open; "" otherwise."""
+
+    url = str(url or "").strip()
+    return url if re.match(r"^https?://[^\s/]+[^\s]*$", url) else ""
+
+
+def _web_mail(account: dict) -> tuple[str, str]:
+    """(name, page) of ACCOUNT's service's web app, or ("", "")."""
+
+    address = str(account.get("address") or "")
+    domain = address.rpartition("@")[2].strip().lower()
+    host = str(account.get("imap_host") or servers_for(address)[0])
+    return WEB_MAIL_DOMAINS.get(domain) or WEB_MAIL.get(host) or ("", "")
+
+
+def opener(message_id: str, account: Optional[dict] = None,
+           given: str = "") -> dict:
+    """Where the message with MESSAGE_ID in ACCOUNT opens, for a button
+    to open it: {"link", "service" (the app's name), "opens" ("message",
+    or "inbox" when its app can only show the inbox)}, or {} with
+    nowhere to open it.
+
+    GIVEN is the link a mail provider gave for the message: the message,
+    in its own web app. Without one, a provider's account opens its web
+    inbox, if the provider names one. An IMAP account opens the message
+    in its service's web app, its inbox where that app cannot open one
+    message, and in the computer's mail app at any other server.
+    """
+
+    if account is None:
+        account = _full((_raw_accounts() or [{}])[0])
+    found = message_id.strip().strip("<>").strip()
+    if account.get("provider"):
+        provider = extensions.find_mail_provider(name=str(account["provider"]))
+        label = provider[1].label if provider else str(account["provider"])
+        if web_link(given):
+            return {"link": web_link(given), "service": label,
+                    "opens": "message"}
+        inbox_page = web_link(provider[1].web) if provider else ""
+        return ({"link": inbox_page, "service": label, "opens": "inbox"}
+                if inbox_page else {})
+    name, page = _web_mail(account)
+    if page and "{id}" in page:
+        if not found:
+            return {}
+        return {
+            "link": page.format(
+                address=quote(str(account.get("address") or ""), safe="@"),
+                id=quote(found, safe=""),
+            ),
+            "service": name, "opens": "message",
+        }
+    if page:
+        return {"link": page, "service": name, "opens": "inbox"}
+    if not found:
+        return {}
+    return {"link": f"message:%3C{quote(found, safe='@')}%3E",
+            "service": MAIL_APP, "opens": "message"}
 
 
 def link(message_id: str, account: Optional[dict] = None) -> str:
-    """A link that opens the message with MESSAGE_ID, or "" without one.
+    """A link that opens the message with MESSAGE_ID, or "" without one:
+    opener()'s link."""
 
-    Gmail's web inbox, for a Gmail account. Anything else gets a
-    message: link, which Apple Mail opens to that message, as any app
-    that registered for message: links does.
-    """
+    return opener(message_id, account).get("link", "")
 
-    found = message_id.strip().strip("<>").strip()
-    if not found:
-        return ""
-    if account is None:
-        account = _full((_raw_accounts() or [{}])[0])
-    host = str(account.get("imap_host") or servers_for(
-        str(account.get("address") or ""))[0])
-    if host in GMAIL_HOSTS:
-        who = quote(str(account.get("address") or ""), safe="@")
-        return (
-            f"https://mail.google.com/mail/?authuser={who}"
-            f"#search/rfc822msgid%3A{quote(found, safe='')}"
-        )
-    return f"message:%3C{quote(found, safe='@')}%3E"
+
+def _opened(message_id: str, account: dict, given: str = "") -> dict:
+    """opener()'s link, service and what it opens, as a message's
+    fields: each "" with nowhere to open it."""
+
+    found = opener(message_id, account, given)
+    return {key: found.get(key, "") for key in ("link", "service", "opens")}
 
 
 # --- Reading -------------------------------------------------------------
@@ -740,7 +815,7 @@ def _inbox(
             "unread": b"\\Seen" not in flags,
             "snippet": " ".join(text.split())[:SNIPPET_CHARS],
             "attachments": len(attached),
-            "link": link(_header(message, "Message-ID"), account),
+            **_opened(_header(message, "Message-ID"), account),
             "account": account["address"],
             "at": _when(message),
         })
@@ -771,7 +846,7 @@ def _provider_inbox(
             "snippet": " ".join(
                 str(message.get("snippet") or "").split())[:SNIPPET_CHARS],
             "attachments": int(message.get("attachments") or 0),
-            "link": str(message.get("link") or ""),
+            **_opened("", account, str(message.get("link") or "")),
             "account": account["address"],
             "at": at,
         })
@@ -854,7 +929,7 @@ def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
         "subject": _header(message, "Subject"),
         "date": _date(message),
         "message_id": _header(message, "Message-ID"),
-        "link": link(_header(message, "Message-ID"), account),
+        **_opened(_header(message, "Message-ID"), account),
         "references": _header(message, "References"),
         "reply_to": _header(message, "Reply-To"),
         "unread": b"\\Seen" not in flags,
@@ -869,9 +944,10 @@ def _provider_read(account: dict, uid: str) -> dict:
     if not isinstance(message, dict):
         raise MailError(f"There is no message {uid}.")
     out = {key: str(message.get(key) or "") for key in (
-        "from", "to", "cc", "subject", "date", "message_id", "link",
+        "from", "to", "cc", "subject", "date", "message_id",
         "references", "reply_to", "body")}
     out.update(
+        _opened("", account, str(message.get("link") or "")),
         uid=uid,
         unread=bool(message.get("unread")),
         attachments=[str(a) for a in message.get("attachments") or []],

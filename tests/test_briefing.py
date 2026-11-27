@@ -114,6 +114,28 @@ def test_unread_email_and_imessages(monkeypatch):
     assert sam["markable"] and not kim["markable"]  # nosec B101
 
 
+def test_an_email_says_which_account_once_there_are_several(monkeypatch):
+    monkeypatch.setattr(mail, "configured", lambda: True)
+    monkeypatch.setattr(computer, "allowed", lambda kind: False)
+    monkeypatch.setattr(mail, "inbox", lambda **kw: [
+        {"uid": "7", "from": "Ada <ada@example.com>", "subject": "Lunch?",
+         "snippet": "", "at": NOW - 30, "account": "me@gmail.com",
+         "link": "https://mail.example/7", "service": "Gmail",
+         "opens": "message"}])
+    monkeypatch.setattr(mail, "addresses", lambda: ["me@gmail.com"])
+
+    [alone] = briefing.cards(None, now=NOW)
+
+    monkeypatch.setattr(mail, "addresses",
+                        lambda: ["me@gmail.com", "me@proton.me"])
+    [several] = briefing.cards(None, now=NOW)
+
+    assert alone["to"] == ""  # nosec B101
+    assert several["to"] == "me@gmail.com"  # nosec B101
+    assert (several["service"], several["opens"]) == (  # nosec B101
+        "Gmail", "message")
+
+
 def test_chats_that_answered_lately_without_markdown():
     session = SimpleNamespace(chats={
         "a": chat("a", [{"type": "user", "text": "hi"},

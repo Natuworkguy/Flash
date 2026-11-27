@@ -505,15 +505,21 @@ def _email_cards() -> list[dict]:
     if not mail.configured():
         return []
     cards = []
+    # Which address each came to, once there is more than one it could.
+    several = len(mail.addresses()) > 1
     for message in mail.inbox(unread=True, limit=MOST_EACH):
         sender = re.sub(r"\s*<[^>]*>", "", message.get("from") or "")
+        account = message.get("account", "")
         cards.append(_card(
-            "email", f"{message.get('account', '')}:{message.get('uid')}",
+            "email", f"{account}:{message.get('uid')}",
             message.get("subject") or "(no subject)",
             message.get("snippet") or "", message.get("at") or 0.0,
             who=sender.strip('" ') or message.get("from") or "",
-            uid=message.get("uid"), account=message.get("account", ""),
+            uid=message.get("uid"), account=account,
+            to=account if several else "",
             link=message.get("link", ""),
+            service=message.get("service", ""),
+            opens=message.get("opens", ""),
         ))
     return cards
 

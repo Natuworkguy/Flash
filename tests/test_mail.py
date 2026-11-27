@@ -446,12 +446,35 @@ def test_a_gmail_link_opens_that_message_in_that_account():
     )
 
 
-def test_other_mail_gets_a_link_for_the_mail_app():
-    account = {"address": "me@icloud.com"}
+def test_mail_at_an_unknown_server_gets_a_link_for_the_mail_app():
+    account = {"address": "me@mx.example"}
 
-    assert mail.link("<a+b/c@mx.example>", account) == (
-        "message:%3Ca%2Bb%2Fc@mx.example%3E"
-    )
+    assert mail.opener("<a+b/c@mx.example>", account) == {
+        "link": "message:%3Ca%2Bb%2Fc@mx.example%3E",
+        "service": "Mail", "opens": "message",
+    }
+
+
+def test_a_known_service_with_no_message_links_opens_its_web_inbox():
+    inbox_only = mail.opener("<a@b>", {"address": "me@icloud.com"})
+    personal = mail.opener("<a@b>", {"address": "me@hotmail.com"})
+    work = mail.opener("<a@b>", {"address": "me@work.example",
+                                 "imap_host": "outlook.office365.com"})
+
+    assert inbox_only == {"link": "https://www.icloud.com/mail/",
+                          "service": "iCloud Mail", "opens": "inbox"}
+    assert personal["link"] == "https://outlook.live.com/mail/0/"
+    assert work["link"] == "https://outlook.office.com/mail/"
+    assert personal["service"] == work["service"] == "Outlook"
+
+
+def test_a_work_address_on_a_known_server_opens_in_its_web_app():
+    account = {"address": "me@work.example", "imap_host": "imap.gmail.com"}
+
+    found = mail.opener("<x@y>", account)
+
+    assert found["service"] == "Gmail" and found["opens"] == "message"
+    assert "authuser=me@work.example" in found["link"]
 
 
 def test_a_message_with_no_id_has_no_link():
@@ -465,6 +488,29 @@ def test_the_inbox_and_a_read_carry_links(server):
         "rfc822msgid%3Acontract-1%40example.com"
     )
     assert mail.read("9")["link"] == found["9"]["link"]
+
+
+def test_the_inbox_says_which_app_each_opens_in(server):
+    found = {m["uid"]: m for m in mail.inbox()}
+
+    assert (found["9"]["service"], found["9"]["opens"]) == (
+        "Gmail", "message")
+    # No Message-ID: nowhere to open it.
+    assert found["7"]["link"] == found["7"]["service"] == ""
+
+
+def test_an_inbox_link_is_not_passed_off_as_the_message(monkeypatch):
+    monkeypatch.setattr(mail, "inbox", lambda *a, **k: [{
+        "uid": "3", "account": "me@icloud.com", "attachments": 0,
+        "unread": True, "subject": "Hi", "date": "", "from": "Ann",
+        "snippet": "", "link": "https://www.icloud.com/mail/",
+        "service": "iCloud Mail", "opens": "inbox",
+    }])
+    monkeypatch.setattr(mail, "addresses", lambda: ["me@icloud.com"])
+
+    listed = tools.check_inbox()
+
+    assert "the iCloud Mail inbox: it cannot open this one message" in listed
 
 
 def test_the_tools_hand_the_links_on(server):

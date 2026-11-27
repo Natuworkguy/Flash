@@ -382,13 +382,15 @@ class MailProvider:
     of IMAP and SMTP: one whose mail is end-to-end encrypted, say. Run
     once per thing Flash does, with {"action", "address", ...} as JSON
     on stdin, it writes one JSON answer (mail.py has the protocol).
-    DOMAINS are the addresses it is for."""
+    DOMAINS are the addresses it is for, and WEB the service's web inbox,
+    to open a message that came with no link of its own."""
 
     name: str
     label: str
     domains: list[str]
     run: list[str]
     timeout: int = 120
+    web: str = ""
 
 
 # A domain an email address can be at: labels of letters, digits and
@@ -977,12 +979,16 @@ def _mail(entry: Any, root: Path, index: int) -> MailProvider:
     timeout = 120
     if entry.get("timeout") is not None:
         timeout = _timeout(entry.get("timeout"), where)
+    web = _text(entry.get("web"), f"{where}.web")
+    if web and not re.match(r"^https://[^\s/]+[^\s]*$", web):
+        raise ExtensionError(f'{where}: "web" has to be an https address')
     return MailProvider(
         name=name,
         label=_text(entry.get("label"), f"{where}.label") or name,
         domains=sorted({d.strip().lower() for d in domains}),
         run=_argv(entry.get("run"), root, where),
         timeout=timeout,
+        web=web,
     )
 
 

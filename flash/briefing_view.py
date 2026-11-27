@@ -64,6 +64,15 @@ def actions(card: dict) -> tuple[str, ...]:
     return ACTIONS.get(card["kind"], DEFAULT_ACTIONS)
 
 
+def open_name(card: dict) -> str:
+    """What the open key says for CARD: an email names the app it opens
+    in."""
+
+    if card["kind"] == "email" and card.get("service"):
+        return f"open in {card['service']}"
+    return OPEN_NAMES.get(card["kind"], "chat")
+
+
 def when(card: dict) -> str:
     import time
 
@@ -131,6 +140,8 @@ def draw(cards: list[dict], at: int, columns: int, rows: int,
         ]
         if card.get("chat_title"):
             meta.append((f"fg:{DIM_HEX}", f" {DOT} {card['chat_title']}"))
+        if card.get("to"):
+            meta.append((f"fg:{DIM_HEX}", f" {DOT} to {card['to']}"))
         body += [meta, []]
         if card.get("who") and card["kind"] != "imessage":
             who = ("From " if card["kind"] == "email" else "") + card["who"]
@@ -165,8 +176,7 @@ def draw(cards: list[dict], at: int, columns: int, rows: int,
 
     keys: StyleAndTextTuples = [("", pad)]
     for action in actions(card) if card else ():
-        name = OPEN_NAMES.get(card["kind"], "chat") if action == "open" \
-            else NAMES[action]
+        name = open_name(card) if action == "open" else NAMES[action]
         keys += [key(f"fg:{hue} bold", KEYS[action], action),
                  key("", f" {name}   ", action)]
     if not card and total:

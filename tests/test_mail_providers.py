@@ -97,6 +97,28 @@ def connect(address="me@acme.example"):
                                  code="123456")
 
 
+def test_a_provider_web_inbox_opens_a_message_with_no_link(
+        provider, monkeypatch):
+    connect()
+    [ext] = extensions.installed()
+    monkeypatch.setattr(ext.mail[0], "web", "https://mail.acme.example/")
+
+    found = {m["uid"]: m for m in mail.inbox()}
+
+    assert found["newer_Id-2"]["link"] == "https://mail.acme.example/"
+    assert found["newer_Id-2"]["opens"] == "inbox"
+    assert found["older-Id=="]["link"] == "https://x"
+
+
+def test_a_provider_link_that_is_not_a_web_address_is_dropped(provider):
+    account = {"address": "me@acme.example", "provider": "acme"}
+
+    assert mail.opener("", account, "javascript:alert(1)") == {}
+    assert mail.opener("", account, "https://mail.acme.example/m/1") == {
+        "link": "https://mail.acme.example/m/1", "service": "Acme Mail",
+        "opens": "message"}
+
+
 def test_the_manifest_takes_mail_providers(provider):
     [ext] = extensions.installed()
     [one] = ext.mail
@@ -110,6 +132,8 @@ def test_the_manifest_takes_mail_providers(provider):
     {"name": "x", "domains": ["not a domain"], "run": ["python", "p.py"]},
     {"name": "Bad Name", "domains": ["a.example"], "run": ["python", "p.py"]},
     {"name": "x", "domains": ["a.example"]},
+    {"name": "x", "domains": ["a.example"], "run": ["python", "p.py"],
+     "web": "http://mail.a.example"},
 ])
 def test_a_bad_mail_provider_is_refused(tmp_path, entry):
     (tmp_path / extensions.MANIFEST).write_text(
@@ -167,6 +191,10 @@ def test_reading_sending_and_the_trash_go_through_the_provider(provider):
     assert found[0]["snippet"] == "Friday then"
     assert found[0]["account"] == "me@acme.example"
     assert found[1]["link"] == "https://x"
+    assert (found[1]["service"], found[1]["opens"]) == (
+        "Acme Mail", "message")
+    # One with no link of its own has nowhere to open, with no web inbox.
+    assert found[0]["link"] == "" and found[0]["service"] == ""
     message = mail.read("newer_Id-2")
     assert message["body"] == "Friday then." and message["uid"] == "newer_Id-2"
     assert message["attachments"] == ["plan.pdf"]

@@ -694,15 +694,18 @@ email tools, the Inbox spark, the briefing and email events.
 ```json
 "mail": [{"name": "acme", "label": "Acme Mail",
           "domains": ["acme.example", "acmemail.example"],
-          "run": ["python", "./provider.py"], "timeout": 120}]
+          "run": ["python", "./provider.py"], "timeout": 120,
+          "web": "https://mail.acme.example/inbox"}]
 ```
 
 `domains` are the addresses it is for (no other extension may claim
-them). Flash keeps such an account as its address and the provider's
-name alone, and runs the program for each thing it does, with one JSON
-object on stdin; the program writes one JSON line on stdout, `{"ok":
-true, ...}`, or `{"ok": false, "error": "..."}` in words the user can
-act on. Each request has `action` and `address`:
+them). `web`, if given, is the service's web inbox (https), which a
+message with no `link` of its own opens in. Flash keeps such an account
+as its address and the provider's name alone, and runs the program for
+each thing it does, with one JSON object on stdin; the program writes
+one JSON line on stdout, `{"ok": true, ...}`, or `{"ok": false, "error":
+"..."}` in words the user can act on. Each request has `action` and
+`address`:
 
 | `action` | Also sent | Answer |
 | --- | --- | --- |
@@ -725,11 +728,12 @@ the first call, to drop a sign-in left half done.
 
 A message in a list has `uid` (letters, digits and `_=+/-`, at most
 200), `from`, `subject`, `date` (as shown), `at` (a Unix time),
-`unread`, `snippet`, `attachments` (how many) and `link` (to open it in
-the service's own app); one read whole also has `to`, `cc`,
-`message_id`, `references`, `reply_to`, `body` (plain text) and
-`attachments` (their names). `next` from `latest` is compared with the
-`at` of messages: a message with a later `at` is new.
+`unread`, `snippet`, `attachments` (how many) and `link` (an http or
+https address that opens it in the service's web app, shown as an "Open
+in" button named for the provider's `label`); one read whole also has
+`to`, `cc`, `message_id`, `references`, `reply_to`, `body` (plain text)
+and `attachments` (their names). `next` from `latest` is compared with
+the `at` of messages: a message with a later `at` is new.
 
 Whatever lets the program back in (a session, its tokens, keys) goes in
 Flash's vault, apart from the secrets the model can name, never in a

@@ -3175,9 +3175,21 @@ def check_inbox(
         lines.append(
             f"- uid {item['uid']}{unread}{where} · {item['date']} · "
             f"{item['from']}\n  {subject}{clip}: {item['snippet']}"
-            + (f"\n  link: {item['link']}" if item.get("link") else "")
+            + _mail_link_line(item, "\n  link: ")
         )
     return "\n".join(lines)
+
+
+def _mail_link_line(item: dict, lead: str) -> str:
+    """LEAD and ITEM's link, saying where it opens when that is not the
+    message itself; "" with no link."""
+
+    if not item.get("link"):
+        return ""
+    if item.get("opens") == "inbox":
+        return (f"{lead}{item['link']} (the {item.get('service') or 'mail'}"
+                " inbox: it cannot open this one message)")
+    return f"{lead}{item['link']}"
 
 
 def read_email(uid: Any = "", folder: str = "INBOX", account: str = "") -> str:
@@ -3202,7 +3214,7 @@ def read_email(uid: Any = "", folder: str = "INBOX", account: str = "") -> str:
         head.append(f"Cc: {found['cc']}")
     head += [f"Date: {found['date']}", f"Subject: {found['subject']}"]
     if found.get("link"):
-        head.append(f"Link, to give the user: {found['link']}")
+        head.append(_mail_link_line(found, "Link, to give the user: "))
     if found["attachments"]:
         head.append(f"Attachments: {', '.join(found['attachments'])}")
     return "\n".join(head) + f"\n\n{body}"

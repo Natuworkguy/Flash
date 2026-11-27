@@ -46,6 +46,16 @@ def test_a_card_its_keys_and_the_rail():
     assert drawn.count(briefing_view.TICK) == 2  # nosec B101
 
 
+def test_an_email_names_its_account_and_the_app_it_opens_in():
+    card = {**cards()[0], "to": "me@gmail.com",
+            "link": "https://mail.example/7", "service": "Gmail"}
+
+    drawn = text(briefing_view.draw([card], 0, 80, 24)).splitlines()
+
+    assert any("to me@gmail.com" in line for line in drawn)  # nosec B101
+    assert "o open in Gmail" in drawn[-1]  # nosec B101
+
+
 def test_the_end_says_so():
     drawn = text(briefing_view.draw(cards(), 2, 60, 20,
                                     problems=("email",)))
