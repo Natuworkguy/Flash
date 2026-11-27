@@ -15,6 +15,12 @@ Whatever a tool says back has every secret's value swapped for its
 placeholder before the model, the screen or a saved chat sees it. And a
 key the user pastes into a message is taken out, kept here under a name,
 and the message goes on with its placeholder (capture).
+
+An extension can keep secrets of its own here too, such as the session
+an email account signs in with (keep, kept, unkeep). They are encrypted
+with the same key, in vault-private.json, but are not the user's to
+name: the model is never told of them, cannot put one in a command or a
+tool's arguments, and each is swapped out of whatever a tool says.
 """
 
 from __future__ import annotations
@@ -245,13 +251,19 @@ def _values() -> list[tuple[str, str]]:
 
 
 def scrub(text: str) -> str:
-    """TEXT with every secret's value swapped for its placeholder."""
+    """TEXT with every secret's value swapped for its placeholder, and
+    each one an extension keeps for itself taken out."""
 
-    if not text or not _file().exists():
+    if not text:
         return text
-    for name, value in _values():
-        if value in text:
-            text = text.replace(value, f"{{{{secret:{name}}}}}")
+    if _file().exists():
+        for name, value in _values():
+            if value in text:
+                text = text.replace(value, f"{{{{secret:{name}}}}}")
+    for value in _private_values():
+        for piece in sorted(_private_pieces(value), key=len, reverse=True):
+            if piece in text:
+                text = text.replace(piece, _PRIVATE_SHOWN)
     return text
 
 
@@ -303,6 +315,138 @@ def for_shell(command: str, windows: bool = False) -> tuple[str, dict]:
         return f"$env:{var}" if windows else f"${{{var}}}"
 
     return PLACEHOLDER.sub(put, command), env
+
+
+# --- An extension's own secrets ----------------------------------------
+#
+# Kept by owner (the extension's name) and a name of its own: a session's
+# tokens, a key's passphrase. Encrypted as one, so what is kept, and for
+# whom, is not on show either.
+
+MAX_PRIVATE = 20000
+_PRIVATE_SHOWN = "[kept by an extension]"
+
+
+def _private_file() -> Path:
+    return _folder() / "vault-private.json"
+
+
+def _read_private() -> dict:
+    try:
+        sealed = _private_file().read_bytes()
+    except OSError:
+        return {}
+    if not sealed.strip():
+        return {}
+    try:
+        found = json.loads(_cipher().decrypt(sealed.strip()).decode())
+    except Exception:  # noqa: BLE001  (a key that no longer opens it)
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _write_private_store(data: dict) -> None:
+    data = {owner: kept for owner, kept in data.items() if kept}
+    if not data:
+        _private_file().unlink(missing_ok=True)
+    else:
+        _write_private(_private_file(),
+                       _cipher().encrypt(json.dumps(data).encode()))
+    _cache.pop(_PRIVATE_KEY, None)
+
+
+_PRIVATE_KEY = ("private",)
+
+
+def _private() -> dict:
+    """What extensions keep, read again whenever the file has changed:
+    an extension's own program writes it, not this one."""
+
+    try:
+        info = _private_file().stat()
+        stamp = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return {}
+    with _lock:
+        cached = _cache.get(_PRIVATE_KEY)
+        if not cached or cached[0] != stamp:
+            cached = (stamp, _read_private())
+            _cache[_PRIVATE_KEY] = cached
+        return cached[1]
+
+
+def keep(owner: str, name: str, value: str) -> None:
+    """Keep VALUE as OWNER's NAME: an extension's own secret, out of the
+    model's sight."""
+
+    owner, name, value = str(owner or ""), str(name or ""), str(value or "")
+    if not NAME.match(owner) or not name or len(name) > 200:
+        raise VaultError("An extension's secret needs its owner's name and "
+                         "a name of its own.")
+    if not value or len(value) > MAX_PRIVATE:
+        raise VaultError(f"A secret needs a value, up to {MAX_PRIVATE} "
+                         "characters.")
+    with _lock:
+        data = _read_private()
+        data.setdefault(owner, {})[name] = value
+        _write_private_store(data)
+
+
+def kept(owner: str, name: str) -> Optional[str]:
+    """OWNER's secret NAME, or None."""
+
+    found = _private().get(str(owner or ""), {})
+    if not isinstance(found, dict):
+        return None
+    value = found.get(str(name or ""))
+    return value if isinstance(value, str) else None
+
+
+def unkeep(owner: str, name: str = "") -> bool:
+    """Forget OWNER's secret NAME, or with none, all of OWNER's."""
+
+    with _lock:
+        data = _read_private()
+        mine = data.get(str(owner or ""))
+        if not isinstance(mine, dict):
+            return False
+        if name:
+            if mine.pop(str(name), None) is None:
+                return False
+        else:
+            data.pop(str(owner))
+        _write_private_store(data)
+    return True
+
+
+def _private_values() -> list[str]:
+    found = []
+    for mine in _private().values():
+        if isinstance(mine, dict):
+            found += [v for v in mine.values()
+                      if isinstance(v, str) and len(v) >= SCRUB_MIN]
+    return found
+
+
+def _private_pieces(value: str) -> list[str]:
+    """VALUE and, when it is JSON, the strings in it: what a program
+    might print of it."""
+
+    pieces = [value]
+    try:
+        found = json.loads(value)
+    except ValueError:
+        return pieces
+    stack = [found]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack += list(item.values())
+        elif isinstance(item, list):
+            stack += item
+        elif isinstance(item, str) and len(item) >= 16:
+            pieces.append(item)
+    return pieces
 
 
 # --- Keys pasted into a message ------------------------------------------

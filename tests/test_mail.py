@@ -152,6 +152,7 @@ def test_nothing_is_set_up_at_first():
     assert not mail.configured()
     assert mail.settings() == {
         "accounts": [], "configured": False, "default": "",
+        "providers": [],
     }
     with pytest.raises(mail.MailError, match="not set up"):
         mail.inbox()

@@ -2791,6 +2791,15 @@ def _email_connect() -> None:
     if not address:
         console.print(Text("  Not connected.", style=DIM))
         return
+    provider = mail.provider_for(address)
+    if provider is not None:
+        how = _ask_line(
+            f"Sign in with {provider['label']}? (Enter for yes, or type "
+            "imap to use IMAP and SMTP instead)"
+        )
+        if how.lower() != "imap":
+            _email_connect_provider(address, provider)
+            return
     imap_host, imap_port, smtp_host, smtp_port = mail.servers_for(address)
     help_link = mail.APP_PASSWORD_HELP.get(imap_host)
     if help_link:
@@ -2812,6 +2821,86 @@ def _email_connect() -> None:
             f"  Saved, but it did not work yet: {exc} /email connect "
             "tries again."
         )
+        return
+    console.print(Text(
+        f"  {said} The Inbox spark template (/sparks add Inbox) keeps an "
+        "eye on it for you.", style=DIM,
+    ))
+
+
+def _email_connect_provider(address: str, provider: dict) -> None:
+    """/email connect, for an address an extension signs in to: the
+    account's own password, then whatever else its service asks."""
+
+    import getpass
+
+    from . import mail
+
+    label = provider["label"]
+    console.print(Text(
+        f"  {label} signs in with your account's own password. Flash "
+        f"hands it to the {label} extension to sign in and keeps it "
+        "nowhere: what stays is the session, in Flash's vault.", style=DIM,
+    ))
+    try:
+        password = getpass.getpass("  Password (hidden): ")
+    except (EOFError, KeyboardInterrupt):
+        password = ""
+    if not password:
+        console.print(Text("  Not connected.", style=DIM))
+        return
+    code = mailbox_password = ""
+    restart = True
+    # Each step asks for one thing; a wrong code or mailbox password is
+    # asked for again, a few times at most.
+    for _ in range(8):
+        with console.status(f"Signing in to {label}..."):
+            try:
+                answer = mail.connect_provider(
+                    address, password, code=code,
+                    mailbox_password=mailbox_password, restart=restart,
+                    provider=provider["name"],
+                )
+            except mail.MailError as exc:
+                warn(f"  Not connected: {exc}")
+                return
+        restart = False
+        if answer.get("done"):
+            break
+        needs = answer.get("needs")
+        if answer.get("text"):
+            console.print(Text(f"  {answer['text']}", style=DIM))
+        try:
+            if needs == "verification":
+                if answer.get("url"):
+                    console.print(Text(f"  {answer['url']}"))
+                said = _ask_line(
+                    "Press Enter once the check is done (or type stop):")
+                if said.lower() == "stop":
+                    console.print(Text("  Not connected.", style=DIM))
+                    return
+            elif needs == "mailbox_password":
+                mailbox_password = getpass.getpass(
+                    "  Mailbox password (hidden): ")
+                if not mailbox_password:
+                    console.print(Text("  Not connected.", style=DIM))
+                    return
+            else:
+                code = _ask_line("Code:")
+                if not code:
+                    console.print(Text("  Not connected.", style=DIM))
+                    return
+        except (EOFError, KeyboardInterrupt):
+            console.print(Text("  Not connected.", style=DIM))
+            return
+    else:
+        warn("  Not connected: that took too many tries. /email connect "
+             "starts again.")
+        return
+    try:
+        said = mail.test(address)
+    except mail.MailError as exc:
+        warn(f"  Signed in, but reading the mail did not work yet: {exc}")
         return
     console.print(Text(
         f"  {said} The Inbox spark template (/sparks add Inbox) keeps an "

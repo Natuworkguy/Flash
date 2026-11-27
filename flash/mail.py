@@ -10,6 +10,14 @@ user first, autonomous mode or not.
 The password is an app password, made in the account's security
 settings, never the account's own. It is kept in ~/.flash/email.json,
 readable only by its owner.
+
+Some services have no IMAP or SMTP to sign in to (end-to-end encrypted
+ones, mostly). An extension can bring one as a mail provider (docs/
+EXTENSIONS.md, Mail providers): a program Flash runs for each thing it
+does, with JSON on stdin. Such an account is kept here as its address
+and the provider's name alone. The provider signs in with the account's
+own password, which Flash hands it and keeps nowhere, and keeps its
+session in Flash's vault (vault.keep).
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+from . import extensions
 from .paths import FLASH_DIR
 
 # Per attempt: a server with an IPv6 and an IPv4 address that answers
@@ -82,6 +91,16 @@ NOT_SET_UP = (
 
 class MailError(Exception):
     """Email could not be read or sent, in words the user can act on."""
+
+
+# A message's uid: an IMAP server's number, or a mail provider's own id.
+UID_RE = re.compile(r"^[A-Za-z0-9_=+/-]{1,200}$")
+
+
+def uid_ok(uid) -> bool:
+    """Whether UID can be a message's uid, in some account."""
+
+    return bool(UID_RE.match(str(uid or "")))
 
 
 # --- Settings ------------------------------------------------------------
@@ -165,6 +184,7 @@ def _full(raw: dict) -> dict:
     return {
         "address": address,
         "password": str(raw.get("password") or ""),
+        "provider": str(raw.get("provider") or ""),
         "imap_host": str(raw.get("imap_host") or imap_host),
         "imap_port": int(raw.get("imap_port") or imap_port),
         "smtp_host": str(raw.get("smtp_host") or smtp_host),
@@ -176,9 +196,22 @@ def _shown(raw: dict) -> dict:
     """One account, for the settings to show: never its password."""
 
     full = _full(raw)
+    if full["provider"]:
+        found = extensions.find_mail_provider(name=full["provider"])
+        return {
+            "address": full["address"],
+            "has_password": True,
+            "provider": full["provider"],
+            "provider_label": found[1].label if found else full["provider"],
+            "provider_missing": found is None,
+            "imap": "",
+            "smtp": "",
+            "help": "",
+        }
     return {
         "address": full["address"],
         "has_password": bool(full["password"]),
+        "provider": "",
         "imap": f"{full['imap_host']}:{full['imap_port']}",
         "smtp": f"{full['smtp_host']}:{full['smtp_port']}",
         "help": APP_PASSWORD_HELP.get(full["imap_host"], ""),
@@ -193,6 +226,12 @@ def settings() -> dict:
         "accounts": [_shown(a) for a in _raw_accounts()],
         "configured": configured(),
         "default": default_address(),
+        # Services an extension signs in to, for the form to know which
+        # addresses sign in with their own password.
+        "providers": [
+            {"name": p.name, "label": p.label, "domains": p.domains}
+            for _, p in extensions.mail_providers()
+        ],
     }
 
 
@@ -221,14 +260,20 @@ def set_default(address: str) -> dict:
     return settings()
 
 
+def _connected(raw: dict) -> bool:
+    """Whether RAW can be used: it has an app password, or a provider."""
+
+    return bool(raw.get("password") or raw.get("provider"))
+
+
 def configured() -> bool:
-    return any(a.get("password") for a in _raw_accounts())
+    return any(_connected(a) for a in _raw_accounts())
 
 
 def addresses() -> list[str]:
     """The connected addresses, in the order they were added."""
 
-    return [str(a["address"]) for a in _raw_accounts() if a.get("password")]
+    return [str(a["address"]) for a in _raw_accounts() if _connected(a)]
 
 
 def _same(a: str, b: str) -> bool:
@@ -259,6 +304,10 @@ def save(
         data.update(smtp_host=smtp_host, smtp_port=smtp_port)
     if password is None:
         data["password"] = (old or {}).get("password", "")
+        # A provider's account stays one, unless servers are given.
+        if (old or {}).get("provider") and not (
+                str(imap or "").strip() or str(smtp or "").strip()):
+            data = {"address": data["address"], "provider": old["provider"]}
     else:
         # App passwords are shown in groups ("abcd efgh ijkl mnop") and
         # used without the spaces.
@@ -272,22 +321,124 @@ def save(
 
 
 def forget(address: str = "") -> None:
-    """Disconnect ADDRESS: its password goes. With none, every one."""
+    """Disconnect ADDRESS: its password goes, and a provider's account
+    is signed out. With none, every one."""
 
+    accounts = _raw_accounts()
     if not str(address or "").strip():
+        for raw in accounts:
+            _sign_out(raw)
         _path().unlink(missing_ok=True)
         return
-    accounts = _raw_accounts()
     kept = [a for a in accounts if not _same(a["address"], address)]
     if len(kept) == len(accounts):
         raise MailError(f"{address} is not connected.")
+    for raw in accounts:
+        if _same(raw["address"], address):
+            _sign_out(raw)
     _write(kept)
+
+
+def _sign_out(raw: dict) -> None:
+    """End RAW's session with its provider, if it has one. Going is not
+    held up by a provider that cannot be reached, or is gone."""
+
+    if not raw.get("provider"):
+        return
+    found = extensions.find_mail_provider(name=str(raw["provider"]))
+    if found:
+        extensions.call_mail(*found, {"action": "signout",
+                                      "address": str(raw["address"])})
+
+
+# --- Accounts a provider signs in to ------------------------------------
+
+
+def provider_for(address: str) -> Optional[dict]:
+    """{"name", "label"} of the installed mail provider for ADDRESS's
+    domain, or None when it is an IMAP and SMTP account."""
+
+    found = extensions.find_mail_provider(address=str(address or ""))
+    if found is None:
+        return None
+    return {"name": found[1].name, "label": found[1].label}
+
+
+def connect_provider(
+    address: str, password: str = "", code: str = "",
+    mailbox_password: str = "", restart: bool = False, provider: str = "",
+) -> dict:
+    """Sign ADDRESS in with its provider (PROVIDER, or the one for its
+    domain), and connect it once that is done.
+
+    Signing in can take more than one step, each answered with what the
+    provider asks for next: {"needs": "code" | "mailbox_password" |
+    "verification", "text", maybe "url"}, to be called again with the
+    same PASSWORD and what was asked. {"done": True, "text"} when it is
+    connected. The password is passed on and kept nowhere.
+    """
+
+    address = str(address or "").strip()
+    name, parsed = parseaddr(address)
+    if not parsed or "@" not in parsed or name:
+        raise MailError(f"{address!r} is not an email address.")
+    found = extensions.find_mail_provider(name=provider, address=parsed)
+    if found is None:
+        raise MailError(
+            f"No installed extension signs in to {parsed}"
+            + (f" with {provider}." if provider else "."))
+    extension, chosen = found
+    answer = extensions.call_mail(extension, chosen, {
+        "action": "signin", "address": parsed,
+        "password": str(password or ""), "code": str(code or "").strip(),
+        "mailbox_password": str(mailbox_password or ""),
+        "restart": bool(restart),
+    })
+    if not answer.get("ok"):
+        raise MailError(str(answer.get("error")))
+    out = {
+        key: str(answer[key]) for key in ("needs", "text", "url")
+        if answer.get(key)
+    }
+    if not answer.get("done"):
+        out.setdefault("needs", "code")
+        return out
+    accounts = _raw_accounts()
+    old = next((a for a in accounts if _same(a["address"], parsed)), None)
+    data = {"address": old["address"] if old else parsed,
+            "provider": chosen.name}
+    if old is not None:
+        accounts[accounts.index(old)] = data
+    else:
+        accounts.append(data)
+    _write(accounts)
+    out["done"] = True
+    out.setdefault("text", f"Connected {data['address']} with "
+                   f"{chosen.label}.")
+    return out
+
+
+def _call(account: dict, action: str, **payload) -> dict:
+    """The answer of ACCOUNT's provider to ACTION, or a MailError."""
+
+    found = extensions.find_mail_provider(name=account["provider"])
+    if found is None:
+        raise MailError(
+            f"{account['address']} is read through the "
+            f"{account['provider']} extension, which is not installed. "
+            "Install it again, or disconnect the account.")
+    answer = extensions.call_mail(*found, {
+        "action": action, "address": account["address"], **payload,
+    })
+    if not answer.get("ok"):
+        raise MailError(str(answer.get("error")))
+    return answer
 
 
 def _account(address: str = "") -> dict:
     """The account to use: ADDRESS, or with none, the default one."""
 
-    found = [a for a in _raw_accounts() if a.get("password")]
+    found = [a for a in _raw_accounts() if _connected(a)]
     if not found:
         raise MailError(NOT_SET_UP)
     if not str(address or "").strip():
@@ -304,7 +455,7 @@ def _account(address: str = "") -> dict:
 def _accounts() -> list[dict]:
     """Every connected account, filled in."""
 
-    found = [_full(a) for a in _raw_accounts() if a.get("password")]
+    found = [_full(a) for a in _raw_accounts() if _connected(a)]
     if not found:
         raise MailError(NOT_SET_UP)
     return found
@@ -558,6 +709,8 @@ def _inbox(
 ) -> list[dict]:
     """inbox(), from ACCOUNT alone."""
 
+    if account["provider"]:
+        return _provider_inbox(account, unread, query, limit, folder)
     box = _imap(account)
     try:
         _select(box, folder)
@@ -595,6 +748,37 @@ def _inbox(
     return found
 
 
+def _provider_inbox(
+    account: dict, unread: bool, query: str, limit: int, folder: str,
+) -> list[dict]:
+    answer = _call(account, "inbox", unread=bool(unread),
+                   query=str(query or "").strip(), limit=limit,
+                   folder=folder)
+    found = []
+    for message in answer.get("messages") or []:
+        if not isinstance(message, dict) or not uid_ok(message.get("uid")):
+            continue
+        try:
+            at = float(message.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        found.append({
+            "uid": str(message["uid"]),
+            "from": str(message.get("from") or ""),
+            "subject": str(message.get("subject") or "")[:SUBJECT_CHARS],
+            "date": str(message.get("date") or ""),
+            "unread": bool(message.get("unread")),
+            "snippet": " ".join(
+                str(message.get("snippet") or "").split())[:SNIPPET_CHARS],
+            "attachments": int(message.get("attachments") or 0),
+            "link": str(message.get("link") or ""),
+            "account": account["address"],
+            "at": at,
+        })
+    found.sort(key=lambda m: m["at"], reverse=True)
+    return found[:limit]
+
+
 def next_uids(folder: str = "INBOX") -> dict[str, int]:
     """The uid the next email to FOLDER will get, in each account, by its
     address: a change means something came in. A quick question of the
@@ -604,6 +788,15 @@ def next_uids(folder: str = "INBOX") -> dict[str, int]:
     found: dict[str, int] = {}
     quoted = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
     for account in _accounts():
+        if account["provider"]:
+            # A provider's number is when the newest message came, not
+            # a uid: a message is new when it came after (later_than).
+            try:
+                found[account["address"]] = int(
+                    _call(account, "latest", folder=folder).get("next") or 0)
+            except (MailError, TypeError, ValueError):
+                pass
+            continue
         try:
             box = _imap(account)
         except MailError:
@@ -633,10 +826,12 @@ def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
     """
 
     uid = str(uid or "").strip()
-    if not uid.isdigit():
-        raise MailError(f"{uid!r} is not a message's uid.")
     _one_account_or(account)
     account = _account(account)
+    if account["provider"] and uid_ok(uid):
+        return _provider_read(account, uid)
+    if not uid.isdigit():
+        raise MailError(f"{uid!r} is not a message's uid.")
     box = _imap(account)
     try:
         _select(box, folder)
@@ -667,6 +862,22 @@ def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
         "attachments": attached,
         "account": account["address"],
     }
+
+
+def _provider_read(account: dict, uid: str) -> dict:
+    message = _call(account, "read", uid=uid).get("message")
+    if not isinstance(message, dict):
+        raise MailError(f"There is no message {uid}.")
+    out = {key: str(message.get(key) or "") for key in (
+        "from", "to", "cc", "subject", "date", "message_id", "link",
+        "references", "reply_to", "body")}
+    out.update(
+        uid=uid,
+        unread=bool(message.get("unread")),
+        attachments=[str(a) for a in message.get("attachments") or []],
+        account=account["address"],
+    )
+    return out
 
 
 # What servers call the trash, when the server does not mark it \Trash itself.
@@ -702,10 +913,13 @@ def trash(uid: str, account: str = "", folder: str = "INBOX") -> str:
     its trash, else the usual names), where it can still be got back."""
 
     uid = str(uid or "").strip()
-    if not uid.isdigit():
-        raise MailError(f"{uid!r} is not a message's uid.")
     _one_account_or(account)
     account = _account(account)
+    if account["provider"] and uid_ok(uid):
+        return str(_call(account, "trash", uid=uid, folder=folder)
+                   .get("folder") or "Trash")
+    if not uid.isdigit():
+        raise MailError(f"{uid!r} is not a message's uid.")
     box = _imap(account)
     try:
         bin_name = _trash_folder(box)
@@ -751,6 +965,9 @@ def test(address: str = "") -> str:
     messages wait, or a MailError."""
 
     account = _account(address)
+    if account["provider"]:
+        return str(_call(account, "test").get("text") or
+                   f"Connected as {account['address']}.")
     box = _imap(account)
     try:
         _select(box, "INBOX")
@@ -822,6 +1039,10 @@ def send(message: EmailMessage) -> str:
     from. Who it went to."""
 
     account = _account(str(message["From"] or ""))
+    if account["provider"]:
+        said = _call(account, "send", raw=message.as_string()).get("text")
+        return str(said or ", ".join(
+            part for part in (message["To"], message.get("Cc", "")) if part))
     port = account["smtp_port"]
     context = ssl.create_default_context()
     try:

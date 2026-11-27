@@ -8074,6 +8074,30 @@ def _email_command(name: str, body: dict) -> dict:
                 str(body.get("imap") or ""), str(body.get("smtp") or ""),
             )
             return {"email": mail.settings(), "said": mail.test(address)}
+        if name == "email-signin":
+            # An address an extension signs in to: its own password,
+            # then what the service asks for next. Kept nowhere here.
+            answer = mail.connect_provider(
+                address, str(body.get("password") or ""),
+                code=str(body.get("code") or ""),
+                mailbox_password=str(body.get("mailbox_password") or ""),
+                restart=bool(body.get("restart")),
+                provider=str(body.get("provider") or ""),
+            )
+            out: dict = {"email": mail.settings(),
+                         "done": bool(answer.get("done")),
+                         "needs": answer.get("needs", ""),
+                         "text": answer.get("text", "")}
+            # Only a web page goes on as a link to open.
+            if str(answer.get("url") or "").startswith("https://"):
+                out["url"] = answer["url"]
+            if out["done"]:
+                try:
+                    out["said"] = mail.test(address)
+                except mail.MailError as exc:
+                    out["said"] = (f"Signed in, but reading the mail did "
+                                   f"not work yet: {exc}")
+            return out
         if name == "email-test":
             return {"email": mail.settings(), "said": mail.test(address)}
         if name == "email-default":

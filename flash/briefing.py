@@ -152,7 +152,10 @@ def _trash_emails(card_ids: Iterable[str]) -> list[str]:
     for card_id in card_ids:
         kind, _, key = str(card_id or "").partition(":")
         account, _, uid = key.rpartition(":")
-        if kind == "email" and uid.isdigit():
+        # A mail provider's uid is not a number, but comes with its
+        # account.
+        if kind == "email" and (uid.isdigit() or
+                                (account and mail.uid_ok(uid))):
             wanted.append((account, uid))
 
     def run(account: str, uid: str) -> None:

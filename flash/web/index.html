@@ -2260,7 +2260,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-default-note { font-size: 12.5px; color: var(--text-3); margin: 10px 0 0; }
 .email-card .what { flex: 1; }
 .email-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; align-self: center; }
-.email-form .field[hidden] { display: none; }
+.email-form .field[hidden], .email-form .email-imap-instead[hidden], .email-form .email-step[hidden], .email-form .email-servers[hidden], .email-form .email-step-link[hidden] { display: none; }
+.email-form .email-imap-instead { margin: 2px 0 10px; }
+.email-step { margin: 4px 0 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.email-step p { margin: 0 0 8px; font-size: 13px; color: var(--text-2); }
+.email-step .field { margin-bottom: 0; }
 .cal-feed-form { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; max-width: 720px; }
 .cal-feed-form input { flex: 1 1 180px; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 12px; outline: 0; }
 .cal-feed-form input.mono { font-family: var(--mono); font-size: 13px; flex-basis: 300px; }
@@ -18156,7 +18160,9 @@ function emailCard(host, account, e) {
   card.querySelector("b").textContent = account.address;
   const isDefault = account.address === e.default;
   if (isDefault && e.accounts.length > 1) card.querySelector(".name-row").insertAdjacentHTML("beforeend", `<span class="default-badge" data-tip="Email goes to it when nobody else is named, and from it when no account is">Default</span>`);
-  card.querySelector(".servers").textContent = `IMAP ${account.imap} · SMTP ${account.smtp}`;
+  card.querySelector(".servers").textContent = account.provider
+    ? (account.provider_missing ? `Its ${account.provider_label} extension is not installed` : `Signed in with ${account.provider_label}`)
+    : `IMAP ${account.imap} · SMTP ${account.smtp}`;
   const said = card.querySelector(".said");
   const test = el("button", "btn small", "Test");
   test.type = "button";
@@ -18206,6 +18212,8 @@ function drawEmailForm(host, account, e) {
     <h3 class="email-form-title">${account ? "Change this account" : e.accounts.length ? "Add another email" : "Connect your email"}</h3>
     <label class="field"><span>Email address</span><input name="address" type="email" placeholder="you@gmail.com" required${account ? " readonly" : ""}></label>
     <label class="field"><span>App password</span><input name="password" type="password" class="mono" placeholder="${saved ? "Saved: leave blank to keep it" : "xxxx xxxx xxxx xxxx"}"${saved ? "" : " required"}><small class="pw-help">An app password from your account's security settings, never your account's own. Kept in <code>~/.flash/email.json</code>, readable only by you.</small></label>
+    <label class="check-inline email-imap-instead" hidden><input type="checkbox" name="imapInstead"><span>Use IMAP and SMTP instead, with an app password</span></label>
+    <div class="email-step" hidden><p class="email-step-text"></p><p class="email-step-link" hidden><a target="_blank" rel="noopener noreferrer">Open the check</a></p><label class="field email-step-field" hidden><span></span><input name="step" autocomplete="one-time-code"></label></div>
     <details class="email-servers"><summary>Servers</summary>
       <label class="field"><span>IMAP (reading)</span><input name="imap" class="mono" placeholder="imap.gmail.com:993"></label>
       <label class="field"><span>SMTP (sending)</span><input name="smtp" class="mono" placeholder="smtp.gmail.com:465"><small>Filled in for Gmail, Outlook, iCloud, Yahoo, AOL, Fastmail and Zoho. Port 465 is SSL; any other uses STARTTLS.</small></label>
@@ -18220,24 +18228,92 @@ function drawEmailForm(host, account, e) {
   const helpFor = { "gmail.com": "https://myaccount.google.com/apppasswords", "googlemail.com": "https://myaccount.google.com/apppasswords", "icloud.com": "https://account.apple.com/account/manage", "me.com": "https://account.apple.com/account/manage", "yahoo.com": "https://login.yahoo.com/account/security", "fastmail.com": "https://app.fastmail.com/settings/security/apps" };
   const help = form.querySelector(".pw-help");
   const plain = help.innerHTML;
+  const pwLabel = form.password.closest(".field").querySelector("span");
+  const serversBox = form.querySelector(".email-servers");
+  const instead = form.querySelector(".email-imap-instead");
+  const step = form.querySelector(".email-step");
+  const stepField = step.querySelector(".email-step-field");
+  // A service an extension signs in to, for ADDRESS's domain: it takes
+  // the account's own password, and maybe a code after.
+  const providerFor = (address) => {
+    const domain = (address.split("@")[1] || "").trim().toLowerCase();
+    return (e.providers || []).find((p) => p.domains.includes(domain)) || null;
+  };
+  let signing = null;  // {provider, needs} while a sign-in waits on a step
+  const resetStep = () => { signing = null; step.hidden = true; stepField.hidden = true; form.step.value = ""; form.address.readOnly = !!account; form.password.readOnly = false; };
   // The provider's servers, as placeholders: what is used if left blank.
   const servers = { "gmail.com": ["imap.gmail.com:993", "smtp.gmail.com:465"], "googlemail.com": ["imap.gmail.com:993", "smtp.gmail.com:465"], "outlook.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "hotmail.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "live.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "msn.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "icloud.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "me.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "mac.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "yahoo.com": ["imap.mail.yahoo.com:993", "smtp.mail.yahoo.com:465"], "aol.com": ["imap.aol.com:993", "smtp.aol.com:465"], "fastmail.com": ["imap.fastmail.com:993", "smtp.fastmail.com:465"], "zoho.com": ["imap.zoho.com:993", "smtp.zoho.com:465"] };
   const hint = () => {
     const domain = (form.address.value.split("@")[1] || "").trim().toLowerCase();
+    const provider = providerFor(form.address.value);
+    instead.hidden = !provider;
+    if (provider && !form.imapInstead.checked) {
+      pwLabel.textContent = `${provider.label} password`;
+      help.textContent = `Your account's own password. Flash hands it to the ${provider.label} extension to sign in and keeps it nowhere: what stays is the session, in Flash's vault.`;
+      form.password.placeholder = "Your account's password";
+      form.password.required = true;
+      serversBox.hidden = true;
+      return;
+    }
+    pwLabel.textContent = "App password";
+    form.password.placeholder = saved && !(account && account.provider) ? "Saved: leave blank to keep it" : "xxxx xxxx xxxx xxxx";
+    form.password.required = !saved || !!(account && account.provider);
+    serversBox.hidden = false;
     const link = helpFor[domain];
     help.innerHTML = plain + (link ? ` <a href="${link}" target="_blank" rel="noopener">Make one</a>.` : "");
     const [imap, smtp] = servers[domain] || (domain.includes(".") ? [`imap.${domain}:993`, `smtp.${domain}:465`] : ["imap.example.com:993", "smtp.example.com:465"]);
     form.imap.placeholder = imap;
     form.smtp.placeholder = smtp;
   };
-  form.address.addEventListener("input", hint);
+  form.address.addEventListener("input", () => { resetStep(); hint(); });
+  form.imapInstead.addEventListener("change", () => { resetStep(); hint(); });
+  if (account && !account.provider && providerFor(account.address)) form.imapInstead.checked = true;
   hint();
+  // One step of signing in with a provider; the answer says what it
+  // needs next, until it is done.
+  const signIn = async (submit) => {
+    const provider = signing ? signing.provider : providerFor(form.address.value);
+    const needs = signing ? signing.needs : "";
+    const r = await command("email-signin", "", null, {
+      address: form.address.value, password: form.password.value, provider: provider.name, restart: !signing,
+      code: needs === "code" ? form.step.value : "", mailbox_password: needs === "mailbox_password" ? form.step.value : "",
+    });
+    if (r.done) { form.password.value = ""; toast(r.said || r.text); drawEmailAccounts(host, r.email); return; }
+    signing = { provider, needs: r.needs };
+    form.address.readOnly = true;
+    form.password.readOnly = true;
+    step.hidden = false;
+    step.querySelector(".email-step-text").textContent = r.text || "";
+    const linkRow = step.querySelector(".email-step-link");
+    const a = linkRow.querySelector("a");
+    linkRow.hidden = !(r.url && r.url.startsWith("https://"));
+    if (!linkRow.hidden) a.href = r.url; else a.removeAttribute("href");
+    stepField.hidden = r.needs === "verification";
+    stepField.querySelector("span").textContent = r.needs === "mailbox_password" ? "Mailbox password" : "Code from your authenticator app";
+    form.step.type = r.needs === "mailbox_password" ? "password" : "text";
+    form.step.inputMode = r.needs === "code" ? "numeric" : "text";
+    form.step.value = "";
+    form.step.required = r.needs !== "verification";
+    submit.disabled = false;
+    submit.textContent = r.needs === "verification" ? "I've done the check" : "Continue";
+    if (!stepField.hidden) form.step.focus();
+  };
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const submit = form.querySelector("[type=submit]");
     submit.disabled = true;
     submit.textContent = "Connecting…";
     error.textContent = "";
+    if (signing || (providerFor(form.address.value) && !form.imapInstead.checked)) {
+      try { await signIn(submit); }
+      catch (err) {
+        error.textContent = err.message;
+        resetStep();
+        submit.disabled = false;
+        submit.textContent = account ? "Save" : "Connect";
+      }
+      return;
+    }
     try {
       const r = await command("email-save", "", null, { address: form.address.value, password: form.password.value, imap: form.imap.value, smtp: form.smtp.value });
       toast(r.said);

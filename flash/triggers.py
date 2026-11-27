@@ -170,7 +170,7 @@ class Watcher:
             except mail.MailError:
                 continue
             for message in reversed(found):
-                if int(message["uid"] or 0) >= was:
+                if _new_since(message, was):
                     lines.append(
                         f"- From {message['from']}: {message['subject']} "
                         f"(uid {message['uid']} in {address}): "
@@ -237,6 +237,20 @@ class Watcher:
             return ""
         return (f"New in {server.name} (from its {tool['name']} tool):\n"
                 + "\n".join(new))
+
+
+def _new_since(message: dict, was: int) -> bool:
+    """Whether MESSAGE came in since WAS, what mail.next_uids() said
+    then: an IMAP uid at least as big, or for a mail provider's account,
+    whose uids are not numbers, a later time."""
+
+    uid = str(message.get("uid") or "")
+    if uid.isdigit():
+        return int(uid) >= was
+    try:
+        return float(message.get("at") or 0) > was
+    except (TypeError, ValueError):
+        return False
 
 
 def _watched_tool(tools: list[dict], wanted: str) -> Optional[dict]:

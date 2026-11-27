@@ -377,6 +377,28 @@ class Inbox:
 
 
 @dataclass
+class MailProvider:
+    """An email service Flash reads and sends through a program instead
+    of IMAP and SMTP: one whose mail is end-to-end encrypted, say. Run
+    once per thing Flash does, with {"action", "address", ...} as JSON
+    on stdin, it writes one JSON answer (mail.py has the protocol).
+    DOMAINS are the addresses it is for."""
+
+    name: str
+    label: str
+    domains: list[str]
+    run: list[str]
+    timeout: int = 120
+
+
+# A domain an email address can be at: labels of letters, digits and
+# inner hyphens, with at least one dot.
+MAIL_DOMAIN_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+)
+
+
+@dataclass
 class Device:
     """A device the extension brings (a watch, a robot, a TV): shown on
     Flash's Devices page with how to connect one, a pairing code of its
@@ -468,6 +490,7 @@ class Extension:
     tunnels: list[TunnelService] = field(default_factory=list)
     briefing: Optional[Briefing] = None
     inbox: Optional[Inbox] = None
+    mail: list[MailProvider] = field(default_factory=list)
     services: list[Service] = field(default_factory=list)
     # A folder of guides for the knowledge base (skills.knowledge).
     knowledge: Optional[Path] = None
@@ -558,6 +581,11 @@ class Extension:
             lines.append("cards in the briefing")
         if self.inbox is not None:
             lines.append("notes and questions in the inbox")
+        for provider in self.mail:
+            lines.append(
+                f"email accounts: {provider.label}, for "
+                + ", ".join(provider.domains)
+                + " addresses (Settings > Email, or /email connect)")
         if self.ui is not None:
             lines += self.ui.contents()
 
@@ -929,6 +957,35 @@ def _inbox(entry: Any, root: Path) -> Inbox:
     return Inbox(run=_argv(entry.get("run"), root, where), timeout=timeout)
 
 
+def _mail(entry: Any, root: Path, index: int) -> MailProvider:
+    where = f"mail[{index}]"
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    name = _text(entry.get("name"), f"{where}.name", required=True).lower()
+    if not NAME_RE.match(name):
+        raise ExtensionError(
+            f"{where}: {name!r} is not a mail provider name (lowercase "
+            "letters, digits, - and _)")
+    where = f"mail provider {name}"
+    domains = entry.get("domains")
+    if not isinstance(domains, list) or not domains or not all(
+            isinstance(d, str) and MAIL_DOMAIN_RE.match(d.strip().lower())
+            for d in domains):
+        raise ExtensionError(
+            f'{where}: "domains" has to list the email domains it is for, '
+            'like "example.com"')
+    timeout = 120
+    if entry.get("timeout") is not None:
+        timeout = _timeout(entry.get("timeout"), where)
+    return MailProvider(
+        name=name,
+        label=_text(entry.get("label"), f"{where}.label") or name,
+        domains=sorted({d.strip().lower() for d in domains}),
+        run=_argv(entry.get("run"), root, where),
+        timeout=timeout,
+    )
+
+
 def _setting(entry: Any, index: int) -> Setting:
     where = f"setting {index + 1}"
     if not isinstance(entry, dict):
@@ -1204,6 +1261,11 @@ def load(root: Path) -> Extension:
         _inbox(manifest["inbox"], root)
         if manifest.get("inbox") is not None else None
     )
+    mail = [
+        _mail(entry, root, index)
+        for index, entry in enumerate(_entries(manifest, "mail"))
+    ]
+    _unique([m.name for m in mail], "mail provider")
 
     ui = None
     if manifest.get("ui") is not None:
@@ -1218,12 +1280,12 @@ def load(root: Path) -> Extension:
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
             or system_one or tunnels or briefing or inbox or knowledge
-            or services or device):
+            or services or device or mail):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, system_one, tunnels, briefing, inbox, ui, knowledge, "
-            "services or device"
+            "speech, system_one, tunnels, briefing, inbox, mail, ui, "
+            "knowledge, services or device"
         )
 
     try:
@@ -1254,6 +1316,7 @@ def load(root: Path) -> Extension:
         tunnels=tunnels,
         briefing=briefing,
         inbox=inbox,
+        mail=mail,
         services=services,
         network=_network(manifest.get("network", False)),
         device=device,
@@ -1907,6 +1970,74 @@ def inbox_answer(extension: Extension, item_id: str, yes: bool, why: str = "") -
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
 
 
+def mail_providers() -> list[tuple[Extension, MailProvider]]:
+    """Every extension's mail providers, the first to claim a name
+    winning, which install already keeps from mattering."""
+
+    taken: set[str] = set()
+    found = []
+    for extension in installed():
+        for provider in extension.mail:
+            if provider.name not in taken:
+                taken.add(provider.name)
+                found.append((extension, provider))
+    return found
+
+
+def find_mail_provider(name: str = "", address: str = ""
+                       ) -> Optional[tuple[Extension, MailProvider]]:
+    """The mail provider called NAME, or with none, the one for
+    ADDRESS's domain."""
+
+    domain = address.rpartition("@")[2].strip().lower()
+    for extension, provider in mail_providers():
+        if name and provider.name == name:
+            return extension, provider
+        if not name and domain and domain in provider.domains:
+            return extension, provider
+    return None
+
+
+def call_mail(extension: Extension, provider: MailProvider,
+              request: dict) -> dict:
+    """PROVIDER's answer to REQUEST: {"ok": True, ...}, or {"ok": False,
+    "error"} however it went wrong."""
+
+    try:
+        result = subprocess.run(  # nosec B603
+            argv(extension, provider.run),
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=provider.timeout,
+            check=False,
+            env=environment(extension),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"{provider.label} took longer than "
+                f"{provider.timeout} seconds to answer."}
+    except OSError as exc:
+        return {"ok": False,
+                "error": f"Could not start {provider.label}: {exc}"}
+    lines = [line for line in result.stdout.strip().splitlines() if line]
+    try:
+        found = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        found = None
+    if not isinstance(found, dict):
+        said = (result.stderr.strip().splitlines() or [""])[-1]
+        return {"ok": False, "error": f"{provider.label} gave no answer"
+                + (f": {said}" if said else ".")}
+    if not found.get("ok"):
+        found["ok"] = False
+        found["error"] = str(found.get("error") or
+                             f"{provider.label} did not say what went "
+                             "wrong.")
+    return found
+
+
 def split_branch(target: str) -> tuple[str, str]:
     """TARGET without the branch after its #, and that branch ("" for
     the repository's default)."""
@@ -2280,6 +2411,23 @@ def clashes(
         )
         if owner:
             found.append(f"provider @{provider.name} belongs to {owner}")
+
+    for provider in extension.mail:
+        owner = next(
+            (e.name for e in others
+             if any(m.name == provider.name for m in e.mail)),
+            None,
+        )
+        if owner:
+            found.append(f"mail provider {provider.name} belongs to {owner}")
+        for domain in provider.domains:
+            owner = next(
+                (e.name for e in others
+                 if any(domain in m.domains for m in e.mail)),
+                None,
+            )
+            if owner:
+                found.append(f"{domain} addresses belong to {owner}")
 
     from .tunnel import BUILT_IN  # deferred: tunnel reads this module
 

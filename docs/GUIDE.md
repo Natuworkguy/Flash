@@ -396,7 +396,10 @@ python run.py
   model.
 - `/email [connect|test|inbox|default|progress|disconnect]`: Your email
   accounts, for Flash and your sparks to read and send from, and
-  [progress emails](#progress-emails).
+  [progress emails](#progress-emails). An address with no IMAP or SMTP
+  can be connected through an extension that adds it as a mail provider
+  (see [EXTENSIONS.md](EXTENSIONS.md#mail-providers)): you sign in with
+  its password, and any code it asks for, and the password is not kept.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/extension [install <source>|remove <name>]`: List, install, or
   remove extensions.
@@ -832,7 +835,8 @@ new note in a notes app. Checking for those on a schedule costs a shift,
 and its tokens, on every look, mostly to find nothing. Instead, Flash
 looks itself, without the model:
 
-- for email, it asks the mail server what uid the next email will get;
+- for email, it asks the mail server what uid the next email will get
+  (or, for a mail provider extension, when the newest one came);
 - for iMessages, it reads the newest message's number from Messages;
 - for an MCP server, it calls one read-only tool that needs no input
   (a `search` or `list` tool, say) and compares the answer.

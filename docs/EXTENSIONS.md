@@ -683,6 +683,70 @@ program runs again with `{"event": "answer", "id", "yes", "why"}`. An
 item put away or answered stays away, even if the program lists it
 again; give a new `id` to bring something back.
 
+### Mail providers
+
+Some email services have no IMAP or SMTP to sign in to, mostly ones
+whose mail is end-to-end encrypted. An extension can bring one, and its
+addresses then connect in Settings > Email and with `/email connect`
+like any other, and work everywhere Flash reads and sends email: the
+email tools, the Inbox spark, the briefing and email events.
+
+```json
+"mail": [{"name": "acme", "label": "Acme Mail",
+          "domains": ["acme.example", "acmemail.example"],
+          "run": ["python", "./provider.py"], "timeout": 120}]
+```
+
+`domains` are the addresses it is for (no other extension may claim
+them). Flash keeps such an account as its address and the provider's
+name alone, and runs the program for each thing it does, with one JSON
+object on stdin; the program writes one JSON line on stdout, `{"ok":
+true, ...}`, or `{"ok": false, "error": "..."}` in words the user can
+act on. Each request has `action` and `address`:
+
+| `action` | Also sent | Answer |
+| --- | --- | --- |
+| `signin` | `password`, `code`, `mailbox_password`, `restart` | `{"done": true, "text"}`, or `{"needs": "code" \| "mailbox_password" \| "verification", "text", "url"}` |
+| `signout` | | `{"text"}` |
+| `test` | | `{"text"}`: that it works, say with how much is unread |
+| `inbox` | `unread`, `query`, `limit`, `folder` | `{"messages": [...]}`, newest first |
+| `read` | `uid` | `{"message": {...}}` |
+| `send` | `raw`: the whole message, as Flash made it | `{"text"}`: who it went to |
+| `trash` | `uid`, `folder` | `{"folder"}`: where it went |
+| `latest` | `folder` | `{"next"}`: a number that grows when mail comes in |
+
+Signing in takes the account's own password, which Flash passes on and
+keeps nowhere. When the service asks for more (a code from an
+authenticator app, a second password, a check in the browser that a
+person is there), the answer says which in `needs`, with `text` to show
+and maybe `url` (https only) to open; Flash asks the user and calls
+again with the same password and what was asked. `restart` is true on
+the first call, to drop a sign-in left half done.
+
+A message in a list has `uid` (letters, digits and `_=+/-`, at most
+200), `from`, `subject`, `date` (as shown), `at` (a Unix time),
+`unread`, `snippet`, `attachments` (how many) and `link` (to open it in
+the service's own app); one read whole also has `to`, `cc`,
+`message_id`, `references`, `reply_to`, `body` (plain text) and
+`attachments` (their names). `next` from `latest` is compared with the
+`at` of messages: a message with a later `at` is new.
+
+Whatever lets the program back in (a session, its tokens, keys) goes in
+Flash's vault, apart from the secrets the model can name, never in a
+file of its own:
+
+```python
+from flash import vault
+vault.keep("acme", "session:me@acme.example", json.dumps(session))
+vault.kept("acme", "session:me@acme.example")   # the text, or None
+vault.unkeep("acme", "session:me@acme.example") # or unkeep("acme") for all
+```
+
+What is kept this way is encrypted with the vault's key, never listed to
+the model or put in a tool's arguments, and taken out of what any tool
+says, each string in it of 16 characters or more, if it ever shows up
+there.
+
 ### Knowledge
 
 Flash comes with a knowledge base: guides to doing each kind of task
