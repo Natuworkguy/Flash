@@ -677,8 +677,11 @@ class TestSettings:
         assert "every is 12" in out  # nosec B101
         assert "Check every: 12" in out  # nosec B101
 
-    def test_the_page_shows_and_changes_them(self, tmp_path):
-        from flash import web
+    def test_the_page_shows_and_changes_them(self, tmp_path, monkeypatch):
+        import base64
+        from pathlib import Path
+
+        from flash import asked_on, web
 
         install(tmp_path, with_settings(tmp_path / "src"))
         extensions.reload()
@@ -717,6 +720,26 @@ class TestSettings:
                                     "data": {"why": "asked"}}.items()
         with pytest.raises(ValueError, match="which signal"):
             web.command(session, {"name": "extension-signal", "arg": "tuned"})
+
+        # A picture with a signal is kept as a file, and the signal says
+        # where; a device can't name a file of its own.
+        jpeg = b"\xff\xd8\xff\xe0 the screen"
+        screens = tmp_path / "screens"
+        monkeypatch.setattr(asked_on, "screens_dir", lambda: screens)
+
+        def signalled(data, **more):
+            web.command(session, {"name": "extension-signal",
+                                  "arg": "tuned", "signal": "control-done",
+                                  "data": data, **more})
+            return [e for e in list(heard.queue) if e
+                    and e.get("type") == "extension-signal"][-1]["data"]
+
+        kept = signalled({"id": "a1", "picture": "/etc/passwd"},
+                         picture=base64.b64encode(jpeg).decode())["picture"]
+        assert Path(kept).parent == screens  # nosec B101
+        assert Path(kept).read_bytes() == jpeg  # nosec B101
+        said = signalled({"id": "a2", "picture": "/etc/passwd"})
+        assert said == {"id": "a2"}  # nosec B101
 
 
 def test_a_secret_setting_is_used_but_never_shown(tmp_path):
@@ -1149,6 +1172,27 @@ def test_an_extension_tool_can_show_the_model_a_picture():
     assert tools._pending_images == [jpeg]  # nosec B101
     assert tools._tool_pictures("plain words") == "plain words"  # nosec B101
     tools._pending_images.clear()
+
+
+def test_a_model_that_cant_see_gets_the_tools_words_for_its_picture(
+        monkeypatch):
+    import base64
+
+    from flash import tools
+
+    tools._pending_images.clear()
+    monkeypatch.setattr(tools, "model_sees_images", lambda host, model: False)
+    words = "Opened YouTube.\nCan be selected: Home | Search"
+    given = {"text": "Opened YouTube.",
+             "images": [base64.b64encode(b"\xff\xd8\xff").decode()],
+             "unseen": words}
+    said = tools._tool_pictures(json.dumps(given))
+    assert said.startswith(words)  # nosec B101
+    assert "can't see" in said  # nosec B101
+    assert tools._pending_images == []  # nosec B101
+    del given["unseen"]
+    said = tools._tool_pictures(json.dumps(given))
+    assert said.startswith("Opened YouTube.")  # nosec B101
 
 
 

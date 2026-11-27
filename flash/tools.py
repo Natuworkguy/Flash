@@ -2989,7 +2989,9 @@ def _tool_pictures(output: str) -> str:
     """An extension tool's output, with any pictures it gave handed to the
     model as built-in tools' are: a tool that prints
     {"text": "...", "images": ["<base64>", ...]} shows the model what it
-    sees (a robot's camera). Anything else is passed on as it is."""
+    sees (a robot's camera, a TV's screen). A model that can't see pictures
+    gets the tool's "unseen" words in their place, when it gives some (what
+    is in the picture, said). Anything else is passed on as it is."""
 
     if not output.startswith("{") or '"images"' not in output:
         return output
@@ -2999,6 +3001,12 @@ def _tool_pictures(output: str) -> str:
         return output
     if not isinstance(found, dict) or not isinstance(found.get("images"), list):
         return output
+    if found["images"] and not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        unseen = found.get("unseen")
+        said = unseen if isinstance(unseen, str) and unseen.strip() \
+            else str(found.get("text") or "")
+        return (said.strip() + "\n(it gave a picture too, which this model "
+                "can't see)").strip()
     shown = 0
     for item in found["images"][:4]:
         try:

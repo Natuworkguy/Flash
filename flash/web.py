@@ -6982,6 +6982,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # Which device said it (a robot's status, say, among several), and
         # the one device it is for, if only one.
         sender = session.access.about(browser) if session is not None else {}
+        # A picture with it (the TV's screen after a step) is too big to be
+        # said to everything listening: kept as a file of the device's own,
+        # and the signal says where. Only Flash names that file.
+        data = {k: v for k, v in (data or {}).items() if k != "picture"}
+        if body.get("picture"):
+            kept = asked_on.signal_picture(body.get("picture"),
+                                           str(sender.get("id") or ""))
+            if kept:
+                data["picture"] = kept
         to = str(body.get("to") or "")[:16]
         if to == "desk":
             # Voice mode here: the robot on the desk, when one is marked;
@@ -6989,7 +6998,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             to = session.access.desk("robot") if session is not None else ""
         if session is not None:
             session.hub.publish({"type": "extension-signal", "name": ext.name,
-                                 "signal": signal, "data": data or {},
+                                 "signal": signal, "data": data,
                                  **({"from": sender.get("id", "")} if sender.get("id") and
                                     DEVICE_AGENT in sender.get("agent", "") else {}),
                                  **({"to": to} if to else {})})
