@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import threading
 import time
 import unicodedata
@@ -1430,6 +1431,37 @@ def _emoji(text: str) -> str:
     ):
         raise TeamChatError("A reaction is an emoji.")
     return said
+
+
+# The reaction a double tap on a message puts on, in the web UI on a
+# touch screen: picked in Settings, a thumbs up until then.
+QUICK_REACT_SETTING = "TEAM_CHAT_QUICK_REACT"
+QUICK_REACT_DEFAULT = QUICK_REACTIONS[0]
+
+
+def quick_react() -> str:
+    """The emoji a double tap reacts with. Read from the env file, so
+    every page and device goes by what was set on any of them; one that
+    is not an emoji counts as never set."""
+
+    from .notify import _saved
+
+    try:
+        return _emoji(_saved(QUICK_REACT_SETTING))
+    except TeamChatError:
+        return QUICK_REACT_DEFAULT
+
+
+def set_quick_react(emoji: str) -> str:
+    """Make EMOJI what a double tap reacts with; TeamChatError when it is
+    not one emoji. The emoji, as kept."""
+
+    from .envfile import set_env_var
+
+    emoji = _emoji(emoji)
+    os.environ[QUICK_REACT_SETTING] = emoji
+    set_env_var(paths.ENV_PATH, QUICK_REACT_SETTING, emoji)
+    return emoji
 
 
 def react(

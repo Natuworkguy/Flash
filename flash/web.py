@@ -5340,6 +5340,8 @@ def status(ai) -> dict:
         "voice_fillers": list(humanvoice.FILLERS),
         "voice_quiet": dict(humanvoice.QUIET),
         "spark_calls": teamchat.calls_allowed(),
+        # What a double tap on a team chat message reacts with.
+        "team_chat_quick_react": teamchat.quick_react(),
         "extension_updates": extensions.updates_on(),
         "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
@@ -7365,6 +7367,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var(teamchat.CALLS_SETTING, "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"spark_calls": on}
+
+    if name == "quick-react-setting":
+        # The emoji a double tap on a team chat message reacts with; no
+        # arg: only what it is, for Settings.
+        if arg:
+            try:
+                teamchat.set_quick_react(arg)
+            except teamchat.TeamChatError as exc:
+                raise ValueError(str(exc)) from None
+            session.hub.publish({"type": "status"})
+        return {"emoji": teamchat.quick_react()}
 
     if name == "titles-setting":
         on = arg in ("on", "1", "true")

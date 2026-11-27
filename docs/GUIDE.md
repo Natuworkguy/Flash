@@ -968,6 +968,9 @@ have looked them over.
   has the spark answer again in its place, the old message gone from
   the chat and from what every spark reads of it.
   Voice mode and `:emoji` work there too.
+  On a phone or tablet, double-tap a message to react to it, and again
+  to take it back; which emoji it uses is up to you, in Settings, Sparks,
+  Double-tap to react (a thumbs up until you pick).
   Under each of your messages, one tick means it is in the chat and two
   mean a spark has read it, answering or on a shift; hover the ticks to
   see which sparks read it, and when. The terminal says the same.

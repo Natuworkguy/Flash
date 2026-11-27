@@ -2430,6 +2430,17 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .tell-row textarea { margin-top: 10px; width: 100%; resize: vertical; min-height: 64px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; }
 .tell-row .tell-foot { display: flex; justify-content: flex-end; margin-top: 4px; min-height: 16px; }
 .tell-row .saved { font-size: 12px; color: var(--text-3); }
+/* The reaction a double tap puts on: the quick ones in a row that wraps,
+   the picked one lit, and a field for any other. */
+.quick-react-row .what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.quick-react-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.quick-react-pick .e { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); font-size: 20px; line-height: 1; cursor: pointer; transition: transform 0.2s var(--spring), border-color 0.15s, background 0.15s; }
+.quick-react-pick .e:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.quick-react-pick .e:active { transform: scale(0.92); }
+.quick-react-pick .e[aria-checked="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.quick-react-pick .e:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.quick-react-pick .word-edit { height: 38px; padding-left: 4px; }
+.quick-react-pick .word-edit input { width: 64px; font-size: 17px; text-align: center; }
 .quiet-side input { width: 150px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px; text-align: center; }
 .quiet-side input.bad { border-color: var(--del); }
 .notify-limit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
@@ -3649,6 +3660,16 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 @keyframes tc-type-out { to { opacity: 0; transform: scale(0.96); } }
 .tc-line { display: flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; }
 .tc-line .tc-bubble { min-width: 0; }
+/* A double tap on a message reacts: the browser does not zoom for it,
+   and the emoji rises from where it was tapped. */
+.tc-bubble { touch-action: manipulation; }
+.tc-burst { position: fixed; z-index: 85; font-size: 46px; line-height: 1; pointer-events: none; user-select: none; transform: translate(-50%, -50%); animation: tc-burst 0.9s var(--ease) both; }
+@keyframes tc-burst {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3) rotate(-14deg); }
+  28% { opacity: 1; transform: translate(-50%, -80%) scale(1.3) rotate(6deg); }
+  55% { opacity: 1; transform: translate(-50%, -95%) scale(1) rotate(0); }
+  100% { opacity: 0; transform: translate(-50%, -160%) scale(0.85); }
+}
 .tc-reply-btn { flex: none; align-self: center; width: 28px; height: 28px; opacity: 0; color: var(--text-3); transition: opacity 0.15s, transform 0.2s var(--spring); }
 .tc-reply-btn svg { width: 15px; height: 15px; }
 .tc-msg:hover .tc-reply-btn, .tc-event-row:hover .tc-reply-btn, .tc-reply-btn:focus-visible { opacity: 1; }
@@ -11481,6 +11502,63 @@ function drawGeneral(body) {
   body.appendChild(sparkModel);
   fillSparkModelRow(sparkModel);
 
+  // What a double tap on a team chat message reacts with: one of the
+  // quick ones, or any emoji typed in. Kept by Flash, so it is the same
+  // on every device.
+  const quickRow = el("div", "setting-row static quick-react-row", `<span class="what"><b>Double-tap to react</b><span>On a phone or tablet, double-tap a message in a team chat to react with this. Double-tap it again to take it back.</span><div class="quick-react-pick" role="radiogroup" aria-label="Reaction for a double tap"></div></span>`);
+  const quickPick = quickRow.querySelector(".quick-react-pick");
+  const other = el("div", "word-edit quick-react-other", `<input type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Other" aria-label="Any other emoji"><button type="button" class="word-save" aria-label="Use this emoji" hidden>${icon("check")}</button>`);
+  const otherInput = other.querySelector("input");
+  const otherSave = other.querySelector("button");
+  const pickQuick = async (emoji) => {
+    const was = tcQuickEmoji();
+    if (!emoji || emoji === was) return;
+    showQuick(emoji);
+    try {
+      const r = await command("quick-react-setting", emoji, null);
+      info.team_chat_quick_react = r.emoji;
+      showQuick(r.emoji);
+      otherInput.value = "";
+      otherSave.hidden = true;
+      toast(`A double tap reacts with ${r.emoji} now`);
+    } catch (error) { showQuick(was); showFailure(error); }
+  };
+  const showQuick = (now) => {
+    const focused = quickPick.contains(document.activeElement);
+    quickPick.textContent = "";
+    // One typed in shows beside the quick ones, picked.
+    const choices = TC_QUICK.includes(now) ? TC_QUICK : [...TC_QUICK, now];
+    for (const emoji of choices) {
+      const b = el("button", "e");
+      b.type = "button";
+      b.textContent = emoji;
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(emoji === now));
+      b.setAttribute("aria-label", `React with ${emoji}`);
+      b.tabIndex = emoji === now ? 0 : -1;
+      b.onclick = () => pickQuick(emoji);
+      quickPick.appendChild(b);
+    }
+    quickPick.appendChild(other);
+    if (focused) quickPick.querySelector('button.e[aria-checked="true"]')?.focus();
+  };
+  quickPick.addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    const items = [...quickPick.querySelectorAll("button.e")];
+    const at = items.indexOf(document.activeElement);
+    if (!step || at < 0) return;
+    e.preventDefault();
+    const next = items[(at + step + items.length) % items.length];
+    next.focus();
+    pickQuick(next.textContent);
+  });
+  otherInput.oninput = () => { otherSave.hidden = !otherInput.value.trim() || otherInput.value.trim() === tcQuickEmoji(); };
+  const saveOther = () => pickQuick(otherInput.value.trim());
+  otherSave.onclick = saveOther;
+  otherInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); saveOther(); } };
+  showQuick(tcQuickEmoji());
+  body.appendChild(quickRow);
+
   const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “${wakeName()}”</b><span>While this page is open, saying “${wakeName()}” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. “${wakeName()}” at the top right shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
   wakeRow.type = "button";
   wakeRow.setAttribute("role", "switch");
@@ -13413,6 +13491,7 @@ function tcEntry(entry, fresh) {
   bubble.hidden = !entry.text;
   chipMentions(bubble, tcMentionable());
   bubble.title = tcClock(entry.at);
+  tcDoubleTapToReact(bubble);
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
@@ -13828,6 +13907,70 @@ function tcDrawThread() {
 // click puts the user's on or takes it off, drawn at once and then as
 // the chat has it. The smile beside the reply opens the quick ones.
 const TC_QUICK = ["👍", "❤️", "😂", "🎉", "👀", "🙏", "🔥", "✅"];
+
+// Double tap to react: on a touch screen, two quick taps on a message
+// put the user's reaction on it, or take it off, as a tap on its pill
+// does. The emoji is the one picked in Settings, a thumbs up until then.
+function tcQuickEmoji() {
+  const said = info.team_chat_quick_react;
+  return typeof said === "string" && said ? said : TC_QUICK[0];
+}
+
+// Two quick taps in about the same place, each short and still. Fed a
+// message's pointer events, it says true on the lift that ends the
+// second. A mouse never makes one, so a double click still picks a
+// word; a second finger, a scroll or a long press starts it over.
+const TC_TAP = { hold: 350, gap: 320, still: 12, near: 32 };
+function tcTaps() {
+  let down = null, last = null;
+  const far = (a, b, d) => Math.hypot(a.x - b.x, a.y - b.y) > d;
+  return (e) => {
+    if (e.pointerType === "mouse" || e.isPrimary === false) { down = last = null; return false; }
+    const at = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    if (e.type === "pointerdown") { down = at; return false; }
+    if (e.type !== "pointerup" || !down) { down = last = null; return false; }
+    const tap = at.t - down.t <= TC_TAP.hold && !far(at, down, TC_TAP.still);
+    down = null;
+    if (!tap) { last = null; return false; }
+    if (last && at.t - last.t <= TC_TAP.gap && !far(at, last, TC_TAP.near)) { last = null; return true; }
+    last = at;
+    return false;
+  };
+}
+
+function tcDoubleTapToReact(bubble) {
+  const taps = tcTaps();
+  const feed = (e) => {
+    // A link, a mention or a button in the message does its own thing.
+    if (e.target.closest?.("a, button, input, textarea, select, summary, label, .mention, [contenteditable='true']")) { taps({ type: "pointercancel" }); return; }
+    if (!taps(e)) return;
+    const box = bubble.closest(".tc-col")?.querySelector(":scope > .tc-reacts");
+    if (!box?.entry) return;
+    // The word the browser may have picked on the second tap, let go.
+    const letGo = () => { const sel = getSelection(); if (sel?.anchorNode && bubble.contains(sel.anchorNode)) sel.removeAllRanges(); };
+    letGo();
+    setTimeout(letGo, 0);
+    const emoji = tcQuickEmoji();
+    if (!((box.entry.reactions || {})[emoji] || []).includes("user")) tcBurst(emoji, e.clientX, e.clientY);
+    tcReact(box, emoji);
+  };
+  ["pointerdown", "pointerup", "pointercancel"].forEach((type) => bubble.addEventListener(type, feed));
+}
+
+// The emoji, big for a moment, rising from where the message was tapped.
+function tcBurst(emoji, x, y) {
+  if (calm.matches) return;
+  const burst = el("span", "tc-burst");
+  burst.textContent = emoji;
+  burst.setAttribute("aria-hidden", "true");
+  burst.style.left = `${x}px`;
+  burst.style.top = `${y}px`;
+  // On the page itself, as the picker is: a panel's transform would
+  // throw "fixed" off.
+  document.body.appendChild(burst);
+  burst.addEventListener("animationend", () => burst.remove(), { once: true });
+  setTimeout(() => burst.remove(), 1500);
+}
 
 function tcReactButton(entry) {
   const b = el("button", "icon-btn tc-reply-btn tc-react-btn", icon("smile"));

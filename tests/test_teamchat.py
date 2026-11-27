@@ -714,6 +714,83 @@ def test_the_page_reacts(team):
         })
 
 
+@pytest.fixture
+def quick(monkeypatch):
+    """No double-tap reaction set in this process, before or after."""
+
+    monkeypatch.setenv(teamchat.QUICK_REACT_SETTING, "")
+
+
+def test_a_double_tap_reacts_with_a_thumbs_up_until_one_is_picked(quick):
+    assert teamchat.quick_react() == THUMBS  # nosec B101
+
+
+def test_the_double_tap_reaction_is_kept_in_the_env_file(quick):
+    from dotenv import dotenv_values
+
+    from flash import paths
+
+    kept = teamchat.set_quick_react(f" {PARTY} ")
+
+    assert kept == PARTY  # nosec B101
+    assert teamchat.quick_react() == PARTY  # nosec B101
+    saved = dotenv_values(paths.ENV_PATH)
+    assert saved[teamchat.QUICK_REACT_SETTING] == PARTY  # nosec B101
+
+
+def test_every_flash_goes_by_the_double_tap_reaction_in_the_file(
+    quick, monkeypatch,
+):
+    # The keeper, or Flash open elsewhere: what the file says wins over
+    # what this process was started with.
+    teamchat.set_quick_react(PARTY)
+    monkeypatch.setenv(teamchat.QUICK_REACT_SETTING, THUMBS)
+
+    assert teamchat.quick_react() == PARTY  # nosec B101
+
+
+@pytest.mark.parametrize("said", [
+    "", "ok", ":)", "a\U0001f44d", "\U0001f44d" * 17,
+])
+def test_the_double_tap_reaction_must_be_an_emoji(quick, said):
+    teamchat.set_quick_react(PARTY)
+
+    with pytest.raises(teamchat.TeamChatError, match="emoji"):
+        teamchat.set_quick_react(said)
+    assert teamchat.quick_react() == PARTY  # nosec B101
+
+
+def test_a_double_tap_reaction_spoiled_by_hand_is_a_thumbs_up(quick):
+    from flash import paths
+    from flash.envfile import set_env_var
+
+    set_env_var(paths.ENV_PATH, teamchat.QUICK_REACT_SETTING, "heart")
+
+    assert teamchat.quick_react() == THUMBS  # nosec B101
+
+
+def test_settings_pick_the_double_tap_reaction(quick):
+    from flash import ai
+
+    session = web.Session()
+    seen = []
+    session.hub.publish = seen.append
+
+    asked = web.command(session, {"name": "quick-react-setting"})
+    picked = web.command(session, {
+        "name": "quick-react-setting", "arg": PARTY,
+    })
+
+    assert asked == {"emoji": THUMBS}  # nosec B101
+    assert picked == {"emoji": PARTY}  # nosec B101
+    # Every page hears of it, and the page's facts carry it.
+    assert {"type": "status"} in seen  # nosec B101
+    assert web.status(ai)["team_chat_quick_react"] == PARTY  # nosec B101
+    with pytest.raises(ValueError, match="emoji"):
+        web.command(session, {"name": "quick-react-setting", "arg": "yes"})
+    assert teamchat.quick_react() == PARTY  # nosec B101
+
+
 def test_a_spark_reacts_instead_of_answering(team):
     message = teamchat.say("desk", "@scout thanks for the fix!")
     client = FakeClient([
