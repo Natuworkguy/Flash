@@ -12,11 +12,14 @@ import WebKit
 
 struct Launch: Decodable { let command: [String]; let log: String; let status: String; let running: String }
 
-final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+                 WKScriptMessageHandler {
     var window: NSWindow!
     var web: WKWebView!
     var base: URL?
     var pendingPrompt: String?
+    var full = false                                    // in full screen, or on the way in
+    var lights: (right: CGFloat, mid: CGFloat)?         // where the window's own buttons are (measureLights)
     let launch: Launch = {
         let url = Bundle.main.url(forResource: "launch", withExtension: "json")!
         return try! JSONDecoder().decode(Launch.self, from: Data(contentsOf: url))
@@ -27,10 +30,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.websiteDataStore = .default()   // the page's own storage (its token, its preferences) kept between runs
-        // The page makes room for the window's buttons, which sit over its top left corner.
-        config.userContentController.addUserScript(WKUserScript(
-            source: "document.documentElement.classList.add('mac-app')",
-            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // The page's top rows are the window's title bar: it tells the app when one is pressed (titleBarPress).
+        config.userContentController.add(self, name: "flashWindow")
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -41,20 +42,81 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         window.title = "Flash"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden        // the page says "Flash" itself; no title over it
-        // An empty unified toolbar makes the title bar 52 points tall, which puts the close, minimise and zoom
-        // buttons at its middle, 26 points down: the page's top row is 52 points with "Flash" at its middle, so the
-        // two share a line.
+        // An empty unified toolbar makes the title bar 52 points tall, with the close, minimise and zoom buttons at
+        // its middle. The page is told where they are (tellPage), and puts its top rows on their line, clear of them.
         let bar = NSToolbar(identifier: "FlashBar")
         bar.showsBaselineSeparator = false
         window.toolbar = bar
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.contentView = web
         window.center()
         window.setFrameAutosaveName("FlashWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        tellPage()
         start()
+    }
+
+    // ----- the window's own buttons, over the page's top left corner -----
+    // Where they are, in points from the window's top left: the right edge of the three, and the line through their
+    // middles. Measured rather than assumed, as each version of macOS puts them a little differently. Not in full
+    // screen, where they are gone; the last place they were is kept for when the window comes back out.
+    func measureLights() {
+        guard !full, !window.styleMask.contains(.fullScreen) else { return }
+        var box = NSRect.null
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let b = window.standardWindowButton(kind), !b.isHidden, let up = b.superview else { continue }
+            box = box.union(web.convert(up.convert(b.frame, to: nil), from: nil))
+        }
+        guard !box.isNull else { return }
+        let mid = web.isFlipped ? box.midY : web.bounds.height - box.midY
+        if box.maxX > 20, box.maxX < 240, mid > 4, mid < 80 { lights = (box.maxX, mid) }
+    }
+
+    // What the page is told about them, before it draws and again whenever it changes: that it is in this app
+    // ("mac-app"), whether the window is in full screen ("mac-full"), and where the buttons are (--lights-right,
+    // --lights-mid). index.html, "Flash's own window on a Mac", keeps its top rows clear of them and on their line.
+    func tellPage() {
+        measureLights()
+        var js = "(() => { const h = document.documentElement; if (!h) return; h.classList.add('mac-app'); "
+            + "h.classList.toggle('mac-full', \(full)); "
+        if let l = lights {
+            js += String(format: "h.style.setProperty('--lights-right', '%.1fpx'); h.style.setProperty('--lights-mid', '%.1fpx'); ",
+                         Double(l.right), Double(l.mid))
+        }
+        js += "})();"
+        let scripts = web.configuration.userContentController
+        scripts.removeAllUserScripts()
+        scripts.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        web.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    // In full screen the buttons are gone, and so is the room the page keeps for them; it comes back as the window
+    // does, and is measured again once it is back.
+    func windowWillEnterFullScreen(_ note: Notification) { full = true; tellPage() }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { full = false; tellPage() }
+    func windowWillExitFullScreen(_ note: Notification) { full = false; tellPage() }
+    func windowDidExitFullScreen(_ note: Notification) { tellPage() }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { full = true; tellPage() }
+
+    // A press on an empty part of the page's top rows moves the window, as a title bar does, and a double press does
+    // what the Mac is set to do with one (System Settings, Desktop & Dock: zoom, minimise or nothing). The page
+    // cannot move its window, so it says when (index.html); the press itself is still the event being handled.
+    func userContentController(_ scripts: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "flashWindow", message.frameInfo.isMainFrame, !full, let what = message.body as? String else { return }
+        if what == "drag" {
+            if let press = NSApp.currentEvent, press.window == window, press.type == .leftMouseDown || press.type == .leftMouseDragged {
+                window.performDrag(with: press)
+            }
+        } else if what == "double" {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.performMiniaturize(nil)
+            case "None": break
+            default: window.performZoom(nil)
+            }
+        }
     }
 
     // ----- Flash's web UI: the one running, or one started now -----
@@ -210,6 +272,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     // the page gone blank (its process ended): load it again
     func webViewWebContentProcessDidTerminate(_ view: WKWebView) { if let base = base { open(base) } }
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
+        tellPage()
         if view.pageZoom != 1 { setZoom(view.pageZoom) }
     }
 

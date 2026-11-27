@@ -150,10 +150,8 @@ body.side-closed #sidebar > * { opacity: 0; }
 }
 body.side-closed #sidebar { margin-left: -272px; }
 .side-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px 10px 18px; height: 56px; }
-/* In the Mac app the window's close, minimise and zoom buttons sit at the top left, over the page: the sidebar's
-   top row starts to their right, and so does the bar above the chat when the sidebar is closed. */
-html.mac-app .side-top { padding: 0 10px 0 92px; height: 52px; }
-html.mac-app body.side-closed #top { padding-left: 92px; height: 52px; }
+/* In the Mac app this row, and the others along the top, make room for the window's own buttons: see "Flash's own
+   window on a Mac", at the end of the styles. */
 .wordmark {
   display: inline-flex; align-items: center; gap: 6px;
   font: 700 21px/1 var(--brand);
@@ -4787,6 +4785,59 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 .conn-mode { display: inline-flex; border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 8px; padding: 2px; }
 .conn-mode button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim, inherit); cursor: pointer; }
 .conn-mode button.on { background: var(--raised, rgba(127,127,127,.15)); color: var(--ink, inherit); }
+
+/* Flash's own window on a Mac ----------------------------------------------------------------------------
+   In the Mac app (window.swift) the window's close, minimise and zoom buttons sit over the page's top left corner,
+   and the rows along the page's top are the window's title bar. The app says where the buttons are, in points from
+   the window's top left: --lights-right, their right edge, and --lights-mid, the line through their middles. Until
+   it says, these are where the Mac puts them. Every row the buttons could sit over keeps its own controls clear of
+   them (--lights-end) and puts them on the buttons' line, so the two read as one title bar, and nothing that opens
+   over the page reaches up under them. In full screen the buttons are gone (mac-full), and so is the room kept for
+   them. The rows keep their size when the page zooms, as the buttons do: --mz is the page's zoom and --mu one over
+   it, for the lengths around them that do zoom (flashAppZoom). */
+html.mac-app {
+  --lights-right: 78px; --lights-mid: 26px; --lights-end: calc(var(--lights-right) + 14px);
+  --title-bar: calc(2 * var(--lights-mid));
+  --mz: 1; --mu: 1;
+}
+html.mac-app:not(.mac-full) :is(.side-top, #top, #ext-panel header, .viewer-bar, #ext-dock header, .tc-wrap.full .tc-head) { zoom: var(--mu); }
+/* The rows along the top: as tall as the title bar, the buttons' line through their middle. A row with a line
+   under it is a point taller, so what it holds is still in the middle. */
+html.mac-app:not(.mac-full) .side-top { padding: 0 10px 0 var(--lights-end); height: var(--title-bar); }
+html.mac-app:not(.mac-full) #top { height: var(--title-bar); }
+html.mac-app:not(.mac-full) .viewer-bar { height: calc(var(--title-bar) + 1px); }
+html.mac-app:not(.mac-full) #ext-dock header { height: calc(var(--title-bar) + 1px); }
+html.mac-app:not(.mac-full) #ext-panel header { min-height: calc(var(--title-bar) + 1px); padding-top: 0; padding-bottom: 0; }
+/* With the sidebar closed, the bar above the chat, and an extension's page over the chat, start right of the
+   buttons. */
+html.mac-app:not(.mac-full) body.side-closed :is(#top, #ext-panel header) { padding-left: var(--lights-end); }
+@media (min-width: 801px) {
+  /* The panels come up to just under the window's top edge, so the row along their top has the buttons' line at
+     its middle and still room above and below what it holds. */
+  html.mac-app:not(.mac-full) { --panel-bar: 40px; }
+  html.mac-app:not(.mac-full) :is(main, #viewer) { margin-top: calc(max(4px, var(--lights-mid) - var(--panel-bar) / 2 - 1px) * var(--mu)); }
+  html.mac-app:not(.mac-full) #top { height: var(--panel-bar); }
+  html.mac-app:not(.mac-full) .viewer-bar { height: calc(var(--panel-bar) + 1px); }
+  html.mac-app:not(.mac-full) .viewer-bar .names { line-height: 1.2; }
+  html.mac-app:not(.mac-full) #ext-panel header { min-height: calc(var(--panel-bar) + 1px); }
+  /* The panel starts 8 points in, and its edge is a point more. */
+  html.mac-app:not(.mac-full) body.side-closed :is(#top, #ext-panel header) { padding-left: calc(var(--lights-end) - 9px * var(--mz)); }
+}
+@media (max-width: 800px) {
+  /* Narrow, a file covers the whole window, and an extension's dock comes down from under the title bar. */
+  html.mac-app:not(.mac-full) .viewer-bar { padding-left: var(--lights-end); }
+  html.mac-app:not(.mac-full) #ext-dock.open { top: calc(var(--title-bar) * var(--mu)); }
+}
+/* Full screen inside the page: the team chat's head on the buttons' line, right of them (it starts a point down,
+   under the chat's edge); a course or a chess lesson starting below them. */
+html.mac-app:not(.mac-full) .tc-wrap.full .tc-head { min-height: calc(var(--title-bar) - 1px); padding: 0 14px 0 var(--lights-end); }
+html.mac-app:not(.mac-full) .tc-wrap.full :is(.tc-who b, .tc-sub) { line-height: 1.3; }
+html.mac-app:not(.mac-full) :is(.course.full, .chess.full) { padding-top: max(24px, calc(var(--title-bar) * var(--mu))); }
+/* Sheets and dialogs open below the title bar, and what sits at the top middle stays clear of the buttons on a
+   narrow window. */
+html.mac-app:not(.mac-full) #briefing { padding-top: max(5vh, calc(var(--title-bar) * var(--mu))); }
+html.mac-app:not(.mac-full) .overlay { padding-top: max(14vh, calc((var(--title-bar) + 8px) * var(--mu))); }
+html.mac-app:not(.mac-full) :is(#call-elsewhere, #public-banner, .sc-wrap.mini .sc) { max-width: calc(100vw - 2 * var(--lights-end) * var(--mu)); }
 </style>
 </head>
 <body class="empty">
@@ -4980,12 +5031,33 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script src="/static/colour.js" defer></script>
 <script>
-// In the Mac app the window's own buttons sit over the top left and do not zoom with the page: the bars they sit in
-// are kept at their size, whatever Ctrl + or Ctrl - does to the rest.
+// In the Mac app the window's own buttons sit over the top left and do not zoom with the page: the rows they sit in
+// are kept at their size, whatever Ctrl + or Ctrl - does to the rest (see "Flash's own window on a Mac" in the
+// styles). The app calls this with the page's zoom.
 window.flashAppZoom = (z) => {
-  const k = String(1 / (Number(z) || 1));
-  for (const bar of document.querySelectorAll("html.mac-app .side-top, html.mac-app #top")) bar.style.zoom = k;
+  const k = Number(z) > 0 ? Number(z) : 1;
+  document.documentElement.style.setProperty("--mz", String(k));
+  document.documentElement.style.setProperty("--mu", String(1 / k));
 };
+// The rows along the top are the window's title bar, so a press on an empty part of one moves the window, and a
+// double press does what the Mac is set to do with a title bar (zoom, minimise or nothing). The page cannot move
+// the window itself, so it tells the app. Buttons, fields and links in those rows work as they always have.
+(() => {
+  const host = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.flashWindow;
+  if (!host) return;
+  const BARS = ".side-top, #top, #ext-panel header, .viewer-bar, #ext-dock header, .tc-wrap.full .tc-head";
+  const LIVE = "button, a, input, textarea, select, label, summary, iframe, video, audio, [contenteditable], [role=button], [role=tab], [role=menuitem], [role=link], [tabindex], [draggable=true]";
+  document.addEventListener("mousedown", (e) => {
+    const h = document.documentElement;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || !h.classList.contains("mac-app") || h.classList.contains("mac-full")) return;
+    const t = e.target instanceof Element ? e.target : null;
+    if (!t || !t.closest(BARS) || t.closest(LIVE) || getComputedStyle(t).cursor === "pointer") return;
+    const what = e.detail === 1 ? "drag" : e.detail === 2 ? "double" : null;
+    if (!what) return;
+    e.preventDefault();
+    try { host.postMessage(what); } catch {}
+  }, true);
+})();
 "use strict";
 
 // ---------------------------------------------------------------------------
