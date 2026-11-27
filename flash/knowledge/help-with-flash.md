@@ -9,7 +9,7 @@ Point the user to the right place, briefly:
 - Memory and learning: /memory, /forget N, /skills, /good and /bad on the last reply.
 - Conversations: /resume, /fork, /forks, /compact, /context, /clear, /undo (take back the last turn's file changes), /btw (a side question while it works).
 - Apps: /mcp (connectors), /extension, /email, /calendar, /computer, /voice, /secret (keys Flash uses by name).
-- Ongoing work: /sparks, /agents, /plan, /notify.
+- Ongoing work: /sparks, /agents, /plan, /notify. In a spark's details, click Reports or Documents to fold that section away or open it. Each section remembers its state for that spark in this browser.
 - Web page: /web (lan for a phone on the same network, tunnel for anywhere, port N).
 - Network address: the address shown and put in the QR is the Wi-Fi or Ethernet interface with the default route, never a VPN (utun), VM bridge or Internet Sharing address, even when a VPN takes over routing. The list the watch syncs holds every address: that one first, then the Mac's other IPv4 addresses (VPN and bridge included), then its .local name, plus the public link while it is on. The watch tries each in turn (a quick 3-second check apiece), uses the one that answered first next time, and keeps the whole list rather than dropping one that failed once. When pairing by hand, several addresses can be typed, split by commas. If the watch only knows an old address, pair it again with the address Flash shows now.
 - Health: /doctor (and /doctor fix), /version, /update, /stats.

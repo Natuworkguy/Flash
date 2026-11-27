@@ -16102,9 +16102,25 @@ function fillSpark(box, spark, again = false) {
     <div data-watch hidden><div class="spark-sec">Watching</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
-    <div data-docs hidden><div class="spark-sec">Documents</div><div class="docs-list"></div></div>
-    <div class="spark-sec">Reports</div><div data-reports></div>
+    <div class="loose" data-docs hidden><button type="button" class="group-label" data-fold="documents"><span>Documents</span><span class="gcount"></span><i>${icon("chevDown")}</i></button><div class="docs-list"></div></div>
+    <div class="loose"><button type="button" class="group-label" data-fold="reports"><span>Reports</span><span class="gcount"></span><i>${icon("chevDown")}</i></button><div data-reports></div></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
+  box.querySelectorAll("[data-fold]").forEach((head) => {
+    const key = `spark-${spark.id}-${head.dataset.fold}`;
+    const body = head.nextElementSibling;
+    const show = (fold) => {
+      head.setAttribute("aria-expanded", !fold);
+      head.dataset.tip = `${fold ? "Show" : "Hide"} ${head.dataset.fold}`;
+      body.hidden = fold;
+      head.parentElement.classList.toggle("folded", fold);
+    };
+    show(pref(key, "open") === "folded");
+    head.onclick = () => {
+      const fold = head.getAttribute("aria-expanded") === "true";
+      savePref(key, fold ? "folded" : "open");
+      show(fold);
+    };
+  });
   box.querySelector(".spark-head").prepend(withPresence(sparkAvatar({ ...spark, unread: 0 }, 64), spark));
   box.querySelector(".spark-head").style.setProperty("--c", spark.colour);
   box.querySelector("h2").textContent = spark.name;
