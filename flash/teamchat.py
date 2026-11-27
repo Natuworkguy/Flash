@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import humanvoice, paths, pings, presets, sparks, timesense
+from . import humanvoice, paths, pings, presets, sparks, timesense, visuals
 from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -151,10 +151,15 @@ You are shown the latest of the chat, then asked to post your message.
   message, details only some need, or a long look into one thing. The
   spark who said that message answers there. The user is pinged for
   every message in a thread, so keep them for what they would want.
+  When you start a thread, give it a title with send_message: a few
+  words on what it is about, as "Login bug" or "Q3 numbers".
 - When you ask the user something a tap can answer, send that question
   with send_message and give it replies: two or three short answers
   they tap under it, as "Sounds right" and "Something's off". A yes or
   no question gets Yes, No and Not now on its own.
+- When you write something for the user to send (an email, an
+  iMessage), call draft_message: it shows them a draft to change and
+  send with a tap. You never send it yourself.
 """.strip()
 
 # A spark answering in a thread: told where it is, after the room's rules.
@@ -217,7 +222,39 @@ You are shown the latest of the chat, then asked to post your message.
   with send_message and give it replies: two or three short answers
   they tap under it. A yes or no question gets Yes, No and Not now on
   its own.
+- When you write something for the user to send (an email, an
+  iMessage), call draft_message: it shows them a draft to change and
+  send with a tap. You never send it yourself.
 """.strip()
+
+# The ```ui blocks a spark can put in a chat message: the main chat's
+# kinds that fit a message in a chat, taps and forms answering here.
+CARD_KINDS = ("card", "checklist", "choices", "compare", "stats", "steps",
+              "form")
+
+CARDS_PROMPT = """
+=== Cards and buttons in a message ===
+A message can hold a card the user reads or taps, as a ```ui block of
+JSON between your sentences. In this chat, a choice they tap or a form
+they send comes back to you here as their message. Use one only where it
+does better than words: options to pick from, a short form, a summary
+of one thing, steps, a few figures. At most one in a message, valid
+JSON, and words around it so it reads without it. The kinds:
+{kinds}
+""".strip()
+
+
+def cards_prompt() -> str:
+    """What a spark is told about the cards it can put in a chat
+    message: the main chat's own lines for each kind that fits."""
+
+    lines = [
+        line for line in visuals.PROMPT.splitlines()
+        if any(line.startswith(f'- {{"type": "{kind}"')
+               for kind in CARD_KINDS)
+    ]
+    said = CARDS_PROMPT.format(kinds="\n".join(lines))
+    return said if visuals.level() == "more" else f"{said}\n\n{visuals.LESS}"
 
 
 def dm_id(spark_id: str) -> str:
@@ -274,8 +311,71 @@ SEND_MESSAGE_TOOL = {
                         "Yes, No and Not now without these."
                     ),
                 },
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "When it starts a thread: the thread's title, a "
+                        "few words on what it is about."
+                    ),
+                },
             },
             "required": ["text"],
+        },
+    },
+}
+
+# How long a thread's title can be.
+THREAD_TITLE_CHARS = 60
+
+# How many drafts a spark may put in the chat in one turn, and how long
+# each part of one can be.
+MAX_DRAFTS = 2
+DRAFT_TO_CHARS = 500
+DRAFT_SUBJECT_CHARS = 200
+DRAFT_BODY_CHARS = 8000
+DRAFT_KINDS = ("email", "imessage")
+
+DRAFT_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "draft_message",
+        "description": (
+            "Put a draft in the chat for the user to send in their name: "
+            "an email or an iMessage. They see it as a card they can "
+            "change, then send with a tap, or set aside. You never send "
+            f"it yourself. At most {MAX_DRAFTS} in a turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string", "enum": list(DRAFT_KINDS),
+                    "description": "An email or an iMessage.",
+                },
+                "to": {
+                    "type": "string",
+                    "description": (
+                        "Who it goes to: email addresses, or for an "
+                        "iMessage a contact's name, number or email."
+                    ),
+                },
+                "cc": {"type": "string",
+                       "description": "An email's copies, if any."},
+                "subject": {"type": "string",
+                            "description": "An email's subject."},
+                "body": {
+                    "type": "string",
+                    "description": "The message itself, as it would go.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "A line in the chat above the draft, as "
+                        "\"Here's the reply to Sam\"."
+                    ),
+                },
+            },
+            "required": ["kind", "body"],
         },
     },
 }
@@ -512,6 +612,15 @@ def _add(data: dict, entry: dict) -> dict:
             who = entry.get("spark") or USER
             seen = [w for w in root.get("thread_who") or [] if w != who]
             root["thread_who"] = [who, *seen][:6]
+            made = len(entry.get("files") or []) + \
+                len(entry.get("attachments") or [])
+            if made:
+                root["thread_files"] = int(root.get("thread_files") or 0) \
+                    + made
+            if root.get("resolved") and entry.get("kind") == USER \
+                    and not entry.get("hidden"):
+                # A new word from the user opens it again.
+                root.pop("resolved", None)
             root["changed"] = data["seq"]
     # The chat and its calls' lines each keep their own latest.
     said = [e for e in data["entries"] if _on_call(e)]
@@ -902,7 +1011,7 @@ def _with_presets(entry: dict) -> dict:
     a spark's message that asks the user something."""
 
     if entry.get("kind") != SPARK or entry.get("call") \
-            or entry.get("failed"):
+            or entry.get("failed") or entry.get("draft"):
         return entry
     found = presets.for_message(str(entry.get("text") or ""),
                                 entry.get("replies"))
@@ -918,7 +1027,8 @@ def history(team_key: str, since: int = 0) -> dict:
     data = _settled(team.id)
     now = time.time()
     typing = [
-        {"spark": sid, "doing": str(t.get("doing") or "")}
+        {"spark": sid, "doing": str(t.get("doing") or ""),
+         **({"thread": int(t["thread"])} if t.get("thread") else {})}
         for sid, t in data["typing"].items()
         if isinstance(t, dict) and now - float(t.get("at") or 0) < TYPING_STALE
     ]
@@ -937,7 +1047,431 @@ def history(team_key: str, since: int = 0) -> dict:
         "unread": _unread(data),
         # Its sparks are still at the last message: a call waits on.
         "answering": team.id in _busy,
+        # Shifts taken on in the chat, and questions only the user can
+        # answer, as they stand now: the page keeps their cards live.
+        "work": _work_cards(data["entries"]),
+        "asks": _ask_cards(data["entries"]),
     }
+
+
+# --- Work cards: a shift taken on in the chat, as it goes ------------------
+
+# How much of each job a work card keeps.
+WORK_JOB_CHARS = 300
+# How many jobs one card names.
+MAX_WORK_JOBS = 4
+WORK_STATES = ("queued", "working", "needs_you", "done", "stopped",
+               "failed")
+
+
+def _work_end(report) -> dict:
+    """How a work card ends, by the report its shift filed."""
+
+    state = "failed" if report.failed else (
+        "stopped" if getattr(report, "stopped", False) else "done")
+    text = " ".join(str(report.text or "").split())
+    if len(text) > EVENT_CHARS:
+        text = text[:EVENT_CHARS].rstrip() + " [...]"
+    return {"state": state, "step": text, "at": float(report.at)}
+
+
+def _work_now(entry: dict, found: dict) -> dict:
+    """Where the shift ENTRY's card is about stands now: queued, working
+    (with the step it is on), needs you, or how it ended. FOUND keeps
+    the sparks already looked up."""
+
+    work = entry.get("work") or {}
+    if isinstance(work.get("end"), dict):
+        return dict(work["end"])
+    sid = str(entry.get("spark") or "")
+    if sid not in found:
+        found[sid] = sparks.find(sid)
+    spark = found[sid]
+    if spark is None:
+        return {"state": "stopped", "step": "That spark is gone."}
+    since = float(work.get("since") or 0)
+    report = next((
+        r for r in spark.reports if not r.approval
+        and float(getattr(r, "began", 0) or 0) >= since
+    ), None)
+    if report is not None:
+        end = _work_end(report)
+        event_ = next((e for e in _entry_events(entry, found)
+                       if e.get("at", 0) >= report.at), None)
+        if event_ is not None:
+            end["report"] = event_["id"]
+        return end
+    if any(i.get("job") and float(i.get("at") or 0) >= since
+           for i in spark.inbox):
+        return {"state": "queued", "step": (
+            "Starts once the shift it is on ends"
+            if spark.status == sparks.WORKING else "Starting soon")}
+    pending = spark.pending or {}
+    if spark.status == sparks.WAITING \
+            and float(pending.get("began") or 0) >= since:
+        if spark.waiting:
+            label = pending.get("label", "")
+            return {"state": "needs_you",
+                    "step": f"Waiting for your yes: {label}"}
+        return {"state": "working", "step": "Carrying on with your answer"}
+    if spark.status == sparks.WORKING:
+        return {"state": "working", "step": spark.activity or "Working"}
+    return {"state": "queued", "step": "Starting soon"}
+
+
+def _entry_events(entry: dict, found: dict) -> list:
+    """The reports and failed shifts ENTRY's spark posted after its card
+    was made, oldest first, from the chat as FOUND holds it."""
+
+    since = float((entry.get("work") or {}).get("since") or 0)
+    return [
+        e for e in found.get("_entries", [])
+        if e.get("kind") == EVENT and e.get("what") in ("report", "failed")
+        and e.get("spark") == entry.get("spark") and e.get("at", 0) >= since
+    ]
+
+
+def _work_cards(entries: list) -> dict:
+    """Each open work card in ENTRIES, by its message's number, as it
+    stands now."""
+
+    found: dict = {"_entries": entries}
+    return {
+        str(e["id"]): _work_now(e, found) for e in _live(entries)
+        if isinstance(e.get("work"), dict) and not e["work"].get("end")
+    }
+
+
+def _work_closing(data: dict, spark_id: str, report, event_id: int) -> None:
+    """SPARK_ID's cards whose shift filed REPORT, done now: kept with
+    how they ended and the report's news, EVENT_ID, to open."""
+
+    began = float(getattr(report, "began", 0) or 0)
+    if not began:
+        return
+    for entry in data["entries"]:
+        work = entry.get("work")
+        if entry.get("spark") != spark_id or not isinstance(work, dict) \
+                or work.get("end") or float(work.get("since") or 0) > began:
+            continue
+        work["end"] = {**_work_end(report), "report": event_id}
+        entry["changed"] = data["seq"]
+
+
+def _taking_on(team_id: str, take: Callable[[dict], str], jobs: list[dict]):
+    """take_on, for a spark in TEAM_ID's chat: TAKE, the kit's own, and
+    each job it took kept in JOBS, for its message's work card."""
+
+    def taking(args: dict) -> str:
+        since = time.time()
+        said = take(args)
+        if not said.startswith("Error"):
+            job = " ".join(str(args.get("job", "")).split())
+            jobs.append({"job": job[:WORK_JOB_CHARS], "since": since})
+        return said
+
+    return taking
+
+
+def _work_of(jobs: list[dict]) -> dict:
+    """The work card for the JOBS a spark took on in one turn: one
+    shift takes them all, so one card, from the first."""
+
+    return {"jobs": [j["job"] for j in jobs[:MAX_WORK_JOBS]],
+            "since": jobs[0]["since"]}
+
+
+def _attach_work(team_id: str, entry_id: int, work: dict) -> Optional[dict]:
+    """Put the work card WORK on the message ENTRY_ID, already posted."""
+
+    def change(data: dict) -> Optional[dict]:
+        entry = _entry(data, entry_id)
+        if entry is None:
+            return None
+        entry["work"] = work
+        data["seq"] += 1
+        entry["changed"] = data["seq"]
+        return dict(entry)
+
+    return _change(team_id, change)
+
+
+# --- Asks: what only the user can say yes to, as a card in the chat -------
+
+# How much of what an ask is about its card keeps.
+ASK_DETAIL_CHARS = 1500
+
+
+def ask(team_id: str, spark: Optional[sparks.Spark], ask_id: str,
+        label: str, detail: str = "") -> Optional[dict]:
+    """Put a question only the user can answer in TEAM_ID's chat, from
+    SPARK, as a card with Approve and Not now. ASK_ID says what it
+    answers: "step:" a spark's id and when it stopped, "hire:" a
+    proposal's id, or "flow:" a flow's, its run's and its step's. One a
+    card already asks is not asked again. The entry, or None."""
+
+    team = sparks.find_team(team_id) if team_id else None
+    if team is None:
+        return None
+    label = " ".join(str(label or "").split())
+    if len(label) > EVENT_CHARS:
+        label = label[:EVENT_CHARS].rstrip() + " [...]"
+    detail = str(detail or "").strip()[:ASK_DETAIL_CHARS]
+    by = {"spark": spark.id, "name": spark.name} if spark else {}
+
+    def change(data: dict) -> Optional[dict]:
+        if any((e.get("ask") or {}).get("id") == ask_id
+               for e in data["entries"]):
+            return None
+        return _add(data, {
+            "kind": EVENT, "what": "ask", "text": label,
+            "ask": {"id": ask_id, "detail": detail, "state": "open"}, **by,
+        })
+
+    return _change(team.id, change)
+
+
+def _ask_open(ask_id: str, cache: Optional[dict] = None) -> bool:
+    """Whether what ASK_ID asks still waits on the user, wherever they
+    might answer it: here, in the Inbox, or on the Sparks page."""
+
+    cache = {} if cache is None else cache
+    kind, _, rest = str(ask_id or "").partition(":")
+    if kind == "step":
+        sid, _, stamp = rest.rpartition(":")
+        spark = sparks.find(sid)
+        return bool(spark and spark.waiting and str(int(float(
+            spark.pending.get("at") or 0))) == stamp)
+    if kind == "hire":
+        if "hires" not in cache:
+            cache["hires"] = {h.get("id") for h in sparks.hires()}
+        return rest in cache["hires"]
+    if kind == "flow":
+        from . import flows  # deferred: flows builds on sparks
+
+        parts = rest.split(":", 2)
+        if len(parts) != 3:
+            return False
+        flow = flows.find(parts[0])
+        run = next((r for r in (flow or {}).get("runs", [])
+                    if r.get("id") == parts[1]), None)
+        step = (run or {}).get("steps", {}).get(parts[2]) or {}
+        return bool(run and run.get("state") == "running"
+                    and step.get("state") == "asking")
+    return False
+
+
+def _ask_cards(entries: list) -> dict:
+    """Each ask in ENTRIES not answered here, by its number: "open"
+    while it still waits, "answered" once the user said elsewhere."""
+
+    cache: dict = {}
+    return {
+        str(e["id"]): "open" if _ask_open(e["ask"].get("id"), cache)
+        else "answered"
+        for e in _live(entries)
+        if isinstance(e.get("ask"), dict) and e["ask"].get("state") == "open"
+    }
+
+
+def answer_ask(team_key: str, entry_id: int, yes: bool,
+               why: str = "") -> dict:
+    """The user's yes or no to the ask ENTRY_ID in TEAM_KEY's chat: the
+    spark's step carries on, the proposal is decided, or the flow goes
+    on, as the Inbox would have it. The card, as it now stands."""
+
+    team = _team(team_key)
+    entry = _entry(_read(team.id), entry_id)
+    asked = (entry or {}).get("ask")
+    if not isinstance(asked, dict):
+        raise TeamChatError("That question is no longer in the chat.")
+    if asked.get("state") != "open" or not _ask_open(asked.get("id")):
+        raise TeamChatError("That was already answered.")
+    kind, _, rest = str(asked["id"]).partition(":")
+    from . import flows  # deferred: flows builds on sparks
+
+    try:
+        if kind == "step":
+            sparks.answer_step(rest.rpartition(":")[0], yes, why)
+        elif kind == "hire":
+            sparks.decide_hire(rest, yes, why)
+        elif kind == "flow":
+            fid, _, step = rest.split(":", 2)
+            flows.answer(fid, step, yes)
+        else:
+            raise TeamChatError("That can't be answered here.")
+    except (sparks.SparkError, flows.FlowError) as exc:
+        raise TeamChatError(str(exc)) from None
+
+    def change(data: dict) -> dict:
+        found = _entry(data, entry_id)
+        if found is None:
+            return dict(entry or {})
+        found["ask"] = {**found["ask"], "state": "yes" if yes else "no",
+                        "answered": time.time()}
+        data["seq"] += 1
+        found["changed"] = data["seq"]
+        return dict(found)
+
+    return _change(team.id, change)
+
+
+# --- Threads: a title, and resolving one -----------------------------------
+
+
+def resolve(team_key: str, thread: int, resolved: bool = True) -> dict:
+    """Mark the thread on THREAD resolved, or open again: a resolved one
+    folds to a line and pings no one, until the user writes in it."""
+
+    team = _team(team_key)
+
+    def change(data: dict) -> dict:
+        root = _thread_root(data, thread)
+        if not root.get("thread_count"):
+            raise TeamChatError("That message has no thread.")
+        if bool(root.get("resolved")) != bool(resolved):
+            if resolved:
+                root["resolved"] = time.time()
+            else:
+                root.pop("resolved", None)
+            data["seq"] += 1
+            root["changed"] = data["seq"]
+        return dict(root)
+
+    return _change(team.id, change)
+
+
+def _titling(team_id: str, thread: int, title: str) -> None:
+    """Give the thread on THREAD the title TITLE, when it has none."""
+
+    title = " ".join(tidy(str(title or "")).split())[:THREAD_TITLE_CHARS]
+    if not title:
+        return
+
+    def change(data: dict) -> None:
+        root = _entry(data, thread)
+        if root is None or root.get("thread_title"):
+            return
+        root["thread_title"] = title
+        data["seq"] += 1
+        root["changed"] = data["seq"]
+
+    _change(team_id, change)
+
+
+# --- Drafts: written by a spark, sent by the user --------------------------
+
+
+def _drafting(team_id: str, spark: sparks.Spark, sent: list[dict],
+              drafted: list[int], thread: int = 0):
+    """draft_message, for SPARK: the draft posted now as its message,
+    kept in SENT, for the user to send or set aside."""
+
+    def draft(args: dict) -> str:
+        if len(drafted) >= MAX_DRAFTS:
+            return (f"Error: that is {MAX_DRAFTS} drafts this turn already.")
+        kind = str(args.get("kind") or "").strip().lower()
+        if kind not in DRAFT_KINDS:
+            return "Error: a draft is an email or an iMessage."
+        body = tidy(str(args.get("body") or "")).strip()[:DRAFT_BODY_CHARS]
+        if not body:
+            return "Error: the draft was empty."
+        made = {
+            "kind": kind, "to": " ".join(str(args.get("to") or "").split())
+            [:DRAFT_TO_CHARS], "body": body, "state": "open",
+        }
+        if kind == "email":
+            made["cc"] = " ".join(str(args.get("cc") or "").split())[
+                :DRAFT_TO_CHARS]
+            made["subject"] = " ".join(tidy(str(
+                args.get("subject") or "")).split())[:DRAFT_SUBJECT_CHARS]
+        note = " ".join(tidy(str(args.get("note") or "")).split())[
+            :sparks.MESSAGE_CHARS]
+        word = "email" if kind == "email" else "iMessage"
+        note = note or f"Here's a draft {word} for you to send."
+        sent.append(_post(team_id, spark, {
+            "text": note, "draft": made,
+            **({"thread": thread} if thread else {}),
+        }))
+        drafted.append(sent[-1]["id"])
+        sparks.tool_line(f"DraftMessage({word} to {made['to'][:60]})")
+        return (f"(the draft is in the chat as #{sent[-1]['id']}: the user "
+                "sends it, or not, from there)")
+
+    return draft
+
+
+def _deliver(draft: dict) -> str:
+    """Send DRAFT as the user left it: who it went to."""
+
+    if draft["kind"] == "email":
+        from . import mail  # deferred: only a draft sent needs it
+
+        try:
+            return mail.send(mail.compose(
+                draft.get("to", ""), draft.get("subject", ""),
+                draft.get("body", ""), None, draft.get("cc", ""),
+            ))
+        except mail.MailError as exc:
+            raise TeamChatError(str(exc)) from None
+    from . import computer  # deferred: only a draft sent needs it
+
+    if not computer.allowed("imessage"):
+        raise TeamChatError(
+            "Flash isn't allowed to send iMessages. Turn it on in Settings "
+            "under what Flash may do on this computer."
+        )
+    if not str(draft.get("to") or "").strip():
+        raise TeamChatError("Say who it goes to first.")
+    try:
+        name, handle = computer.recipient(draft["to"])
+        computer.send_imessage(handle, draft.get("body", ""))
+    except computer.ComputerError as exc:
+        raise TeamChatError(str(exc)) from None
+    return name if name == handle else f"{name}, {handle}"
+
+
+def send_draft(team_key: str, entry_id: int, changes: Optional[dict] = None,
+               send: bool = True) -> dict:
+    """Send the draft on message ENTRY_ID as the user changed it, by
+    CHANGES (to, cc, subject, body), or set it aside: the user's own
+    tap, so it goes in their name. The message, as it now stands."""
+
+    team = _team(team_key)
+    entry = _entry(_read(team.id), entry_id)
+    draft = (entry or {}).get("draft")
+    if not isinstance(draft, dict):
+        raise TeamChatError("That draft is no longer in the chat.")
+    if draft.get("state") != "open":
+        raise TeamChatError("That draft was already sent."
+                            if draft.get("state") == "sent"
+                            else "That draft was set aside.")
+    final = dict(draft)
+    for key, most in (("to", DRAFT_TO_CHARS), ("cc", DRAFT_TO_CHARS),
+                      ("subject", DRAFT_SUBJECT_CHARS),
+                      ("body", DRAFT_BODY_CHARS)):
+        if isinstance((changes or {}).get(key), str) and (
+                key in final or draft["kind"] == "email"):
+            final[key] = changes[key].strip()[:most]
+    if send:
+        if not str(final.get("body") or "").strip():
+            raise TeamChatError("The draft has nothing in it.")
+        final["sent_to"] = _deliver(final)
+        final["state"] = "sent"
+    else:
+        final["state"] = "dropped"
+    final["done"] = time.time()
+
+    def change(data: dict) -> dict:
+        found = _entry(data, entry_id)
+        if found is None:
+            return {**(entry or {}), "draft": final}
+        found["draft"] = final
+        data["seq"] += 1
+        found["changed"] = data["seq"]
+        return dict(found)
+
+    return _change(team.id, change)
 
 
 def _unread(data: dict) -> int:
@@ -1024,10 +1558,11 @@ def read_by(entry: dict) -> list[str]:
 
 def event(team_id: str, spark: Optional[sparks.Spark], what: str,
           text: str = "", files: Optional[list] = None,
-          whom: str = "") -> Optional[dict]:
+          whom: str = "", report=None) -> Optional[dict]:
     """Put news in TEAM_ID's chat: WHAT happened (report, failed,
     joined), by SPARK, with TEXT, the start of what it said, and WHOM it
-    was for, the sparks that handed it the work, if any did."""
+    was for, the sparks that handed it the work, if any did. REPORT, the
+    shift's own: the work cards of that shift end with it."""
 
     if not team_id or sparks.find_team(team_id) is None:
         return None
@@ -1039,9 +1574,14 @@ def event(team_id: str, spark: Optional[sparks.Spark], what: str,
         by["files"] = list(files)
     if whom:
         by["for"] = whom
-    return _change(team_id, lambda data: _add(data, {
-        "kind": EVENT, "what": what, "text": text, **by,
-    }))
+
+    def change(data: dict) -> dict:
+        posted = _add(data, {"kind": EVENT, "what": what, "text": text, **by})
+        if report is not None and spark is not None:
+            _work_closing(data, spark.id, report, posted["id"])
+        return posted
+
+    return _change(team_id, change)
 
 
 def _members(team_id: str) -> list[sparks.Spark]:
@@ -1160,7 +1700,10 @@ def say(
                     "That message is no longer in the chat to reply to."
                 )
             entry["reply"] = _quote(to)
-        data["read"] = time.time()
+        if not hidden:
+            # A note the sparks answer, with no one at the chat, leaves
+            # what came before it unread.
+            data["read"] = time.time()
         return _add(data, entry)
 
     return _change(team.id, change)
@@ -1170,7 +1713,11 @@ def _line(entry: dict, by_id: dict) -> str:
     line = _said_line(entry, by_id)
     replies = int(entry.get("thread_count") or 0)
     if replies:
-        line += f" [thread: {replies} repl{'y' if replies == 1 else 'ies'}]"
+        title = f' "{entry["thread_title"]}"' \
+            if entry.get("thread_title") else ""
+        done = ", resolved" if entry.get("resolved") else ""
+        line += (f" [thread{title}: {replies} "
+                 f"repl{'y' if replies == 1 else 'ies'}{done}]")
     reactions = _reactions(entry)
     if not reactions:
         return line
@@ -1231,16 +1778,39 @@ def _said_line(entry: dict, by_id: dict) -> str:
     name = entry.get("name") or (spark.name if spark else "A spark")
     who = f"{name} ({spark.handle})" if spark else name
     if kind == SPARK:
-        return f"{who}{' (edited)' if entry.get('versions') else ''}: {text}"
+        return (f"{who}{' (edited)' if entry.get('versions') else ''}: "
+                f"{text}{_draft_note(entry)}")
+    if entry.get("what") == "ask":
+        asked = entry.get("ask") or {}
+        answer = {"yes": "the user said yes", "no": "the user said no"}.get(
+            asked.get("state", ""), "waiting on the user")
+        return f"({who} asked the user's yes: {text} [{answer}])"
     what = {
         "report": "filed a report", "failed": "could not finish a shift",
         "joined": "joined the team", "left": "left the team",
+        "took_on": "took on a job",
     }.get(entry.get("what", ""), entry.get("what", ""))
     if entry.get("what") == "handed":
         what = f"handed {entry.get('for') or 'a teammate'} a task"
     elif entry.get("for"):
         what += f" for {entry['for']}"
     return f"({who} {what}{': ' + text if text else ''})"
+
+
+def _draft_note(entry: dict) -> str:
+    """What became of the draft on ENTRY, as a spark reads it: "" when
+    it holds none."""
+
+    draft = entry.get("draft")
+    if not isinstance(draft, dict):
+        return ""
+    word = "email" if draft.get("kind") == "email" else "iMessage"
+    to = f" to {draft['to']}" if draft.get("to") else ""
+    state = {
+        "sent": f"the user sent it to {draft.get('sent_to') or 'them'}",
+        "dropped": "the user set it aside, unsent",
+    }.get(draft.get("state", ""), "waiting for the user to send it")
+    return f" [a draft {word}{to}: {state}]"
 
 
 def _call_line(entry: dict) -> str:
@@ -1333,10 +1903,14 @@ def _view(team: sparks.Team, spark: sparks.Spark, entries: list,
     )
 
 
-def _set_typing(team_id: str, spark_id: str, doing: str) -> None:
+def _set_typing(team_id: str, spark_id: str, doing: str,
+                thread: int = 0) -> None:
     def change(data: dict) -> None:
         if doing:
-            data["typing"][spark_id] = {"at": time.time(), "doing": doing}
+            data["typing"][spark_id] = {
+                "at": time.time(), "doing": doing,
+                **({"thread": thread} if thread else {}),
+            }
         else:
             data["typing"].pop(spark_id, None)
 
@@ -1356,6 +1930,10 @@ def _post(team_id: str, spark: sparks.Spark, entry: dict,
 
     posted = _change(team_id, change)
     if entry.get("thread"):
+        root = _entry(_read(team_id), int(entry["thread"])) or {}
+        if root.get("resolved"):
+            # Resolved: it stays quiet until the user writes in it.
+            return posted
         # Every message in a thread pings the user: they asked for that.
         pings.ping(spark, str(entry.get("text") or ""), "thread", team_id,
                    always=True, thread=int(entry["thread"]))
@@ -1395,6 +1973,8 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
             except TeamChatError as exc:
                 return f"Error: {exc}"
         replies = [] if call else presets.clean(args.get("replies"))
+        if where and args.get("title"):
+            _titling(team_id, where, str(args.get("title")))
         sent.append(_post(
             team_id, spark, {"text": text, **({"call": call} if call else {}),
                              **({"thread": where} if where else {}),
@@ -1706,8 +2286,11 @@ def _reply(
     sent: list[dict] = []
     reacted: list[str] = []
     edited: list[int] = []
+    # The jobs it takes on this turn: its message carries their card.
+    jobs: list[dict] = []
     tools = {
         **kit.tools,
+        "take_on": _taking_on(team.id, kit.tools["take_on"], jobs),
         "send_message": _sending(team.id, spark, sent, call_id, thread),
         "react": _reacting(team.id, spark, reacted),
         "edit_message": _editing(team.id, spark, edited),
@@ -1719,6 +2302,10 @@ def _reply(
     if call:
         tools["end_call"] = _ending(ended)
         schemas.append(END_CALL_TOOL)
+    else:
+        # Drafts are for the chat on a screen, not a call.
+        tools["draft_message"] = _drafting(team.id, spark, sent, [], thread)
+        schemas.append(DRAFT_MESSAGE_TOOL)
     others = [s for s in _members(team.id) if s.id != spark.id]
     # A team can have several leads, equals at the top of it.
     leads = _leads(team.id)
@@ -1729,7 +2316,7 @@ def _reply(
         + (lead_word if any(s.id == lead.id for lead in leads) else "")
         for s in others
     ) or "(no one else yet)"
-    _set_typing(team.id, spark.id, "Thinking")
+    _set_typing(team.id, spark.id, "Thinking", thread)
     entry: Optional[dict] = None
     try:
         model = sparks.model_of(spark)
@@ -1749,6 +2336,8 @@ def _reply(
             ) + "\n\n" + GUEST_PROMPT.format(team=team.name)
         if thread:
             said += "\n\n" + THREAD_PROMPT.format(root=thread)
+        if not call:
+            said += "\n\n" + cards_prompt()
         on_call = ""
         if call:
             on_call = (CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT) \
@@ -1780,7 +2369,7 @@ def _reply(
                 else contextlib.nullcontext():
             text = sparks._work(
                 spark, messages, tools, schemas, steps,
-                lambda doing: _set_typing(team.id, spark.id, doing),
+                lambda doing: _set_typing(team.id, spark.id, doing, thread),
                 sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
                 names=_ultra_tools() if ultra else None,
                 audit_as="team chat", quiet_ok=True,
@@ -1807,13 +2396,34 @@ def _reply(
         # The page hangs up once it has read this one out.
         entry = {**(entry or {"text": "Bye!", "steps": steps}),
                  "end_call": True}
+    work = _work_of(jobs) if jobs else None
     if entry is not None:
         if call_id:
             entry = {**entry, "call": call_id}
         elif thread:
             entry = {**entry, "thread": thread}
+        if work is not None:
+            # Its shift's card goes on its answer, as it says it is on it.
+            entry = {**entry, "work": work}
         return [*sent, _post(team.id, spark, entry, done=True)]
     _set_typing(team.id, spark.id, "")
+    if work is not None:
+        # Quiet but for the job: the card goes on the last it sent, or
+        # stands as news of its own.
+        mine = next((s for s in reversed(sent) if not s.get("draft")), None)
+        if mine is not None:
+            changed = _attach_work(team.id, mine["id"], work)
+            if changed is not None:
+                sent = [changed if s["id"] == mine["id"] else s for s in sent]
+        else:
+            def took(data: dict) -> dict:
+                return _add(data, {
+                    "kind": EVENT, "what": "took_on", "spark": spark.id,
+                    "name": spark.name, "text": work["jobs"][0],
+                    "work": work, **({"thread": thread} if thread else {}),
+                })
+
+            sent = [*sent, _change(team.id, took)]
     if not sent and not reacted and not edited:
         sparks.log(spark.id, "team_chat_quiet", team=team.name)
     return sent

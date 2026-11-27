@@ -89,6 +89,7 @@ Requirements:
 | `SPARK_RETRY` | No | `1` | - | `1` has a spark whose model failed try again on its next shift, on its schedule. `0` stops it until you press Try again or give it another model. Usually set with Try again every shift in Settings, Sparks. |
 | `SPARK_CALLS` | No | `1` | - | `0` stops sparks from calling you: they are not offered the call and @mention you instead. Usually set with Let sparks call me in Settings, or `/call incoming off`. |
 | `TEAM_CHAT_QUICK_REACT` | No | 👍 | - | The emoji a double tap on a team chat message reacts with, in the web UI on a phone or tablet; a second double tap takes it back. Any one emoji. Usually set with Double-tap to react in Settings, Sparks. |
+| `TEAM_BRIEF` | No | `1` | - | `0` stops each team's lead from posting a morning brief in its chat as your quiet hours end (or at 8:00 with none set). Usually set with Team morning brief in Settings, Sparks. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
 | `VOICE_INPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash listens on, e.g. `BlackHole 2ch` to hear through a virtual device. |

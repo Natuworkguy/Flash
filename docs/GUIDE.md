@@ -978,6 +978,40 @@ have looked them over.
   Under each of your messages, one tick means it is in the chat and two
   mean a spark has read it, answering or on a shift; hover the ticks to
   see which sparks read it, and when. The terminal says the same.
+- **Work cards.** When a spark takes on a job in the team chat, its
+  message carries a card: the job in a line, where it stands (Queued,
+  Working, Needs you, Done, Stopped or Didn't finish) and the step it is
+  on, kept up to date as the shift runs. Steer sends a change of course
+  the shift takes from its next step, and Stop ends it there (Call off,
+  while it waits on you). When its report lands, the card turns Done
+  with Open report, which takes you to the report in the chat.
+- **Approve in the chat.** A step a spark on the team waits on your yes
+  for, a hire or change it proposes, and a flow's "Ask me first" step
+  show in the team chat as a card with what it is, Approve and Not now.
+  Answer it there, in the Inbox or on the Sparks page: the others stop
+  asking, and the card says you answered elsewhere.
+- **Cards and buttons.** Sparks can post the same cards the main chat
+  has (a card, a checklist, choices, a comparison, stats, steps or a
+  form). A tap on a choice, or a form you send, answers in the team
+  chat, as a reply to the spark that asked, or in the thread it is in.
+- **Threads.** A spark that starts a thread gives it a short title, and
+  the link under the message becomes a small card: the title, how many
+  replies and files, and a live line while a spark works in it ("Scout
+  is running tests"). Resolve, at the top of an open thread, folds it to
+  one line and stops its pings; write in it again and it opens.
+- **Drafts.** When a spark writes something for you to send, an email
+  or an iMessage, it comes as a draft card you can change: To, Cc and
+  Subject for an email, and the message. Send sends it as you left it,
+  from your own mail or Messages; Don't send sets it aside; Copy copies
+  the text. A spark never sends a draft itself.
+- **Team morning brief.** As your quiet hours end (or at 8:00 with none
+  set), each team's lead posts one message in its chat: how many things
+  need you and the nearest, then a line for each report and failed shift
+  since you last looked. A team with nothing to tell stays quiet, and it
+  is said once a day. Switch it off in Settings, Sparks, Team morning
+  brief (`TEAM_BRIEF=0`). Opening a team chat after half an hour or more
+  away, a line marks where what came meanwhile starts, with how much of
+  it there is: "While you were away · 1 needs you, 3 reports".
 - **Calls.** The phone button in a spark's private chat calls it, and in
   a team's chat starts a group call, each spark speaking in a voice of
   its own. The spark speaks first; mute, share your screen or turn

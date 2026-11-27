@@ -556,6 +556,10 @@ class Report:
     rating: int = 0
     # It stopped to ask: the user's yes or no carries it on.
     approval: bool = False
+    # When its shift started (through any wait for approval), and whether
+    # it was stopped part way, as the user asked: for a chat's work card.
+    began: float = 0.0
+    stopped: bool = False
     # Web chats that gave it a job, for the report to be posted into,
     # and the ones it has been posted into so far.
     chats: list[str] = field(default_factory=list)
@@ -1803,7 +1807,20 @@ def _team_news(
         teamchat.event(
             spark.team, spark, "failed" if report.failed else "report",
             report.text, report.files, whom=" and ".join(answered or []),
+            report=report,
         )
+
+
+def _ask_news(spark: Spark, ask_id: str, label: str, detail: str = "") -> None:
+    """Put what SPARK waits on the user's yes for in its team's chat, as
+    a card to answer there: ASK_ID says what it answers."""
+
+    if not spark.team:
+        return
+    from . import teamchat  # deferred: it builds on this module
+
+    with contextlib.suppress(Exception):
+        teamchat.ask(spark.team, spark, ask_id, label, detail)
 
 
 # --- Budgets -------------------------------------------------------------
@@ -4875,6 +4892,12 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
             tool_result("Hired: UltraAuto said yes")
             return (f"(hired: {made['spark']['name']} is on your team now. "
                     "UltraAuto is on, so the user was not asked.)")
+        goal = (made.get("spark") or {}).get("goal", "")
+        _ask_news(spark, f"hire:{made['id']}",
+                  f"Hire {made['spark']['name']}"
+                  + (f": {goal}" if goal else ""),
+                  "\n".join(filter(None, (
+                      made.get("reason", ""), *hire_details(made)))))
         tool_result("Waiting for the user to say yes or no")
         return (
             f"(proposed: hiring {made['spark']['name']} waits on the user. "
@@ -4895,6 +4918,8 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
             tool_result("Let go: UltraAuto said yes")
             return (f"(let go: {made['target_name']} is gone. UltraAuto is "
                     "on, so the user was not asked.)")
+        _ask_news(spark, f"hire:{made['id']}",
+                  f"Let {made['target_name']} go", made.get("reason", ""))
         tool_result("Waiting for the user to say yes or no")
         return (
             f"(proposed: letting {made['target_name']} go waits on the user. "
@@ -4919,6 +4944,10 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
             tool_result("Reorganized: UltraAuto said yes")
             return (f"(done: {lines}. UltraAuto is on, so the user was not "
                     "asked.)")
+        _ask_news(spark, f"hire:{made['id']}",
+                  f"Change who reports to whom on {made['team_name']}",
+                  "\n".join(filter(None, (
+                      made.get("reason", ""), *hire_details(made)))))
         tool_result("Waiting for the user to say yes or no")
         return (
             f"(proposed: {lines}. It waits on the user, who sees the chart "
@@ -5852,6 +5881,8 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         spark.pending = {}
         _save(spark)
     _changed()
+    # When this shift began: through a wait for approval, when it first did.
+    began = float((resuming or {}).get("began") or 0) or time.time()
 
     # What System One holds this shift's tool calls up against, when it
     # reviews them: the spark's standing goal, its lines, and its jobs.
@@ -6013,7 +6044,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             "messages": messages, "steps": steps, "notes": notes[0],
             "at": time.time(), "answer": "", "why": "",
             "chats": chats, "job": has_job,
-            "asked_by": askers, "jobs": jobs,
+            "asked_by": askers, "jobs": jobs, "began": began,
         }
         report = Report(
             at=time.time(), text=f"Waiting for your approval: {label}.",
@@ -6022,7 +6053,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
     except Stopped:
         report = Report(
             at=time.time(), text="Stopped, as you asked, before it finished.",
-            steps=steps, read=True,
+            steps=steps, read=True, stopped=True,
         ) if not over_budget(find(spark.id)) else Report(
             at=time.time(), steps=steps, read=True,
             text="Stopped part way: it used its budget for "
@@ -6059,6 +6090,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
     # The chats that asked get the report: the asking too, so they know
     # it waits on the user.
     report.chats = chats
+    report.began = began
     with _held():
         spark = find(spark_id)
         if spark is None:
@@ -6101,6 +6133,10 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         _call_mentioned(spark, report)
         # An @user in it pings the user.
         pings.ping(spark, report.text, "report")
+    else:
+        # The step it waits on, in its team's chat, to say yes to there.
+        _ask_news(spark, f"step:{spark.id}:{int(pending['at'])}",
+                  pending["label"], pending.get("detail", ""))
     return report
 
 
@@ -6219,10 +6255,11 @@ def stop(key: str) -> Spark:
 
     def change(spark: Spark) -> None:
         if spark.status == WAITING:
+            began = float(spark.pending.get("began") or 0)
             spark.pending = {}
             spark.status = IDLE
             spark.reports.append(Report(
-                at=time.time(), read=True,
+                at=time.time(), read=True, began=began, stopped=True,
                 text="Called off while it waited for your approval.",
             ))
             for report in spark.reports:
@@ -7215,6 +7252,11 @@ def _keep(
 
             with contextlib.suppress(OSError, SparkError):
                 milestones.tick()
+            # Each team's morning brief, once a day as quiet hours end.
+            from . import teambrief
+
+            with contextlib.suppress(OSError, SparkError):
+                teambrief.tick()
             # Flows: started by their triggers, each step handed on as the one before it reports.
             from . import flows
 

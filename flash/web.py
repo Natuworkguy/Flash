@@ -100,6 +100,7 @@ from . import (
     sparkcalls,
     sparks,
     systemone,
+    teambrief,
     teamchat,
     themes,
     tidy,
@@ -5355,6 +5356,8 @@ def status(ai) -> dict:
         "voice_fillers": list(humanvoice.FILLERS),
         "voice_quiet": dict(humanvoice.QUIET),
         "spark_calls": teamchat.calls_allowed(),
+        # Whether each team's lead posts a morning brief in its chat.
+        "team_brief": teambrief.enabled(),
         # What a double tap on a team chat message reacts with.
         "team_chat_quick_react": teamchat.quick_react(),
         "extension_updates": extensions.updates_on(),
@@ -7392,6 +7395,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"spark_calls": on}
 
+    if name == "brief-teams-setting":
+        # Whether each team's lead posts a morning brief in its chat.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(teambrief.SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"team_brief": on}
+
     if name == "quick-react-setting":
         # The emoji a double tap on a team chat message reacts with; no
         # arg: only what it is, for Settings.
@@ -8152,6 +8162,15 @@ def _ring_event(entry: dict) -> dict:
             "at": entry.get("at")}
 
 
+def _number(value) -> int:
+    """VALUE as a message's number, 0 for none."""
+
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _team_command(name: str, arg: str, body: dict) -> dict:
     """The Sparks page's teams, their templates, and hires to decide."""
 
@@ -8260,6 +8279,28 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             except (TypeError, ValueError):
                 entry_id = 0
             return {"entry": teamchat.retry(arg, entry_id)}
+        if name == "team-chat-answer":
+            # The user's yes or no to an ask's card in the chat.
+            return {"entry": teamchat.answer_ask(
+                arg, _number(body.get("id")), bool(body.get("yes")),
+                str(body.get("why") or ""),
+            )}
+        if name == "team-chat-resolve":
+            # A thread marked resolved, or opened again.
+            return {"entry": teamchat.resolve(
+                arg, _number(body.get("thread")),
+                bool(body.get("resolved", True)),
+            )}
+        if name == "team-chat-send-draft":
+            # A spark's draft, sent as the user left it, or set aside.
+            changes = {
+                key: str(body[key]) for key in ("to", "cc", "subject", "body")
+                if isinstance(body.get(key), str)
+            }
+            return {"entry": teamchat.send_draft(
+                arg, _number(body.get("id")), changes,
+                send=bool(body.get("send", True)),
+            )}
         if name == "team-chat-react":
             # The user's reaction, on or off as it was not.
             try:
@@ -8407,6 +8448,9 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             )
         elif name == "spark-stop":
             spark = sparks.stop(arg)
+        elif name == "spark-steer":
+            # A change of course for the shift it is on, from the chat.
+            spark = sparks.steer(arg, str(body.get("change") or ""))
         elif name == "spark-share":
             return {"code": sparks.share_code(arg)}
         elif name == "spark-code":

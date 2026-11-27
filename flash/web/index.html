@@ -3577,6 +3577,67 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 .tc-thread-link .faces > * + * { margin-left: -6px; }
 .tc-msg.mine .tc-thread-link { align-self: flex-end; }
 .tc-wrap > .tc-thread-link, .tc-log > .tc-thread-link { align-self: center; }
+/* A thread with a title, or someone working in it: a small card. */
+.tc-thread-link .tl-text { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; text-align: left; }
+.tc-thread-link .tl-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; }
+.tc-thread-link .tl-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36ch; }
+.tc-thread-link .tl-live { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.tc-thread-link .tl-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: tc-live 1.4s ease-in-out infinite; }
+@keyframes tc-live { 50% { opacity: 0.35; } }
+.tc-thread-link.card { margin: 6px 0 4px; padding: 7px 12px 7px 7px; border-radius: 12px; border-color: var(--border); background: var(--surface); }
+.tc-thread-link.card:hover { border-color: var(--border-strong); }
+/* Resolved: folded to one quiet line, still there to open. */
+.tc-thread-link.resolved { color: var(--text-3); }
+.tc-thread-link.resolved b { color: var(--text-3); }
+.tc-thread-link .tick { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--add) 18%, transparent); color: var(--add); }
+.tc-thread-link .tick svg { width: 11px; height: 11px; }
+.tc-thread-head .tc-resolve { margin-left: auto; }
+/* Cards on a message: a shift's work, a yes to give, a draft. Each keeps
+   space around it and between its parts. */
+.tc-act { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: 500 12.5px var(--sans); cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.18s var(--spring); }
+.tc-act:hover:not(:disabled) { border-color: var(--accent); }
+.tc-act:active:not(:disabled) { transform: scale(0.97); }
+.tc-act:disabled { opacity: 0.5; cursor: default; }
+.tc-act.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.tc-work, .tc-ask, .tc-draft { --tone: var(--accent); display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--border); border-left: 3px solid var(--tone); background: var(--surface); font-size: 13px; color: var(--text-2); max-width: min(440px, 100%); box-sizing: border-box; }
+.tc-work[data-state="queued"] { --tone: var(--text-3); }
+.tc-work[data-state="needs_you"] { --tone: var(--warn); }
+.tc-work[data-state="done"] { --tone: var(--add); }
+.tc-work[data-state="stopped"] { --tone: var(--text-3); }
+.tc-work[data-state="failed"] { --tone: var(--del); }
+.tc-work-top { display: flex; align-items: flex-start; gap: 8px; }
+.tc-work-pill { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.tc-work-job { color: var(--text); font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.tc-work-step { color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tc-work[data-state="working"] .tc-work-step::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--tone); animation: tc-live 1.4s ease-in-out infinite; vertical-align: 1px; }
+.tc-work-acts, .tc-ask-acts, .tc-draft-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tc-steer { display: flex; gap: 8px; }
+.tc-steer input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: 13px var(--sans); }
+.tc-event-work { align-self: center; }
+.tc-ask-row { flex-direction: column; align-items: stretch; }
+.tc-ask { --tone: var(--warn); align-self: center; width: min(440px, 92vw); }
+.tc-ask[data-state="yes"] { --tone: var(--add); }
+.tc-ask[data-state="no"], .tc-ask[data-state="elsewhere"] { --tone: var(--text-3); }
+.tc-ask-head { display: flex; align-items: center; gap: 8px; }
+.tc-ask-head b { color: var(--text); font-weight: 600; }
+.tc-ask-head .when { margin-left: auto; color: var(--text-3); font-size: 12px; }
+.tc-ask-what { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+.tc-ask-detail { color: var(--text-3); white-space: pre-line; overflow-wrap: anywhere; }
+.tc-ask-said { font-weight: 600; color: var(--tone); }
+.tc-draft { --tone: var(--accent); width: min(440px, 100%); }
+.tc-draft-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.tc-draft-head svg { width: 15px; height: 15px; color: var(--tone); }
+.tc-draft-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+.tc-draft-field :is(input, textarea) { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: 13px var(--sans); resize: vertical; }
+.tc-draft-said { display: flex; flex-direction: column; gap: 4px; }
+.tc-draft-said .body { color: var(--text-2); white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.tc-draft[data-state="sent"] { --tone: var(--add); }
+.tc-draft[data-state="dropped"] { --tone: var(--text-3); }
+.tc-draft-state { font-weight: 600; color: var(--tone); }
+/* Back after time away: where what came meanwhile starts. */
+.tc-away { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; font-size: 12.5px; color: var(--accent); }
+.tc-away::before, .tc-away::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.tc-away span { padding: 0 2px; }
 .tc-loading, .tc-empty { margin: auto; text-align: center; color: var(--text-3); font-size: 14px; max-width: 34ch; display: flex; flex-direction: column; gap: 6px; }
 .tc-empty b { color: var(--text); font-weight: 600; font-size: 15px; }
 .tc-day { align-self: center; margin: 14px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
@@ -6295,7 +6356,8 @@ document.addEventListener("submit", (e) => {
   const card = form.closest(".ui-sheet"), ask = form.querySelector("input").value.trim();
   if (!ask || !card._sheet) return;
   const title = card.querySelector(".ui-title")?.textContent || "";
-  send(`${ask}\n\nThe table${title ? ` "${title}"` : ""} as it is now (CSV, formulas kept, row 1 is the header):\n\`\`\`csv\n${sheetCSV(card._sheet, false)}\n\`\`\`\nAnswer with the whole table back as a sheet block.`);
+  const said = `${ask}\n\nThe table${title ? ` "${title}"` : ""} as it is now (CSV, formulas kept, row 1 is the header):\n\`\`\`csv\n${sheetCSV(card._sheet, false)}\n\`\`\`\nAnswer with the whole table back as a sheet block.`;
+  if (!tcCardSend(form, said)) send(said);
   form.querySelector("input").value = "";
 });
 
@@ -6452,7 +6514,7 @@ document.addEventListener("click", (e) => {
   if (option && !option.closest(".streaming")) {
     const group = option.closest(".ui-options");
     group.querySelectorAll(".ui-option").forEach((b) => { b.disabled = true; b.classList.toggle("chosen", b === option); });
-    send(option.dataset.text);
+    if (!tcCardSend(option, option.dataset.text)) send(option.dataset.text);
     return;
   }
   const node = e.target.closest(".ui-node");
@@ -6486,7 +6548,8 @@ document.addEventListener("submit", (e) => {
   });
   form.querySelectorAll("input, select, button").forEach((x) => { x.disabled = true; });
   form.querySelector(".ui-submit").textContent = "Sent";
-  send(`${spec.title ? spec.title + "\n" : ""}${lines.join("\n")}`);
+  const said = `${spec.title ? spec.title + "\n" : ""}${lines.join("\n")}`;
+  if (!tcCardSend(form, said)) send(said);
 });
 
 // Math: $...$, $$...$$, \(...\) and \[...\] become MathML through
@@ -11574,6 +11637,19 @@ function drawGeneral(body) {
   showQuick(tcQuickEmoji());
   body.appendChild(quickRow);
 
+  // Each team's lead posts a morning brief in its chat.
+  const teamBriefRow = el("button", "setting-row team-brief-row", `<span class="what"><b>Team morning brief</b><span>As your quiet hours end, or at 8:00 with none set, each team's lead posts what needs you and what came in overnight. A team with nothing to tell stays quiet.</span></span><span class="switch" aria-hidden="true"></span>`);
+  teamBriefRow.type = "button";
+  teamBriefRow.setAttribute("role", "switch");
+  teamBriefRow.setAttribute("aria-checked", info.team_brief !== false);
+  teamBriefRow.onclick = async () => {
+    const on = teamBriefRow.getAttribute("aria-checked") !== "true";
+    teamBriefRow.setAttribute("aria-checked", on);
+    try { info.team_brief = (await command("brief-teams-setting", on ? "on" : "off")).team_brief; }
+    catch (error) { teamBriefRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(teamBriefRow);
+
   const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “${wakeName()}”</b><span>While this page is open, saying “${wakeName()}” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. “${wakeName()}” at the top right shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
   wakeRow.type = "button";
   wakeRow.setAttribute("role", "switch");
@@ -13306,6 +13382,9 @@ async function tcFetch(first = false) {
   } else if (r.entries.length) {
     log.querySelector(".tc-empty")?.remove();
   }
+  // Where each shift taken on here stands, and which asks still wait.
+  teamChat.work = r.work || {};
+  teamChat.asks = r.asks || {};
   r.entries.forEach((entry) => {
     const made = tcEntry(entry, !first);
     // a day's divider can come with it: the message is the last of what was made
@@ -13314,6 +13393,7 @@ async function tcFetch(first = false) {
     // What the sparks said since the user last looked glows when the chat opens, then fades.
     if (node?.classList && first && r.seen_up_to && (entry.at || 0) > r.seen_up_to && entry.kind !== "user" && entry.kind !== "call") node.classList.add("unread");
   });
+  if (first) tcAway(log, r);
   if (first) {
     const firstNew = log.querySelector(".unread");
     if (firstNew && log.querySelectorAll(".unread").length > 1) firstNew.scrollIntoView({ block: "center" });
@@ -13335,7 +13415,10 @@ async function tcFetch(first = false) {
     if (box) tcFillReacts(box, entry, true);
     const receipt = log.querySelector(`.tc-receipt[data-for="${CSS.escape(String(entry.id))}"]`);
     if (receipt) tcFillReceipt(receipt, entry, true);
+    tcFillCards(entry);
+    if (entry.id === teamChat.thread) tcThreadHead(entry);
   });
+  tcFillLive();
   teamChat.seq = Math.max(teamChat.seq, r.seq);
   tcTyping(r.typing);
   tcPresets();
@@ -13437,11 +13520,19 @@ function tcEntry(entry, fresh) {
   }
   if (entry.kind === "call") { teamChat.lastWho = ""; frag.appendChild(tcCallRow(entry, fresh)); return frag; }
   const spark = entry.spark ? tcSpark(entry.spark) : null;
+  if (entry.kind === "event" && entry.what === "ask" && entry.ask) {
+    teamChat.lastWho = "";
+    const line = el("div", "tc-event-row tc-ask-row");
+    line.dataset.id = entry.id;
+    line.appendChild(tcAskCard(entry));
+    frag.appendChild(line);
+    return frag;
+  }
   if (entry.kind === "event") {
     teamChat.lastWho = "";
     const what = !entry.spark ? `${entry.what} the team`
       : entry.what === "handed" ? `handed ${entry.for || "a teammate"} a task`
-      : ({ report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what) + (entry.for ? ` for ${entry.for}` : "");
+      : ({ report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team", took_on: "took on a job" }[entry.what] || entry.what) + (entry.for ? ` for ${entry.for}` : "");
     const row = el("button", `tc-event ${entry.what || ""}${fresh ? " fresh" : ""}`);
     row.type = "button";
     if (spark) { row.style.setProperty("--c", spark.colour); row.appendChild(sparkAvatar(spark, 18)); }
@@ -13467,6 +13558,7 @@ function tcEntry(entry, fresh) {
     line.append(row, tcReactButton(entry), tcReplyButton(entry));
     if (!teamChat.inThread) line.appendChild(tcThreadButton(entry));
     frag.appendChild(line);
+    if (entry.work) { const card = tcWorkCard(entry); card.classList.add("tc-event-work"); frag.appendChild(card); }
     if (!teamChat.inThread && entry.thread_count) frag.appendChild(tcThreadLink(entry));
     const reacts = tcReacts(entry);
     reacts.classList.add("tc-event-reacts");
@@ -13513,6 +13605,8 @@ function tcEntry(entry, fresh) {
   if (!teamChat.inThread) { if (mine) line.prepend(tcThreadButton(entry)); else line.appendChild(tcThreadButton(entry)); }
   col.append(line);
   if (entry.versions && entry.versions.length) col.appendChild(tcVersions(entry, bubble));
+  if (!mine && entry.draft) col.appendChild(tcDraftCard(entry));
+  if (!mine && entry.work) col.appendChild(tcWorkCard(entry));
   col.appendChild(tcReacts(entry));
   if (!teamChat.inThread && entry.thread_count) col.appendChild(tcThreadLink(entry));
   if (mine) col.appendChild(tcReceipt(entry));
@@ -13546,6 +13640,267 @@ function tcEntry(entry, fresh) {
   if (entry.end_call) row.dataset.endCall = "1";
   frag.appendChild(row);
   return frag;
+}
+
+// --- Cards on a message: a shift's work, a yes to give, a draft ----------
+
+// Where a shift a spark took on in the chat stands, in words.
+const TC_WORK_WORDS = { queued: "Queued", working: "Working", needs_you: "Needs you", done: "Done", stopped: "Stopped", failed: "Didn't finish" };
+
+// A text button on a card: LABEL, doing ON when pressed.
+function tcAct(label, on, cls = "") {
+  const b = el("button", `tc-act${cls ? ` ${cls}` : ""}`);
+  b.type = "button";
+  b.textContent = label;
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await on(b); } catch (error) { showFailure(error); } finally { b.disabled = false; }
+  };
+  return b;
+}
+
+// How a work card's shift stands: how it ended, kept on the message, or
+// as the chat's latest look found it.
+function tcWorkState(entry) {
+  const work = entry.work || {};
+  return work.end || (teamChat.work || {})[String(entry.id)] || { state: "queued", step: "Starting soon" };
+}
+
+function tcWorkCard(entry) {
+  const card = el("div", "tc-work");
+  card.dataset.for = entry.id;
+  tcFillWork(card, entry);
+  return card;
+}
+
+// The job in a line, where it stands, the step it is on, Steer and Stop
+// while it runs, and Open report once its report is in.
+function tcFillWork(card, entry) {
+  const now = tcWorkState(entry);
+  const state = TC_WORK_WORDS[now.state] ? now.state : "working";
+  const key = JSON.stringify([state, now.step || "", now.report || 0]);
+  if (card.dataset.key === key) return;
+  card.dataset.key = key;
+  card.dataset.state = state;
+  // A change of course being written stays while the step moves on.
+  const steering = state === "working" ? card.querySelector(".tc-steer") : null;
+  card.textContent = "";
+  const jobs = (entry.work && entry.work.jobs) || [];
+  const top = el("div", "tc-work-top");
+  top.appendChild(el("span", "tc-work-pill", esc(TC_WORK_WORDS[state])));
+  const job = el("span", "tc-work-job");
+  job.textContent = (jobs[0] || "A job") + (jobs.length > 1 ? ` and ${jobs.length - 1} more` : "");
+  top.appendChild(job);
+  card.appendChild(top);
+  if (now.step) card.appendChild(el("div", "tc-work-step")).textContent = now.step;
+  const spark = tcSpark(entry.spark);
+  const acts = el("div", "tc-work-acts");
+  if (spark && state === "working") {
+    acts.appendChild(tcAct("Steer", () => tcSteer(card, spark)));
+    acts.appendChild(tcAct("Stop", async () => { await command("spark-stop", spark.id, null); toast(`${spark.name} stops at its next step`); tcFetch(); }));
+  } else if (spark && state === "needs_you") {
+    acts.appendChild(tcAct("Call off", async () => { await command("spark-stop", spark.id, null); toast(`${spark.name} called off that shift`); tcFetch(); }));
+  }
+  if (now.report) acts.appendChild(tcAct("Open report", () => { if (teamChat.thread) tcCloseThread(); tcJump(now.report); }, "primary"));
+  if (acts.childElementCount) card.appendChild(acts);
+  if (steering) card.appendChild(steering);
+}
+
+// Steer: a line on the card for what the shift should do differently,
+// which it takes from its next step.
+function tcSteer(card, spark) {
+  let form = card.querySelector(".tc-steer");
+  if (form) { form.querySelector("input").focus(); return; }
+  form = el("form", "tc-steer", `<input type="text" maxlength="1000" placeholder="What should it do differently?" aria-label="What should it do differently?"><button type="submit" class="tc-act primary">Send</button>`);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const change = form.querySelector("input").value.trim();
+    if (!change) return;
+    const parts = form.querySelectorAll("input, button");
+    parts.forEach((x) => { x.disabled = true; });
+    try { await command("spark-steer", spark.id, null, { change }); toast(`${spark.name} takes that from its next step`); form.remove(); }
+    catch (error) { parts.forEach((x) => { x.disabled = false; }); showFailure(error); }
+  };
+  card.appendChild(form);
+  form.querySelector("input").focus();
+}
+
+function tcAskCard(entry) {
+  const card = el("div", "tc-ask");
+  card.dataset.for = entry.id;
+  tcFillAsk(card, entry);
+  return card;
+}
+
+// A step, a hire or a flow waiting on the user's yes: what it is, and
+// Approve or Not now, kept in step with the Inbox and the Sparks page.
+function tcFillAsk(card, entry) {
+  const ask = entry.ask || {};
+  const live = (teamChat.asks || {})[String(entry.id)];
+  const state = ask.state === "yes" || ask.state === "no" ? ask.state : live === "answered" ? "elsewhere" : "open";
+  if (card.dataset.state === state) return;
+  card.dataset.state = state;
+  card.textContent = "";
+  const spark = entry.spark ? tcSpark(entry.spark) : null;
+  const head = el("div", "tc-ask-head");
+  if (spark) head.appendChild(sparkAvatar(spark, 22));
+  const words = el("span", "words", "<b></b> needs your yes");
+  words.querySelector("b").textContent = entry.name || spark?.name || "A spark";
+  head.append(words, el("span", "when", esc(tcClock(entry.at))));
+  card.appendChild(head);
+  card.appendChild(el("div", "tc-ask-what")).textContent = entry.text || "";
+  if (ask.detail) card.appendChild(el("div", "tc-ask-detail")).textContent = ask.detail;
+  const acts = el("div", "tc-ask-acts");
+  if (state === "open") {
+    acts.append(tcAct("Approve", () => tcAnswerAsk(entry, true), "primary"), tcAct("Not now", () => tcAnswerAsk(entry, false)));
+  } else {
+    acts.appendChild(el("span", "tc-ask-said", esc({ yes: "You said yes", no: "You said no", elsewhere: "No longer waiting" }[state])));
+  }
+  card.appendChild(acts);
+}
+
+async function tcAnswerAsk(entry, yes) {
+  const r = await command("team-chat-answer", teamChat.id, null, { id: entry.id, yes });
+  if (r && r.entry && r.entry.id) { teamChat.byId.set(r.entry.id, r.entry); tcFillCards(r.entry); }
+  tcFetch();
+}
+
+function tcDraftCard(entry) {
+  const card = el("div", "tc-draft");
+  card.dataset.for = entry.id;
+  tcFillDraft(card, entry);
+  return card;
+}
+
+// A message a spark wrote for the user to send: theirs to change, then
+// Send, Don't send, or Copy. Nothing goes until they press Send.
+function tcFillDraft(card, entry) {
+  const d = entry.draft || {};
+  const state = d.state || "open";
+  if (card.dataset.state === state) return;
+  card.dataset.state = state;
+  card.textContent = "";
+  const email = d.kind === "email";
+  card.appendChild(el("div", "tc-draft-head", `${icon(email ? "mail" : "chat")}<b>${email ? "Draft email" : "Draft iMessage"}</b>`));
+  if (state !== "open") {
+    const said = el("div", "tc-draft-said");
+    if (d.subject) said.appendChild(el("b")).textContent = d.subject;
+    said.appendChild(el("span", "body")).textContent = d.body || "";
+    card.appendChild(said);
+    card.appendChild(el("span", "tc-draft-state")).textContent = state === "sent" ? `Sent to ${d.sent_to || d.to || "them"}` : "Set aside, not sent";
+    return;
+  }
+  const kept = (teamChat.draftEdits || {})[entry.id] || {};
+  const field = (key, label, area) => {
+    const wrap = el("label", "tc-draft-field");
+    wrap.appendChild(el("span", "", esc(label)));
+    const box = el(area ? "textarea" : "input");
+    if (!area) box.type = "text";
+    box.value = kept[key] ?? d[key] ?? "";
+    if (area) box.rows = Math.min(12, Math.max(3, box.value.split("\n").length + 1));
+    box.dataset.key = key;
+    box.oninput = () => { teamChat.draftEdits = teamChat.draftEdits || {}; (teamChat.draftEdits[entry.id] = teamChat.draftEdits[entry.id] || {})[key] = box.value; };
+    wrap.appendChild(box);
+    card.appendChild(wrap);
+  };
+  field("to", "To");
+  if (email) { field("cc", "Cc"); field("subject", "Subject"); }
+  field("body", email ? "Message" : "Text", true);
+  const fields = () => Object.fromEntries([...card.querySelectorAll("[data-key]")].map((b) => [b.dataset.key, b.value]));
+  const done = (r) => { if (teamChat.draftEdits) delete teamChat.draftEdits[entry.id]; if (r && r.entry) { teamChat.byId.set(r.entry.id, r.entry); tcFillCards(r.entry); } };
+  const acts = el("div", "tc-draft-acts");
+  acts.append(
+    tcAct("Send", async () => { const r = await command("team-chat-send-draft", teamChat.id, null, { id: entry.id, send: true, ...fields() }); done(r); toast(`Sent to ${r?.entry?.draft?.sent_to || "them"}`); }, "primary"),
+    tcAct("Don't send", async () => { done(await command("team-chat-send-draft", teamChat.id, null, { id: entry.id, send: false })); }),
+    tcAct("Copy", async () => { await navigator.clipboard?.writeText(fields().body || ""); toast("Copied"); }),
+  );
+  card.appendChild(acts);
+}
+
+// A message changed since it was drawn: its cards as it now stands, the
+// work card put on once its spark took on a job after it was sent.
+function tcFillCards(entry) {
+  const id = CSS.escape(String(entry.id));
+  if (entry.work) {
+    const cards = document.querySelectorAll(`#team-chat .tc-work[data-for="${id}"]`);
+    if (cards.length) cards.forEach((c) => tcFillWork(c, entry));
+    else document.querySelectorAll(`#team-chat .tc-msg[data-id="${id}"] > .tc-col`).forEach((col) => col.insertBefore(tcWorkCard(entry), col.querySelector(":scope > .tc-reacts")));
+  }
+  if (entry.ask) document.querySelectorAll(`#team-chat .tc-ask[data-for="${id}"]`).forEach((c) => tcFillAsk(c, entry));
+  if (entry.draft) document.querySelectorAll(`#team-chat .tc-draft[data-for="${id}"]`).forEach((c) => tcFillDraft(c, entry));
+}
+
+// Every work card and ask drawn, as the chat's latest look has them.
+function tcFillLive() {
+  document.querySelectorAll("#team-chat .tc-work, #team-chat .tc-ask").forEach((card) => {
+    const entry = teamChat.byId.get(Number(card.dataset.for));
+    if (!entry) return;
+    if (card.classList.contains("tc-work")) tcFillWork(card, entry); else tcFillAsk(card, entry);
+  });
+}
+
+// A tap on a choice, or a form sent, on a card in the team chat answers
+// there: in the thread it is in, or as a reply to the message holding it,
+// so the spark that asked answers first. False outside the team chat.
+function tcCardSend(node, text) {
+  if (!node.closest("#team-chat") || !teamChat.id) return false;
+  const inThread = !!node.closest(".tc-thread");
+  const row = node.closest(".tc-msg[data-id]");
+  const thread = inThread ? teamChat.thread || 0 : 0;
+  const reply = !inThread && row ? Number(row.dataset.id) : 0;
+  command("team-chat-say", teamChat.id, null, { text, thread, reply_to: reply }).then(() => tcFetch()).catch(showFailure);
+  return true;
+}
+
+// Back after time away: a line where what came meanwhile starts, with
+// how much of it there is.
+const TC_AWAY_SECONDS = 30 * 60;
+function tcAway(log, r) {
+  log.querySelector(".tc-away")?.remove();
+  const seen = r.seen_up_to || 0;
+  if (!seen || Date.now() / 1000 - seen < TC_AWAY_SECONDS) return;
+  const fresh = (r.entries || []).filter((e) => !e.thread && !e.call && (e.at || 0) > seen && e.kind !== "user" && e.kind !== "call");
+  if (!fresh.length) return;
+  const count = (n, one, many) => n ? `${n} ${n === 1 ? one : many}` : "";
+  const needs = fresh.filter((e) => (e.ask && (r.asks || {})[String(e.id)] === "open") || (e.kind === "spark" && /@user\b/i.test(e.text || ""))).length;
+  const parts = [
+    count(needs, "needs you", "need you"),
+    count(fresh.filter((e) => e.kind === "event" && e.what === "report").length, "report", "reports"),
+    count(fresh.filter((e) => e.kind === "event" && e.what === "failed").length, "failed shift", "failed shifts"),
+    count(fresh.filter((e) => e.kind === "spark").length, "message", "messages"),
+  ].filter(Boolean);
+  const first = log.querySelector(`:scope > [data-id="${CSS.escape(String(fresh[0].id))}"]`);
+  if (!first) return;
+  first.before(el("div", "tc-away", `<span><b>While you were away</b>${parts.length ? ` · ${esc(parts.join(", "))}` : ""}</span>`));
+}
+
+// The thread pane's head: its title, and Resolve or Reopen.
+function tcThreadHead(root) {
+  const head = $("#team-chat .tc-thread-head");
+  if (!head || !root) return;
+  head.querySelector(".tc-thread-title b").textContent = root.thread_title || "Thread";
+  let b = head.querySelector(".tc-resolve");
+  if (!b) {
+    b = tcAct("Resolve", async () => {
+      const r = teamChat.byId.get(teamChat.thread);
+      if (!r) return;
+      const done = await command("team-chat-resolve", teamChat.id, null, { thread: r.id, resolved: !r.resolved });
+      if (done && done.entry) { teamChat.byId.set(done.entry.id, { ...r, ...done.entry }); tcFillThreadLink(teamChat.byId.get(r.id)); }
+      if (done?.entry?.resolved) { toast("Resolved: it stays quiet until you write in it"); tcCloseThread(); }
+      else { toast("Open again"); tcThreadHead(teamChat.byId.get(r.id)); }
+    }, "tc-resolve");
+    head.appendChild(b);
+  }
+  b.textContent = root.resolved ? "Reopen" : "Resolve";
+  b.hidden = !root.thread_count;
+}
+
+// A live line on each thread's card while a spark works in it.
+function tcThreadLives() {
+  document.querySelectorAll("#team-chat .tc-log .tc-thread-link").forEach((b) => {
+    const entry = teamChat.byId.get(Number(b.dataset.for));
+    if (entry) tcFillThreadLink(entry, b);
+  });
 }
 
 // A call's one entry in the chat, as Discord shows one: who called, how
@@ -13840,15 +14195,43 @@ function tcFillThreadLink(entry, b) {
   }
   if (!b) return;
   const n = entry.thread_count || 0;
+  const replies = `${n} ${n === 1 ? "reply" : "replies"}`;
+  const live = tcThreadLive(entry.id);
+  const files = entry.thread_files || 0;
+  const key = JSON.stringify([n, entry.thread_title || "", entry.resolved || 0, files, entry.thread_last || 0, entry.thread_who || [], live]);
+  if (b.dataset.key === key) return;
+  b.dataset.key = key;
   b.textContent = "";
+  b.classList.toggle("resolved", !!entry.resolved);
+  b.classList.toggle("card", !entry.resolved && !!(entry.thread_title || live || files));
+  if (entry.resolved) {
+    b.append(el("span", "tick", icon("check")), el("b", "", esc(entry.thread_title || "Thread")), el("span", "when", `Resolved · ${esc(replies)}`));
+    b.dataset.tip = "Open the resolved thread";
+    return;
+  }
   const faces = el("span", "faces");
   (entry.thread_who || []).slice(0, 3).forEach((who) => {
     const sp = who === "user" ? null : tcSpark(who);
     if (sp) faces.appendChild(sparkAvatar(sp, 18));
   });
-  b.append(faces, el("b", "", `${n} ${n === 1 ? "reply" : "replies"}`));
-  if (entry.thread_last) b.appendChild(el("span", "when", `Last ${esc(tcClock(entry.thread_last))}`));
+  const text = el("span", "tl-text");
+  if (entry.thread_title) text.appendChild(el("span", "tl-title")).textContent = entry.thread_title;
+  const meta = el("span", "tl-meta");
+  meta.appendChild(el("b", "", esc(replies)));
+  if (files) meta.appendChild(el("span", "when", `${files} ${files === 1 ? "file" : "files"}`));
+  if (entry.thread_last && !live) meta.appendChild(el("span", "when", `Last ${esc(tcClock(entry.thread_last))}`));
+  text.appendChild(meta);
+  if (live) text.appendChild(el("span", "tl-live")).textContent = live;
+  b.append(faces, text);
   b.dataset.tip = "Open the thread";
+}
+
+// Who is at work in the thread on message ID right now, in words.
+function tcThreadLive(id) {
+  const t = (teamChat.typing || []).find((x) => x.thread === id && tcSpark(x.spark));
+  if (!t) return "";
+  const doing = t.doing && t.doing !== "Thinking" ? t.doing.replace(/^Running /, "") : "";
+  return `${tcSpark(t.spark).name} ${doing ? `is running ${doing}` : "is typing"}`;
 }
 
 function tcOpenThread(id) {
@@ -13913,6 +14296,7 @@ function tcDrawThread() {
   }
   const who = root?.kind === "user" ? "you" : root?.name || tcSpark(root?.spark)?.name || "a spark";
   pane.querySelector(".tc-thread-title .sub").textContent = `On a message from ${who}`;
+  tcThreadHead(root);
   if (atEnd || !replies.length || log.dataset.drawn !== String(id)) log.scrollTop = log.scrollHeight;
   log.dataset.drawn = String(id);
 }
@@ -14361,6 +14745,7 @@ function tcTyping(typing) {
   });
   if (now.size) box.hidden = false;
   else if (!box.querySelector(".tc-typer")) box.hidden = true;
+  tcThreadLives();
 }
 
 function tcInsert(text) {

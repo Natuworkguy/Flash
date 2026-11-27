@@ -272,6 +272,8 @@ def tick(now: Optional[float] = None) -> list[str]:
     to_start: list[str] = []
     gives: list[tuple[str, str]] = []
     asks: list[tuple[str, str]] = []
+    # The approval steps asking now, for their team's chat to ask too.
+    chats: list[tuple[dict, str, dict]] = []
     with _lock:
         flows = _read()
         changed = False
@@ -306,6 +308,7 @@ def tick(now: Optional[float] = None) -> list[str]:
                         if step["kind"] == "approval":
                             st.update(state="asking", at=now)
                             asks.append((flow["name"], step["task"]))
+                            chats.append((flow, run["id"], step))
                         else:
                             st.update(state="working", at=now)
                             gives.append((step["spark"], _handed(flow, run, step)))
@@ -328,6 +331,8 @@ def tick(now: Optional[float] = None) -> list[str]:
             notify.desktop(f"{name} needs your yes", ask[:160])
         except Exception:  # noqa: BLE001 - no desktop to notify: the page shows it
             pass
+    for flow, run_id, step in chats:
+        _ask_in_chat(flow, run_id, step)
     for fid in to_start:
         try:
             start(fid, now, why="on schedule")
@@ -335,6 +340,30 @@ def tick(now: Optional[float] = None) -> list[str]:
         except FlowError:
             pass
     return said
+
+
+def _ask_in_chat(flow: dict, run_id: str, step: dict) -> None:
+    """Ask the user's yes to STEP, an approval step of FLOW's run RUN_ID,
+    in the team chat of the spark whose work it follows (or the flow's
+    first spark on a team), as a card they can answer there."""
+    import contextlib
+
+    from . import sparks, teamchat
+
+    by_id = {s["id"]: s for s in flow["steps"]}
+    order = [by_id[a] for a in step.get("after", []) if a in by_id]
+    for one in order + flow["steps"]:
+        if one.get("kind") != "spark":
+            continue
+        spark = sparks.find(one.get("spark") or "")
+        if spark is None or not spark.team:
+            continue
+        # The Sparks page still asks it, if the chat cannot.
+        with contextlib.suppress(Exception):
+            teamchat.ask(spark.team, spark,
+                         f"flow:{flow['id']}:{run_id}:{step['id']}",
+                         f"{flow['name']}: {step['task']}")
+        return
 
 
 def summary(flow: dict) -> dict:
