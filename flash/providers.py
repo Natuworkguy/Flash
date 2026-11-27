@@ -117,12 +117,17 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _own(message: Any) -> Any:
-    """A message without what Flash keeps on it for itself: which turn
-    of a chat it began, so an edit can find it."""
+# What Flash keeps on a message for itself: which turn of a chat it
+# began, so an edit can find it, and which of its pictures is a paired
+# device's screen, for that one message only (asked_on).
+OWN_KEYS = ("turn", "screen")
 
-    if isinstance(message, dict) and "turn" in message:
-        return {k: v for k, v in message.items() if k != "turn"}
+
+def _own(message: Any) -> Any:
+    """A message without what Flash keeps on it for itself (OWN_KEYS)."""
+
+    if isinstance(message, dict) and any(k in message for k in OWN_KEYS):
+        return {k: v for k, v in message.items() if k not in OWN_KEYS}
     return message
 
 

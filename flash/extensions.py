@@ -391,10 +391,14 @@ class Device:
     # Where to get its app, if it has one.
     app: str = ""
     icon: str = ""
+    # What the model is told with each message said or typed on one of
+    # its devices ("this TV is the one they are talking to...").
+    prompt: str = ""
 
 
 MAX_DEVICE_STEPS = 8
 DEVICE_STEP_CHARS = 300
+MAX_DEVICE_PROMPT_CHARS = 2000
 
 
 def _device(entry: Any, name: str) -> Device:
@@ -418,9 +422,14 @@ def _device(entry: Any, name: str) -> Device:
     app = _text(entry.get("app"), "device.app")
     if app and not app.startswith(("https://", "http://")):
         raise ExtensionError('"device": "app" has to be a web address')
+    prompt = _text(entry.get("prompt"), "device.prompt")
+    if len(prompt) > MAX_DEVICE_PROMPT_CHARS:
+        raise ExtensionError(f'"device": "prompt" is at most '
+                             f'{MAX_DEVICE_PROMPT_CHARS} characters')
     return Device(label=label[:40], matches=[m.strip()[:40] for m in matches][:6],
                   connect=[t.strip() for t in steps if t.strip()], app=app,
-                  icon=_text(entry.get("icon"), "device.icon")[:24])
+                  icon=_text(entry.get("icon"), "device.icon")[:24],
+                  prompt=prompt)
 
 
 @dataclass
@@ -474,6 +483,11 @@ class Extension:
         lines = []
         if self.device:
             lines.append(f"devices: {self.device.label}, on the Devices page with a pairing code of its own")
+            if self.device.prompt:
+                lines.append(
+                    f"device prompt: {len(self.device.prompt)} characters "
+                    f"added to each message asked on a {self.device.label}"
+                )
 
         if self.network:
             lines.append(
@@ -1601,7 +1615,9 @@ def current_web_token() -> str:
 
 # Where each chat's turn running now was asked from, by chat id: {"from":
 # "robot" (said to a paired robot), "voice" (voice mode here), "typed"},
-# and the device it came from. A turn nobody asked for has none.
+# and the device it came from: its id, name and kind ("tv", "watch"),
+# and for a paired device, what it showed (asked_on). A turn nobody asked
+# for has none.
 turn_from: dict[str, dict] = {}
 
 
@@ -1630,6 +1646,7 @@ def environment(extension: Extension, chat: str = "") -> dict[str, str]:
     env["FLASH_TURN_FROM"] = str(asked.get("from", ""))
     env["FLASH_TURN_DEVICE"] = str(asked.get("device", ""))
     env["FLASH_TURN_DEVICE_NAME"] = str(asked.get("name", ""))
+    env["FLASH_TURN_DEVICE_KIND"] = str(asked.get("kind", ""))
     if extension.settings:
         values = settings_values(extension)
         env["FLASH_SETTINGS"] = json.dumps(

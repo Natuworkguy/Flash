@@ -191,6 +191,12 @@ same on every platform and needs no quoting.
   chat, and a button pressed in one, also get `FLASH_CHAT`, that chat's
   id, to keep something of their own per chat (Riptide gives each chat
   a window of its own and sends that chat's work to it).
+- A tool also gets how its turn was asked for: `FLASH_TURN_FROM` is
+  `robot`, `voice`, `typed`, or empty for a turn nobody asked for (a
+  spark, a schedule), and a turn asked on a paired device has its id in
+  `FLASH_TURN_DEVICE`, its name in `FLASH_TURN_DEVICE_NAME` and its kind
+  (`tv`, `watch`, `robot`) in `FLASH_TURN_DEVICE_KIND`, so a tool can act
+  on the device that was spoken to (the TV's remote turns down that TV).
 - `timeout` sets a limit in seconds (default 30, maximum 600).
 
 A tool in Python:
@@ -295,6 +301,32 @@ a pairing code just for it, and the ones paired, each to rename or remove.
 | `matches` | Words in what its devices say they are (the end of their `FlashDevice/1.0 ...` User-Agent), to know ones paired before codes were each extension's own. |
 | `connect` | Up to 8 steps, each up to 300 characters. |
 | `app` | Where to get the device's app, a web address. |
+| `prompt` | What the model is told with each message said or typed on one of its devices, up to 2000 characters: "this TV is the one they are talking to; turn it down with tv_remote". |
+
+A message from a paired device is told to the model as asked on it ("Said
+out loud to Flash on the TV"), with the extension's `prompt`, when it has
+one. The device can also send what was on its screen as it was spoken
+to, with the message (`/api/send`):
+
+```json
+"screen": {
+  "app": "the app in front",
+  "playing": {"title": "", "subtitle": "", "description": "", "app": "",
+              "state": "playing", "position": 2460, "duration": 7800},
+  "text": "the words on the screen, a line each",
+  "picture": "<base64 JPEG or PNG, up to 600 KB>",
+  "dark": false,
+  "missing": ["what it couldn't see this time, and why"]
+}
+```
+
+Every part is optional, and kept small since it goes with every message
+asked on the device: the words are cut at 800 characters and a
+description at 400. The model is told it with that one message, as
+what the device showed and never as the user's words; the picture goes
+with it only for a model that can see pictures, and is gone from the
+messages before by the next one, so a long chat on a TV doesn't carry
+every screen it ever showed.
 
 Each extension's code is its own: a device that pairs with the TV's code
 is the TV extension's, whatever it says it is. From the extension's page,

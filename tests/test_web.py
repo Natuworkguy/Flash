@@ -737,6 +737,54 @@ class TestPairing:
         with pytest.raises(extensions.ExtensionError, match="web address"):
             extensions.load(folder)
 
+    def test_a_message_from_the_tv_tells_the_model_where_and_what_was_on(self, server, tmp_path, monkeypatch):
+        from flash import asked_on, extensions
+
+        folder = tmp_path / "tv"
+        folder.mkdir()
+        (folder / "flash-extension.json").write_text(json.dumps({
+            "name": "tv", "device": {"label": "TV", "matches": ["GoogleTV"],
+                                     "prompt": "This TV is the one they are talking to."}}), encoding="utf-8")
+        ext = extensions.load(folder)
+        monkeypatch.setattr(extensions, "installed", lambda: [ext])
+        monkeypatch.setattr(extensions, "find", lambda name: ext if name == "tv" else None)
+        monkeypatch.setattr(asked_on, "screens_dir", lambda: tmp_path / "screens")
+        monkeypatch.setattr(web, "model_sees_images", lambda host, model: True)
+        key = server.session.access.sign_in("10.0.0.9", "FlashDevice/1.0 Living room", "GoogleTV", "tv")
+        FakeClient.scripts = [[part("A detective story."), part(done=True)],
+                              [part("Two hours."), part(done=True)]]
+        tv = {"X-Flash-Device": key, "User-Agent": "FlashDevice/1.0 GoogleTV"}
+        jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+
+        status, body = request(server, "POST", "/api/send", {
+            "text": "what is this movie about", "voice": True,
+            "screen": {"app": "Netflix", "playing": {"title": "Knives Out", "state": "playing"},
+                       "picture": base64.b64encode(jpeg).decode()},
+        }, headers=tv, token=False)
+        assert status == 200  # nosec B101
+        chat = server.session.chat(json.loads(body)["chat"])
+        wait_for(lambda: not (chat.busy or chat.queued) and len(FakeClient.requests) == 1)
+
+        sent = FakeClient.requests[0]["messages"][-1]
+        assert sent["content"].startswith("=== Asked on the TV ===")  # nosec B101
+        assert 'Said out loud to Flash on the TV ("Living room")' in sent["content"]  # nosec B101
+        assert "This TV is the one they are talking to." in sent["content"]  # nosec B101
+        assert '- Playing: "Knives Out" (playing)' in sent["content"]  # nosec B101
+        assert sent["content"].endswith("what is this movie about")  # nosec B101
+        device = server.session.access.about(key)["id"]
+        assert sent["images"] == [str(tmp_path / "screens" / f"{device}.jpg")]  # nosec B101
+        # the chat shows only what was said
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == ["what is this movie about"]  # nosec B101
+        assert extensions.environment(ext, chat.id)["FLASH_TURN_DEVICE_KIND"] == "tv"  # nosec B101
+
+        # the next message has a picture of its own, if any: the last one's is gone
+        request(server, "POST", "/api/send", {"chat": chat.id, "text": "how long is it", "voice": True},
+                headers=tv, token=False)
+        wait_for(lambda: not (chat.busy or chat.queued) and len(FakeClient.requests) == 2)
+        earlier = [m for m in FakeClient.requests[1]["messages"] if m.get("role") == "user"]
+        assert all("images" not in m and "screen" not in m for m in earlier)  # nosec B101
+        assert "Knives Out" in earlier[0]["content"]  # nosec B101  (in words, it stays)
+
     def test_the_server_can_be_stopped(self, monkeypatch):
         session = web.Session()
         stopped = []

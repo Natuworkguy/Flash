@@ -60,6 +60,7 @@ from rich.text import Text
 from . import agent as subagents
 from . import btw as btw_side
 from . import (
+    asked_on,
     background,
     briefing,
     calls,
@@ -4789,8 +4790,22 @@ def run_turn(
     # A meeting going on in this chat: what it is, and what was said.
     live = session.meetings.in_chat(chat.id)
     happening = live.context() if live is not None else ""
-    content = "\n\n".join(part for part in (happening, news, said, spoken) if part)
+    # Asked on a paired device (the TV): which, and what was on its
+    # screen, with a picture of it for a model that can see one. The
+    # picture is for this message only: those before lose theirs.
+    where, screen_picture = asked_on.for_turn(
+        extensions.turn_from.get(chat.id) or {},
+        lambda: model_sees_images(ai.Config.host, chat_model(chat)),
+    )
+    asked_on.forget_pictures(chat.messages)
+    if screen_picture:
+        images = [*images, screen_picture]
+    content = "\n\n".join(
+        part for part in (happening, news, where, said, spoken) if part
+    )
     asked = ai._message("user", content, images or None)
+    if screen_picture:
+        asked["screen"] = screen_picture
     # Which turn it began, so editing the message finds where to cut.
     at = session.started.get(chat.id)
     if at is not None and at < len(chat.log) and chat.log[at].get("turn"):
@@ -8841,8 +8856,21 @@ class Handler(BaseHTTPRequestHandler):
                 session.voice_notes[chat.id] = humanvoice.note_for(
                     body["voice_note"])
             device = session.access.about(self.browser)
-            kind = device_kind(device.get("product", "")) \
-                if DEVICE_AGENT in device.get("agent", "") else ""
+            paired = DEVICE_AGENT in device.get("agent", "")
+            kind = device_kind(device.get("product", "")) if paired else ""
+            # A paired device's own: which extension's it is, and what was
+            # on its screen as it was spoken to (asked_on), for the model.
+            mine = {
+                "paired": True,
+                "kind": kind,
+                "ext": device.get("ext", ""),
+                "product": device.get("product", ""),
+                # the user's name for it, else the one it paired with
+                "called": device.get("name", "")
+                or device_product(device.get("agent", "")),
+                "screen": asked_on.screen(body.get("screen"),
+                                          device.get("id", "")),
+            } if paired else {}
             sent = session.send(
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
@@ -8854,6 +8882,7 @@ class Handler(BaseHTTPRequestHandler):
                     "voice" if body.get("voice") else "typed",
                     "device": device.get("id", ""),
                     "name": device.get("name", "") or kind,
+                    **mine,
                 },
             )
             return {"chat": chat.id, **sent}
