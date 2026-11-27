@@ -85,7 +85,10 @@ def test_nothing_is_said_off_a_mac_or_with_voices(monkeypatch, nora):
     assert siri.note() == ""
 
 
-def test_settings_offers_them_last_under_their_own_engine(nora):
+def test_settings_offers_them_last_under_their_own_engine(monkeypatch, nora):
+    from flash import apple_listen
+
+    monkeypatch.setattr(apple_listen, "available", lambda: False)
     names = [c.name for c in voice.offered("speaking")]
 
     assert names[-1] == "siri-natural.Nora"
