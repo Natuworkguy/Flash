@@ -2395,6 +2395,16 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 /* Two in a row under one heading: apart, not touching. */
 .setting-row + .setting-row { margin-top: 10px; }
+/* A switch under a grid of cards or a row of buttons: clear of them. */
+:is(.email-body, .scene-grid) + .setting-row { margin-top: 18px; }
+/* In Settings no two blocks touch: anything after a row, a grid, a card or
+   a note keeps a gap from it, even with a hidden one between them. It has
+   no weight of its own, so a block that sets its own spacing keeps it, and
+   a heading and the line under it keep theirs. The panels that slide open
+   under a switch bring their own gap. */
+:where(.page.settings) :where(.tab-body, .search-tab-body, .routing-box) > :where(:not(.settings-section)) + :where(:not(.settings-section, .settings-sub, .computer-kinds, .ext-settings)) { margin-top: 10px; }
+/* A note under a row, not under its heading: apart from the row too. */
+.page.settings :is(.tab-body, .search-tab-body, .routing-box) > :not(.settings-section) + .settings-sub { margin-top: 10px; }
 .spark-model-row .side select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; max-width: 220px; outline: 0; }
 .spark-model-row.warned { border-color: color-mix(in srgb, var(--warn, #c9821f) 55%, var(--border)); }
 .model-gone-word { display: inline !important; font-size: inherit !important; font-weight: 600 !important; color: var(--warn, #c9821f) !important; margin: 0 !important; }
