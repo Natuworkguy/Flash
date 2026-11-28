@@ -321,6 +321,9 @@ MAX_VOICE_BODY = (
 )
 # The most attachments one message carries.
 MAX_ATTACHMENTS = 10
+# How much of a block of pasted text goes to the model in the message
+# itself; past it, the model is told where the rest is kept.
+PASTE_INLINE_CHARS = 100_000
 
 # Sub-agents: how often the watcher looks for finished ones, and how many
 # times in a row it may wake a chat before waiting for the person, the
@@ -2354,8 +2357,11 @@ class Session:
             return {}
         if not wake:
             # A key pasted in goes to the vault; the message, kept and
-            # sent, has only its name.
+            # sent, has only its name. So does one in a block of text
+            # pasted as a card of its own.
             text, kept = _capture(text)
+            attached, in_pasted = _capture_pasted(attached)
+            kept = [*kept, *in_pasted]
             if kept:
                 from . import vault
 
@@ -2422,13 +2428,16 @@ class Session:
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
-            # Untyped, a recording names its chat for what it is, not by
-            # its file's name.
+            # Untyped, a recording names its chat for what it is, and
+            # pasted text by its first line, not by its file's name.
             first = files[0] if files else {}
-            named = text or (
-                "Screen recording" if first.get("kind") == "video"
-                else first.get("name", "")
-            )
+            if first.get("kind") == "video":
+                named = text or "Screen recording"
+            elif first.get("kind") == "pasted":
+                line = str(first.get("preview") or "").split("\n")[0]
+                named = text or line or "Pasted text"
+            else:
+                named = text or first.get("name", "")
             chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
             chat.auto_title = chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
@@ -4364,6 +4373,35 @@ def _capture(text: str) -> tuple[str, list[str]]:
         return text, []
 
 
+def _capture_pasted(attached: list[dict]) -> tuple[list[dict], list[str]]:
+    """ATTACHED, with any key in text pasted as a card kept in the vault
+    and swapped for its name, as one typed is (_capture); and the names
+    the keys were kept under."""
+
+    out, kept = [], []
+    for info in attached:
+        path = workspace.upload_path(str(info.get("id") or "")) \
+            if info.get("kind") == "pasted" else None
+        if path is None:
+            out.append(info)
+            continue
+        try:
+            text = path.read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            out.append(info)
+            continue
+        swapped, found = _capture(text)
+        if found:
+            path.write_text(swapped, "utf-8")
+            kept.extend(found)
+            # Its card shows its first words: those, now, without the key.
+            fresh = workspace.upload_info(info["id"]) or info
+            fresh.pop("path", None)
+            info = fresh
+        out.append(info)
+    return out, kept
+
+
 # The start of each kind of image a tool hands the model, for the name
 # its copy is kept under.
 _IMAGE_STARTS = ((b"\x89PNG", ".png"), (b"\xff\xd8", ".jpg"),
@@ -4678,6 +4716,26 @@ def recording_stills(body: dict) -> tuple[list[dict], str]:
     return stills, demo.said_over(stills, pcm, voice.transcribe)
 
 
+def pasted_note(info: dict) -> str:
+    """What the model is given of a block of text the user pasted: the
+    words themselves, fenced off from what was typed, and where the rest
+    is when it runs past PASTE_INLINE_CHARS."""
+
+    try:
+        text = Path(info["path"]).read_text("utf-8", errors="replace")
+    except OSError:
+        return f"Attached file: {info['path']}"
+    shown = text[:PASTE_INLINE_CHARS].rstrip("\n")
+    # A fence longer than any run of backticks in the text itself.
+    runs = re.findall(r"`+", shown)
+    fence = "`" * max(3, max((len(r) for r in runs), default=0) + 1)
+    rest = (
+        f"\n(Cut short here: all {len(text):,} characters are in "
+        f"{info['path']})" if len(text) > PASTE_INLINE_CHARS else ""
+    )
+    return f"Pasted text:\n{fence}\n{shown}\n{fence}{rest}"
+
+
 def recording_note(info: dict) -> str:
     """What the model is told of a screen recording it is shown the
     stills of."""
@@ -4688,10 +4746,12 @@ def recording_note(info: dict) -> str:
 def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
     """What the model gets for a message with attachments: its images
     alongside it, a screen recording's stills with what was said over
-    them, and any other file named by path, for its tools to open."""
+    them, text pasted into the box in so many words, and any other file
+    named by path, for its tools to open."""
 
     images: list[str] = []
     notes: list[str] = []
+    pasted: list[str] = []
     recorded = False
     met = False
     for meta in files or []:
@@ -4702,6 +4762,9 @@ def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
             # A meeting's transcript: the write-up is what it is for.
             met = True
             notes.append(meeting.note(info))
+        elif info["kind"] == "pasted":
+            # Pasted into the box: the words go with the message.
+            pasted.append(pasted_note(info))
         elif info["kind"] == "image":
             images.append(info["path"])
         elif info["kind"] == "video" and info.get("stills"):
@@ -4717,7 +4780,9 @@ def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
         else meeting.PROMPT if met
         else ai.DEFAULT_IMAGE_PROMPT if images else ""
     )
-    content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
+    content = "\n\n".join(
+        part for part in (asked, "\n".join(notes), *pasted) if part
+    )
     return content, images
 
 
@@ -5978,6 +6043,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "made":
         return {"files": made_files(session)}
+
+    if name == "pasted-text":
+        # The whole of a block of pasted text, for the page to show.
+        try:
+            return {"text": workspace.pasted_text(arg)}
+        except workspace.WorkspaceError as exc:
+            raise ValueError(str(exc)) from None
 
     if name == "reuse-file":
         try:
@@ -9073,6 +9145,7 @@ class Handler(BaseHTTPRequestHandler):
             stills, unheard = recording_stills(body)
             kept = workspace.keep_upload(
                 str(body.get("name") or ""), data, stills or None,
+                pasted=bool(body.get("pasted")),
             )
             # Narrated, but nothing to hear it with: the page says so.
             return {**kept, "unheard": unheard} if unheard else kept

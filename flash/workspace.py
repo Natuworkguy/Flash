@@ -782,6 +782,13 @@ MAX_STILL_BYTES = 1024 * 1024
 STILLS = "stills"
 # Beside a meeting's transcript: how long it was, and when.
 MEETING = "meeting.json"
+# Beside a block of text pasted into the message box, which marks it as
+# one: the page shows it as a card, and the model is given the words.
+PASTED = "pasted"
+# How much of pasted text the page is given to show on its card.
+PASTE_PREVIEW_CHARS = 300
+# The files beside an upload that are not the upload.
+_BESIDE = (MEETING, PASTED)
 
 
 def upload_path(file_id: str) -> Optional[Path]:
@@ -791,7 +798,7 @@ def upload_path(file_id: str) -> Optional[Path]:
         return None
     try:
         kept = [p for p in (store() / "uploads" / file_id).iterdir()
-                if p.is_file() and p.name != MEETING]
+                if p.is_file() and p.name not in _BESIDE]
     except OSError:
         return None
     return kept[0] if len(kept) == 1 else None
@@ -805,13 +812,15 @@ def upload_info(file_id: str) -> Optional[dict]:
         return None
     suffix = path.suffix.lower()
     mime = SHOWN_TYPES.get(suffix, "application/octet-stream")
+    pasted = is_pasted(path)
     return {
         "id": file_id,
         "name": path.name,
         "size": path.stat().st_size,
         "mime": mime,
         "kind": (
-            "image" if mime.startswith("image/")
+            "pasted" if pasted
+            else "image" if mime.startswith("image/")
             else "video" if mime.startswith("video/")
             else "pdf" if suffix == ".pdf"
             else "model" if suffix in MODEL_TYPES
@@ -823,8 +832,41 @@ def upload_info(file_id: str) -> Optional[dict]:
         "path": str(path),
         **({"stills": len(recording_stills(file_id))}
            if mime.startswith("video/") else {}),
+        **(_pasted_of(path) if pasted else {}),
         **_meeting_of(path),
     }
+
+
+def is_pasted(path: Path) -> bool:
+    """Whether the upload at PATH is text pasted into the message box."""
+
+    return (path.parent / PASTED).is_file()
+
+
+def _pasted_of(path: Path) -> dict:
+    """What the page shows of pasted text: its first words, and how many
+    lines it runs to."""
+
+    try:
+        text = path.read_text("utf-8", errors="replace")
+    except OSError:
+        return {}
+    # Blank lines at its top would leave the card looking empty.
+    shown = re.sub(r"\A(?:[ \t]*\r?\n)+", "", text)
+    return {
+        "preview": shown[:PASTE_PREVIEW_CHARS],
+        "lines": text.count("\n") + (0 if text.endswith("\n") else 1),
+        "chars": len(text),
+    }
+
+
+def pasted_text(file_id: str) -> str:
+    """The whole of a block of pasted text, by its upload's id."""
+
+    path = upload_path(file_id)
+    if path is None or not is_pasted(path):
+        raise WorkspaceError("that pasted text is no longer kept")
+    return path.read_text("utf-8", errors="replace")
 
 
 def _meeting_of(path: Path) -> dict:
@@ -863,7 +905,7 @@ def recording_stills(file_id: str) -> list[dict]:
 
 def keep_upload(
     name: str, data: bytes, stills: Optional[list] = None,
-    meeting: Optional[dict] = None,
+    meeting: Optional[dict] = None, pasted: bool = False,
 ) -> dict:
     """Keep a file the user attached in the page, and describe it.
 
@@ -874,6 +916,8 @@ def keep_upload(
     screen changed: each {"jpeg": bytes, "at": seconds, "said": text},
     kept beside it for the model to see. A meeting's transcript comes
     with MEETING, how long it was and when, which marks it as one.
+    PASTED: a block of text pasted into the message box, kept as a file
+    so the box stays small; the model is given its words.
     """
 
     if not data:
@@ -890,6 +934,8 @@ def keep_upload(
     (folder / clean).write_bytes(data)
     if meeting:
         (folder / MEETING).write_text(json.dumps(meeting), "utf-8")
+    if pasted:
+        (folder / PASTED).write_text("", "utf-8")
     if stills:
         kept = folder / STILLS
         kept.mkdir()
@@ -926,7 +972,7 @@ def reuse_file(file_id: str, name: str = "") -> dict:
     given = Path(name or "").name
     if not given or Path(given).suffix.lower() != path.suffix.lower():
         given = path.name
-    return keep_upload(given, path.read_bytes())
+    return keep_upload(given, path.read_bytes(), pasted=is_pasted(path))
 
 
 # --- Chats ---------------------------------------------------------------

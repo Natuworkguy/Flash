@@ -4120,6 +4120,144 @@ class TestAttachments:
         assert web.attachments(["0123456789abcdef", "../x"]) == []
 
 
+# --- Text pasted as a card -----------------------------------------------
+
+
+LOG = "> Task :app:mergeDexRelease FAILED\nERROR: /Users/me/app\n" * 40
+
+
+class TestPastedText:
+    def upload(self, server, text):
+        return request(server, "POST", "/api/upload", {
+            "name": "Pasted text.txt", "pasted": True,
+            "data": base64.b64encode(text.encode()).decode(),
+        })
+
+    def test_it_is_kept_as_pasted_with_its_first_words(self, server):
+        status, body = self.upload(server, "\n\n" + LOG)
+        meta = json.loads(body)
+
+        assert status == 200
+        assert meta["kind"] == "pasted"
+        # Its card shows its words from the first line with any on it.
+        assert meta["preview"].startswith("> Task :app:mergeDexRelease")
+        assert len(meta["preview"]) == workspace.PASTE_PREVIEW_CHARS
+        assert meta["lines"] == 82 and meta["chars"] == len(LOG) + 2
+        # The mark beside it is not taken for the file.
+        assert workspace.upload_path(meta["id"]).name == "Pasted text.txt"
+
+    def test_the_same_file_not_pasted_is_a_file(self):
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode())
+
+        assert kept["kind"] == "file" and "preview" not in kept
+
+    def test_the_model_is_given_every_word(self):
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode(),
+                                     pasted=True)
+
+        content, images = web.outgoing(ai, "Why did this fail?",
+                                       [{"id": kept["id"]}])
+
+        assert images == []
+        assert content == (
+            "Why did this fail?\n\nPasted text:\n```\n"
+            + LOG.rstrip("\n") + "\n```"
+        )
+        # Not named as a file for its tools to open: it has the words.
+        assert "Attached file" not in content
+
+    def test_backticks_in_it_get_a_longer_fence(self):
+        kept = workspace.keep_upload(
+            "Pasted text.txt", b"see ```code``` and ````more````",
+            pasted=True,
+        )
+
+        content, _ = web.outgoing(ai, "", [{"id": kept["id"]}])
+
+        assert content == (
+            "Pasted text:\n`````\nsee ```code``` and ````more````\n`````"
+        )
+
+    def test_past_the_limit_the_model_is_told_where_the_rest_is(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(web, "PASTE_INLINE_CHARS", 50)
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode(),
+                                     pasted=True)
+
+        content, _ = web.outgoing(ai, "", [{"id": kept["id"]}])
+
+        path = workspace.upload_path(kept["id"])
+        assert LOG[:40] in content and LOG[:60] not in content
+        assert content.endswith(
+            f"(Cut short here: all {len(LOG):,} characters are in {path})"
+        )
+
+    def test_the_page_can_have_all_of_it_back(self):
+        session = web.Session()
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode(),
+                                     pasted=True)
+        other = workspace.keep_upload("notes.txt", b"private")
+
+        said = web.command(session, {"name": "pasted-text",
+                                     "arg": kept["id"]})
+
+        assert said == {"text": LOG}
+        # Only what was pasted: any other file stays the model's to read.
+        with pytest.raises(ValueError, match="no longer kept"):
+            web.command(session, {"name": "pasted-text", "arg": other["id"]})
+
+    def test_sent_alone_it_names_the_chat_by_its_first_line(self):
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode(),
+                                     pasted=True)
+        FakeClient.scripts = [[part("The build ran out of memory."),
+                               part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "", files=[kept["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert sent["content"].startswith("Pasted text:\n```\n> Task")
+        assert chat.title == "> Task :app:mergeDexRelease FAILED"
+        shown = next(e for e in chat.log if e["type"] == "user")
+        assert shown["files"][0]["kind"] == "pasted"
+        assert "path" not in shown["files"][0]
+
+    def test_a_key_in_it_goes_to_the_vault(self, monkeypatch):
+        monkeypatch.setattr(web, "_capture", lambda text: (
+            text.replace("sk-secret", "[OPENAI_KEY]"),
+            ["OPENAI_KEY"] if "sk-secret" in text else [],
+        ))
+        kept = workspace.keep_upload(
+            "Pasted text.txt", b"key = sk-secret\n" + LOG.encode(),
+            pasted=True,
+        )
+        FakeClient.scripts = [[part("Kept."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "use this", files=[kept["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert "sk-secret" not in sent["content"]
+        assert "key = [OPENAI_KEY]" in sent["content"]
+        path = workspace.upload_path(kept["id"])
+        assert "sk-secret" not in path.read_text(encoding="utf-8")
+        shown = next(e for e in chat.log if e["type"] == "user")
+        assert shown["files"][0]["preview"].startswith("key = [OPENAI_KEY]")
+
+    def test_attached_again_it_is_still_pasted(self):
+        kept = workspace.keep_upload("Pasted text.txt", LOG.encode(),
+                                     pasted=True)
+
+        again = workspace.reuse_file(kept["id"], "Pasted text.txt")
+
+        assert again["id"] != kept["id"] and again["kind"] == "pasted"
+
+
 # --- Chats with a spark --------------------------------------------------
 
 

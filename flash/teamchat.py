@@ -1734,16 +1734,22 @@ def _line(entry: dict, by_id: dict) -> str:
 def _attached_note(entry: dict) -> str:
     """The files the user attached to ENTRY, named by path for a spark's
     tools to open, as the main chat names them to the model; "" for
-    none."""
+    none. Text pasted into the box is named as that, a file all the
+    same: the chat's lines are kept short."""
 
     from . import workspace
 
-    paths = []
+    paths, pasted = [], []
     for f in entry.get("attachments") or []:
         path = workspace.upload_path(str(f.get("id", "")))
         if path is not None:
-            paths.append(str(path))
-    return f" [Attached file: {', '.join(paths)}]" if paths else ""
+            (pasted if workspace.is_pasted(path) else paths).append(str(path))
+    return "".join(
+        f" [{label}: {', '.join(found)}]"
+        for label, found in (("Attached file", paths),
+                             ("Pasted text, in full", pasted))
+        if found
+    )
 
 
 def _said_line(entry: dict, by_id: dict) -> str:

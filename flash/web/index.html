@@ -1875,6 +1875,17 @@ body.empty:not(.on-page) #project-btn { display: inline-flex; }
 .user-files .doc .words { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .user-files .doc .name { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-files .doc .meta { font-size: 12px; color: var(--text-3); }
+/* A big block of pasted text: a card with its first lines and a Pasted
+   tag, in the box before it is sent and on the message after. */
+.paste-card { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; width: 156px; padding: 12px 12px 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color 0.14s, transform 0.25s var(--spring); }
+.paste-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.paste-card:active { transform: scale(0.98); }
+.paste-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.paste-card .paste-lines { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; width: 100%; min-height: 1.4em; font-size: 13px; line-height: 1.4; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+.paste-card .paste-tag { flex: none; padding: 3px 9px; border-radius: 999px; background: var(--hover); color: var(--text-3); font: 600 10.5px/1.4 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; }
+.tray-item.paste { height: auto; border: 0; border-radius: 14px; background: none; }
+.tray-item.paste .unattach { top: 6px; right: 6px; }
+.paste-full { max-height: 52vh; overflow: auto; margin: 12px 0 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover); color: var(--text); font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 button.doc:hover { border-color: var(--border-strong); }
 #model-btn { margin-left: auto; border-color: transparent; max-width: 55%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 /* Short of room, the model's name gives way; nothing else in the row
@@ -10286,6 +10297,7 @@ function sentFiles(files) {
   const box = el("div", "user-files" + (images > 1 ? " many" : ""));
   for (const f of files) {
     mendKind(f);
+    if (f.kind === "pasted") { box.appendChild(pasteCard(f)); continue; }
     if (f.kind === "audio") { box.appendChild(audioPlayer(f)); continue; }
     if (f.kind === "video") {
       const clip = box.appendChild(el("div", "clip", `<video controls preload="metadata" playsinline></video><span class="tag"></span>`));
@@ -14938,7 +14950,10 @@ function tcWireComposer() {
   attach.onclick = () => tcFilePicker.click();
   area.addEventListener("paste", (e) => {
     const data = e.clipboardData;
-    if (!data || !data.files.length || data.getData("text/plain")) return;
+    if (!data) return;
+    const words = data.getData("text/plain");
+    if (bigPaste(words)) { e.preventDefault(); tcAddFiles([pastedFile(words)]); return; }
+    if (!data.files.length || words) return;
     e.preventDefault();
     tcAddFiles(data.files);
   });
@@ -19559,7 +19574,9 @@ function openForm(html, onSubmit) {
 function closeForm() {
   // A spark's report read aloud in its window stops with the window.
   if (reading.key && reading.key.startsWith("report:")) stopReading();
-  hideOverlay($("#form")); dropSuggestions(); input.focus();
+  hideOverlay($("#form")); dropSuggestions();
+  // Opened over the team chat, its box is where typing goes on.
+  ($("#team-chat").hidden ? input : $("#team-chat textarea")).focus();
 }
 // A form's folder suggestions go with the form.
 const dropSuggestions = () => document.querySelectorAll(".suggest").forEach((node) => node.remove());
@@ -25101,10 +25118,11 @@ function renderPending() {
   for (const item of items) {
     const steer = item.mode === "steer";
     const row = el("div", `pending-row${steer ? " steer" : ""}`, `<span class="ico">${icon(steer ? "steer" : "clock")}</span><span class="text"></span>`);
-    const n = (item.files || []).length;
+    const pasted = (item.files || []).filter((f) => f && f.kind === "pasted").length;
+    const n = (item.files || []).length - pasted;
     const comments = parseComments(item.text);
     const words = comments ? `${comments.items.length} comment${comments.items.length === 1 ? "" : "s"} on ${comments.name}` : item.text;
-    const said = [words, n ? `${n} ${n === 1 ? "file" : "files"}` : ""].filter(Boolean).join(" · ");
+    const said = [words, pasted ? "pasted text" : "", n ? `${n} ${n === 1 ? "file" : "files"}` : ""].filter(Boolean).join(" · ");
     row.querySelector(".text").textContent = said;
     row.querySelector(".text").title = said;
     const mode = el("button", "mode", steer ? "Steers at the next step" : "Runs after this turn");
@@ -25128,6 +25146,80 @@ const MAX_UPLOAD = 20 * 1024 * 1024;
 const MAX_ATTACHED = 10;
 const uploading = () => attached.some((a) => a.uploading);
 
+// Text pasted in a big block goes with the message as a card of its
+// own, its first lines and a Pasted tag, as a file does: the box stays
+// small, and the model is still given every word. Big is over
+// PASTE_CHARS characters, or PASTE_LINES lines or more.
+const PASTE_CHARS = 1000;
+const PASTE_LINES = 20;
+const PASTED_NAME = "Pasted text.txt";
+// The most of it the full view draws: Copy still takes all of it.
+const PASTE_SHOWN = 200000;
+function bigPaste(text) {
+  if (!text || !text.trim()) return false;
+  return text.length > PASTE_CHARS || text.replace(/\n+$/, "").split("\n").length >= PASTE_LINES;
+}
+// What is pasted, as a file to upload, the words kept on it for its card.
+function pastedFile(text) {
+  return Object.assign(new File([text], PASTED_NAME, { type: "text/plain" }), { pastedText: text });
+}
+// The card's first lines: from the first that has anything on it.
+const pastePreview = (text) => String(text || "").replace(/^(?:[ \t]*\r?\n)+/, "").slice(0, 300);
+function pasteSize(text) {
+  const lines = text.replace(/\n+$/, "").split("\n").length;
+  return `${lines.toLocaleString()} line${lines === 1 ? "" : "s"} \u00b7 ${text.length.toLocaleString()} characters`;
+}
+// The pasted card: in the box before it is sent, and on the message
+// after. Pressed, it shows all of it.
+function pasteCard(item) {
+  const card = el("button", "paste-card", `<span class="paste-lines"></span><span class="paste-tag">Pasted</span>`);
+  card.type = "button";
+  card.querySelector(".paste-lines").textContent = item.preview || "";
+  card.setAttribute("aria-label", "Pasted text: show all of it");
+  card.onclick = () => openPasted(item);
+  return card;
+}
+// All of what was pasted, to read and copy. Sent, it comes from the
+// server, which keeps it; before, the box still has it.
+async function openPasted(item) {
+  const form = openForm(`<h2>Pasted text</h2><p class="sub"></p><pre class="paste-full"></pre><div class="dialog-buttons"><button type="button" class="btn" data-copy>Copy</button><span class="spacer"></span><button type="button" class="btn primary" data-cancel>Done</button></div>`, async () => {});
+  const sub = form.querySelector(".sub");
+  const pre = form.querySelector(".paste-full");
+  const copyBtn = form.querySelector("[data-copy]");
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  let text = typeof item.pasted === "string" ? item.pasted : null;
+  if (text === null) {
+    sub.textContent = "Loading\u2026";
+    pre.textContent = item.preview || "";
+    copyBtn.disabled = true;
+    try { text = (await command("pasted-text", item.id)).text; }
+    catch (error) { if (form.isConnected) { sub.textContent = ""; richText(form.querySelector(".form-error"), error.message || String(error)); } return; }
+    item.pasted = text;
+    // Closed, or another dialog opened, while it loaded.
+    if (!form.isConnected) return;
+  }
+  sub.textContent = pasteSize(text);
+  pre.textContent = text.length > PASTE_SHOWN ? text.slice(0, PASTE_SHOWN) : text;
+  if (text.length > PASTE_SHOWN) sub.textContent += ` \u00b7 the first ${PASTE_SHOWN.toLocaleString()} shown`;
+  copyBtn.disabled = false;
+  copyBtn.onclick = async () => {
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) { toast("The browser blocked the clipboard"); return; }
+    copyBtn.textContent = "Copied";
+    flash(copyBtn, "done", 1300);
+    clearTimeout(copyBtn._restore);
+    copyBtn._restore = setTimeout(() => { copyBtn.textContent = "Copy"; }, 1300);
+  };
+}
+// The item a file in the box is: one pasted carries its words.
+function trayEntry(file) {
+  const item = { name: file.name || "image.png", size: file.size, image: file.type.startsWith("image/"), uploading: true };
+  if (typeof file.pastedText === "string") Object.assign(item, { name: PASTED_NAME, kind: "pasted", image: false, pasted: file.pastedText, preview: pastePreview(file.pastedText) });
+  if (item.image) item.url = URL.createObjectURL(file);
+  return item;
+}
+const uploadBody = async (item, file) => ({ name: item.name, data: await readBase64(file), ...(item.kind === "pasted" ? { pasted: true } : {}) });
+
 function readBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -25142,11 +25234,10 @@ function addFiles(list) {
   if (!files.length) return;
   for (const file of files) {
     if (attached.length >= MAX_ATTACHED) { toast(`Up to ${MAX_ATTACHED} files go with one message`); break; }
-    const name = file.name || "image.png";
+    const name = typeof file.pastedText === "string" ? "That paste" : file.name || "image.png";
     if (file.size > MAX_UPLOAD) { toast(`${name} is over 20 MB`); continue; }
     if (!file.size) { toast(`${name} is empty`); continue; }
-    const item = { name, size: file.size, image: file.type.startsWith("image/"), uploading: true };
-    if (item.image) item.url = URL.createObjectURL(file);
+    const item = trayEntry(file);
     attached.push(item);
     upload(item, file);
   }
@@ -25157,7 +25248,7 @@ function addFiles(list) {
 
 async function upload(item, file) {
   try {
-    const kept = await api("/api/upload", { name: item.name, data: await readBase64(file) });
+    const kept = await api("/api/upload", await uploadBody(item, file));
     Object.assign(item, { id: kept.id, name: kept.name, kind: kept.kind, uploading: false });
   } catch (err) {
     if (attached.includes(item)) { toast(`${item.name} did not upload: ${err.message}`); unattach(item); }
@@ -25170,7 +25261,7 @@ async function upload(item, file) {
 function reattach(files) {
   for (const f of files) {
     if (attached.length >= MAX_ATTACHED || attached.some((a) => a.id === f.id)) continue;
-    attached.push({ id: f.id, name: f.name, size: f.size, kind: f.kind, image: f.kind === "image", url: f.kind === "image" ? fileUrl(f) : "" });
+    attached.push({ id: f.id, name: f.name, size: f.size, kind: f.kind, image: f.kind === "image", url: f.kind === "image" ? fileUrl(f) : "", preview: f.preview });
   }
   renderTray();
   updateSend();
@@ -25188,9 +25279,12 @@ function renderTray() {
 }
 
 function trayItem(item, remove) {
-  const node = el("div", `tray-item ${item.recording ? "clip" : item.image ? "shot" : "doc"}`);
+  const node = el("div", `tray-item ${item.kind === "pasted" ? "paste" : item.recording ? "clip" : item.image ? "shot" : "doc"}`);
   node.title = `${item.name} · ${fileSize(item.size)}`;
-  if (item.recording) {
+  if (item.kind === "pasted") {
+    node.title = typeof item.pasted === "string" ? pasteSize(item.pasted) : "Pasted text";
+    node.appendChild(pasteCard(item));
+  } else if (item.recording) {
     const img = node.appendChild(el("img"));
     img.alt = "Screen recording";
     img.src = item.url;
@@ -25225,11 +25319,10 @@ function tcAddFiles(list) {
   if (!files.length) return;
   for (const file of files) {
     if (teamChat.files.length >= MAX_ATTACHED) { toast(`Up to ${MAX_ATTACHED} files go with one message`); break; }
-    const name = file.name || "image.png";
+    const name = typeof file.pastedText === "string" ? "That paste" : file.name || "image.png";
     if (file.size > MAX_UPLOAD) { toast(`${name} is over 20 MB`); continue; }
     if (!file.size) { toast(`${name} is empty`); continue; }
-    const item = { name, size: file.size, image: file.type.startsWith("image/"), uploading: true };
-    if (item.image) item.url = URL.createObjectURL(file);
+    const item = trayEntry(file);
     teamChat.files.push(item);
     tcUpload(item, file);
   }
@@ -25240,7 +25333,7 @@ function tcAddFiles(list) {
 
 async function tcUpload(item, file) {
   try {
-    const kept = await api("/api/upload", { name: item.name, data: await readBase64(file) });
+    const kept = await api("/api/upload", await uploadBody(item, file));
     Object.assign(item, { id: kept.id, name: kept.name, kind: kept.kind, uploading: false });
   } catch (err) {
     if (teamChat.files.includes(item)) { toast(`${item.name} did not upload: ${err.message}`); tcUnattach(item); }
@@ -25911,10 +26004,14 @@ document.addEventListener("drop", (e) => {
   else if (view === "chat") addFiles(e.dataTransfer.files);
 });
 
-// A pasted screenshot attaches; pasted text stays text.
+// A pasted screenshot attaches; pasted text stays text, but for a big
+// block of it, which goes as a card of its own (see bigPaste).
 input.addEventListener("paste", (e) => {
   const data = e.clipboardData;
-  if (!data || !data.files.length || data.getData("text/plain")) return;
+  if (!data) return;
+  const words = data.getData("text/plain");
+  if (bigPaste(words)) { e.preventDefault(); addFiles([pastedFile(words)]); return; }
+  if (!data.files.length || words) return;
   e.preventDefault();
   addFiles(data.files);
 });

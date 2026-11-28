@@ -242,6 +242,36 @@ def test_the_page_sends_attachments_and_sparks_get_their_paths(
     assert str(web.workspace.upload_path(doc["id"])) in line  # nosec B101
 
 
+def test_pasted_text_is_named_as_that_for_the_sparks(team, monkeypatch):
+    monkeypatch.setattr(
+        teamchat, "answer", lambda key, message, client=None: None,
+    )
+    pasted = web.workspace.keep_upload(
+        "Pasted text.txt", b"Traceback (most recent call last):\n" * 60,
+        pasted=True,
+    )
+    doc = web.workspace.keep_upload("notes.txt", b"hello")
+    session = web.Session()
+
+    posted = web.command(session, {
+        "name": "team-chat-say", "arg": team.id, "text": "Why?",
+        "files": [pasted["id"], doc["id"]],
+    })["entry"]
+
+    # The page draws it as a card, from its first words.
+    assert posted["attachments"][0]["kind"] == "pasted"  # nosec B101
+    assert posted["attachments"][0]["preview"].startswith(  # nosec B101
+        "Traceback")
+    # The chat's line stays short: the whole of it is a file to open.
+    line = teamchat._said_line(posted, {})
+    paste_path = web.workspace.upload_path(pasted["id"])
+    doc_path = web.workspace.upload_path(doc["id"])
+    assert line == (  # nosec B101
+        f"The user: Why? [Attached file: {doc_path}]"
+        f" [Pasted text, in full: {paste_path}]"
+    )
+
+
 def test_nothing_said_and_nothing_attached_is_refused(team):
     with pytest.raises(teamchat.TeamChatError):
         teamchat.say("desk", "  ", files=[])
